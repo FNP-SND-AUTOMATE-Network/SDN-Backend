@@ -5,26 +5,146 @@
 // Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
 
 generator client {
-  provider = "prisma-client-py"
+  provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 enum Role {
   VIEWER
   ENGINEER
   ADMIN
+  OWNER // ถ้าไม่ใช้ Owner ให้ลบบรรทัดนี้ได้
 }
 
+enum OtpPurpose {
+  VERIFY_EMAIL
+  LOGIN
+}
+
+enum AuditAction {
+  ENABLE_TOTP
+  DISABLE_TOTP
+  REGISTER_PASSKEY
+  REMOVE_PASSKEY
+  PROMOTE_ROLE
+  DEMOTE_ROLE
+}
+
+// ========= Core User =========
 model User {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  name      String?
-  surname   String?
-  password  String
-  role      Role     @default(VIEWER)   // <-- ใช้ enum
+  id            String  @id @default(uuid())
+  email         String  @unique
+  name          String?
+  surname       String?
+  password      String
+  role          Role    @default(VIEWER)
+  emailVerified Boolean @default(false)
+
+  /// สะดวกสำหรับ query เร็ว ๆ (อัปเดตจากแอปเมื่อเปิด/ปิด TOTP/Passkey)
+  hasStrongMfa Boolean @default(false)
+
+  // Relations (MFA)
+  totp          UserTotp?
+  passkeys      WebauthnCredential[]
+  recoveryCodes RecoveryCode[]
+  otps          EmailOtp[]
+
+  // Audit
+  actorLogs  AuditLog[] @relation("AuditActor")
+  targetLogs AuditLog[] @relation("AuditTarget")
+
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([emailVerified])
+  @@index([role])
+}
+
+// ========= TOTP (1:1 ต่อผู้ใช้) =========
+model UserTotp {
+  /// ใช้ userId เป็น PK เพื่อบังคับให้มีได้คนละเรคอร์ด
+  userId String @id @default(uuid())
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// เก็บ secret แบบเข้ารหัส (Bytes เหมาะกับ Postgres/SQLite; ถ้าบาง DB ไม่รองรับ ใช้ String + เข้ารหัส/เข้มงวดเอง)
+  secret         Bytes
+  enabled        Boolean   @default(false)
+  secretVersion  Int? // ใช้กำกับ key rotation ถ้ามี KMS
+  createdAt      DateTime  @default(now())
+  lastVerifiedAt DateTime?
+}
+
+// ========= Passkey/WebAuthn (หลายคีย์ต่อผู้ใช้) =========
+model WebauthnCredential {
+  /// credentialId (base64url) เป็น PK
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// publicKey (COSE) เก็บเป็น Bytes; ถ้า DB ไม่รองรับ Bytes ให้ใช้ String base64
+  publicKey      Bytes
+  signCount      Int      @default(0)
+  transports     String[] // Postgres array; ถ้าใช้ DB อื่น ใช้ Json แทน
+  attestationFmt String?
+  aaguid         String? // อุปกรณ์ (ถ้ามี)
+  nickname       String?
+
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  @@unique([userId, nickname], map: "webauthn_user_nickname_unique")
+  @@index([userId])
+}
+
+// ========= Recovery Codes (แนะนำให้มี) =========
+model RecoveryCode {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// เก็บ "แฮช" ของโค้ดเท่านั้น ห้ามเก็บค่า plaintext
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@unique([userId, codeHash])
+  @@index([userId, usedAt])
+}
+
+// ========= Email OTP (สำหรับยืนยันสมัคร/ล็อกอินแบบ OTP) =========
+model EmailOtp {
+  id         String     @id @default(uuid())
+  userId     String
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash   String // เก็บเป็นแฮช
+  purpose    OtpPurpose
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime   @default(now())
+
+  @@index([userId, purpose])
+  @@index([expiresAt])
+}
+
+// ========= Audit Log (โปร่งใส/ตรวจสอบย้อนหลัง) =========
+model AuditLog {
+  id BigInt @id @default(autoincrement())
+
+  actorUserId String?
+  actor       User?   @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  targetUserId String?
+  target       User?   @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+
+  action    AuditAction
+  details   Json?
+  createdAt DateTime    @default(now())
+
+  @@index([actorUserId])
+  @@index([targetUserId, action])
 }

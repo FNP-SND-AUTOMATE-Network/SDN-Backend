@@ -4,14 +4,19 @@
 // Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
 // Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
 
-generator client {
-  provider = "prisma-client-js"
+
+generator py {
+  provider             = "prisma-client-py"
+  recursive_type_depth = 5
+  previewFeatures      = ["postgresqlExtensions"]
 }
 
+
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [uuidOssp(map: "uuid-ossp")]
 }
 
 enum Role {
@@ -37,7 +42,7 @@ enum AuditAction {
 
 // ========= Core User =========
 model User {
-  id            String  @id @default(uuid())
+  id            String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email         String  @unique
   name          String?
   surname       String?
@@ -68,7 +73,7 @@ model User {
 // ========= TOTP (1:1 ต่อผู้ใช้) =========
 model UserTotp {
   /// ใช้ userId เป็น PK เพื่อบังคับให้มีได้คนละเรคอร์ด
-  userId String @id @default(uuid())
+  userId String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   /// เก็บ secret แบบเข้ารหัส (Bytes เหมาะกับ Postgres/SQLite; ถ้าบาง DB ไม่รองรับ ใช้ String + เข้ารหัส/เข้มงวดเอง)
@@ -82,8 +87,8 @@ model UserTotp {
 // ========= Passkey/WebAuthn (หลายคีย์ต่อผู้ใช้) =========
 model WebauthnCredential {
   /// credentialId (base64url) เป็น PK
-  id     String @id @default(uuid())
-  userId String
+  id     String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String @db.Uuid
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   /// publicKey (COSE) เก็บเป็น Bytes; ถ้า DB ไม่รองรับ Bytes ให้ใช้ String base64
@@ -103,8 +108,8 @@ model WebauthnCredential {
 
 // ========= Recovery Codes (แนะนำให้มี) =========
 model RecoveryCode {
-  id     String @id @default(uuid())
-  userId String
+  id     String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String @db.Uuid
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   /// เก็บ "แฮช" ของโค้ดเท่านั้น ห้ามเก็บค่า plaintext
@@ -118,8 +123,8 @@ model RecoveryCode {
 
 // ========= Email OTP (สำหรับยืนยันสมัคร/ล็อกอินแบบ OTP) =========
 model EmailOtp {
-  id         String     @id @default(uuid())
-  userId     String
+  id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String     @db.Uuid
   user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   codeHash   String // เก็บเป็นแฮช
   purpose    OtpPurpose
@@ -133,12 +138,12 @@ model EmailOtp {
 
 // ========= Audit Log (โปร่งใส/ตรวจสอบย้อนหลัง) =========
 model AuditLog {
-  id BigInt @id @default(autoincrement())
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
 
-  actorUserId String?
+  actorUserId String? @db.Uuid
   actor       User?   @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 
-  targetUserId String?
+  targetUserId String? @db.Uuid
   target       User?   @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
 
   action    AuditAction

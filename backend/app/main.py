@@ -1,7 +1,28 @@
 from fastapi import FastAPI
-from app.api import health
+from contextlib import asynccontextmanager
+from app.api import health, auth
 
-app = FastAPI(title="API v1", version="1.0.0")
+# Global Prisma client instance
+prisma_client = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Connect to database
+    global prisma_client
+    from prisma import Prisma
+    prisma_client = Prisma()
+    await prisma_client.connect()
+    yield
+    # Shutdown: Disconnect from database
+    await prisma_client.disconnect()
+
+app = FastAPI(
+    title="Endpoint API FNP.",
+    version="1.0.0",
+    description="Authentication and Management API for FNP.",
+    lifespan=lifespan
+)
 
 # Include routers
 app.include_router(health.router)
+app.include_router(auth.router)

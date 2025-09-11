@@ -9,7 +9,7 @@ import os
 class OtpService:
     def __init__(self):
         self.resend_api_key = os.getenv("RESEND_API_KEY")
-        self.resend_url = os.getenv("RESEND_URL")
+        self.resend_api_url = os.getenv("RESEND_URL")
     
     @property
     def prisma(self):
@@ -133,7 +133,7 @@ class OtpService:
             """
             
             # ใช้ Resend API โดยตรง
-            url = "https://api.resend.com/emails"
+            url = self.resend_api_url  # fallback หาก env ไม่มี
             headers = {
                 "Authorization": f"Bearer {self.resend_api_key}",
                 "Content-Type": "application/json"

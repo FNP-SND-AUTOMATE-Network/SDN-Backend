@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.api import health, auth
 
@@ -21,6 +22,19 @@ app = FastAPI(
     version="1.0.0",
     description="Authentication and Management API for FNP.",
     lifespan=lifespan
+)
+
+# CORS Configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",  # React frontend (development)
+        "http://127.0.0.1:3000",  # Alternative localhost format
+        # Add production domains here when deploying
+    ],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=["*"],
 )
 
 # Include routers

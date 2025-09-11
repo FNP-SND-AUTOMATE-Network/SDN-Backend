@@ -3,6 +3,7 @@ from typing import Optional
 from datetime import datetime
 
 
+# Register Request
 class RegisterRequest(BaseModel):
     email: EmailStr
     name: str
@@ -29,12 +30,14 @@ class RegisterRequest(BaseModel):
         return v.strip()
 
 
+# Register Response
 class RegisterResponse(BaseModel):
     message: str
     email: str
     expires_at: datetime
 
 
+# Verify OTP Request
 class VerifyOtpRequest(BaseModel):
     email: EmailStr
     otp_code: str
@@ -46,6 +49,7 @@ class VerifyOtpRequest(BaseModel):
         return v
 
 
+# Verify OTP Response
 class VerifyOtpResponse(BaseModel):
     message: str
     user_id: str
@@ -53,16 +57,19 @@ class VerifyOtpResponse(BaseModel):
     email_verified: bool
 
 
+# Resend OTP Request
 class ResendOtpRequest(BaseModel):
     email: EmailStr
 
 
+# Resend OTP Response
 class ResendOtpResponse(BaseModel):
     message: str
     email: str
     expires_at: datetime
 
 
+# Login Request
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
@@ -74,6 +81,7 @@ class LoginRequest(BaseModel):
         return v
 
 
+# Login Response
 class LoginResponse(BaseModel):
     message: str
     access_token: str
@@ -85,6 +93,7 @@ class LoginResponse(BaseModel):
     role: str
 
 
+# Error Response
 class ErrorResponse(BaseModel):
     error: str
     detail: Optional[str] = None

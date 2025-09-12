@@ -7,15 +7,10 @@ import os
 
 
 class OtpService:
-    def __init__(self):
+    def __init__(self, prisma_client=None):
+        self.prisma = prisma_client
         self.resend_api_key = os.getenv("RESEND_API_KEY")
         self.resend_api_url = os.getenv("RESEND_URL")
-    
-    @property
-    def prisma(self):
-        # Use global client from main.py
-        from app.main import prisma_client
-        return prisma_client
     
     async def generate_otp(self) -> str:
         """สร้าง OTP 6 หลัก"""

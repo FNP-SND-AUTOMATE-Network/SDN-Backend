@@ -1,18 +1,16 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from app.api import health, auth
-
-# Global Prisma client instance
-prisma_client = None
+from app.api import health, auth, audit
+from app.database import set_prisma_client
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Connect to database
-    global prisma_client
     from prisma import Prisma
     prisma_client = Prisma()
     await prisma_client.connect()
+    set_prisma_client(prisma_client)
     yield
     # Shutdown: Disconnect from database
     await prisma_client.disconnect()
@@ -40,3 +38,4 @@ app.add_middleware(
 # Include routers
 app.include_router(health.router)
 app.include_router(auth.router)
+app.include_router(audit.router)

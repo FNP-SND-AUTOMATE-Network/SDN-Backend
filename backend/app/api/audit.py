@@ -15,7 +15,7 @@ from app.services.audit_service import AuditService
 from app.services.user_service import UserService
 
 # ใช้ global prisma client จาก database.py
-from app.database import get_prisma_client
+from app.database import get_prisma_client, is_prisma_client_ready
 
 router = APIRouter(prefix="/audit", tags=["Audit Logs"])
 security = HTTPBearer()
@@ -24,23 +24,36 @@ security = HTTPBearer()
 audit_service = None
 user_service = None
 
-def init_services():
+def get_services():
+    """Get initialized services, creating them if needed"""
     global audit_service, user_service
-    prisma_client = get_prisma_client()
-    if prisma_client:
+    
+    # Initialize services if not already done
+    if audit_service is None or user_service is None:
+        if not is_prisma_client_ready():
+            raise HTTPException(
+                status_code=500,
+                detail="Database connection not ready. Please try again."
+            )
+        
+        prisma_client = get_prisma_client()
         audit_service = AuditService(prisma_client)
         user_service = UserService(prisma_client)
+    
+    return audit_service, user_service
 
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """ตรวจสอบ JWT token และดึงข้อมูล user"""
     try:
-        init_services()  # Initialize services with prisma client
+        # Get initialized services
+        audit_svc, user_svc = get_services()
+        
         # ตรวจสอบ token
-        user_id = await user_service.verify_access_token(credentials.credentials)
+        user_id = await user_svc.verify_access_token(credentials.credentials)
         
         # ดึงข้อมูล user
-        user = await user_service.get_user_by_id(user_id)
+        user = await user_svc.get_user_by_id(user_id)
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
         
@@ -73,6 +86,9 @@ async def get_audit_logs(
     - **offset**: เริ่มจากรายการที่
     """
     try:
+        # Get initialized services
+        audit_svc, user_svc = get_services()
+        
         # สร้าง filter object
         filters = AuditLogFilter(
             actor_user_id=actor_user_id,
@@ -85,7 +101,7 @@ async def get_audit_logs(
         )
 
         # ดึงข้อมูล
-        audit_logs, total = await audit_service.get_audit_logs(filters)
+        audit_logs, total = await audit_svc.get_audit_logs(filters)
 
         # คำนวณ has_more
         has_more = (offset + limit) < total
@@ -112,7 +128,10 @@ async def get_audit_log(
     ดึง Audit Log ตาม ID
     """
     try:
-        audit_log = await audit_service.get_audit_log_by_id(audit_id)
+        # Get initialized services
+        audit_svc, user_svc = get_services()
+        
+        audit_log = await audit_svc.get_audit_log_by_id(audit_id)
         
         if not audit_log:
             raise HTTPException(status_code=404, detail="ไม่พบ Audit Log ที่ระบุ")
@@ -136,6 +155,9 @@ async def create_audit_log(
     สร้าง Audit Log ใหม่ (สำหรับ admin เท่านั้น)
     """
     try:
+        # Get initialized services
+        audit_svc, user_svc = get_services()
+        
         # ตรวจสอบสิทธิ์ admin (สมมติว่า role เป็น ADMIN)
         if current_user.get("role") != "ADMIN":
             raise HTTPException(status_code=403, detail="ไม่มีสิทธิ์สร้าง Audit Log")
@@ -160,7 +182,7 @@ async def create_audit_log(
         })
 
         # สร้าง audit log
-        audit_log = await audit_service.create_audit_log(audit_data)
+        audit_log = await audit_svc.create_audit_log(audit_data)
         
         return audit_log
 
@@ -191,7 +213,8 @@ async def get_audit_stats(
                 date_filter["lte"] = end_date
             where_clause["createdAt"] = date_filter
 
-        init_services()  # Initialize services with prisma client
+        # Get initialized services
+        audit_svc, user_svc = get_services()
         prisma_client = get_prisma_client()
         
         # นับจำนวนแต่ละ action
@@ -222,7 +245,7 @@ async def get_audit_stats(
         for actor_data in top_actors_raw:
             user_id = actor_data.get("actorUserId") or actor_data.get("actorUserId")
             if user_id:
-                user = await user_service.get_user_by_id(user_id)
+                user = await user_svc.get_user_by_id(user_id)
                 if user:
                     top_actors.append({
                         "user_id": user_id,

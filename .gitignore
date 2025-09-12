@@ -5,3 +5,5 @@ node_modules
 /app/generated/prisma
 
 __pycache__
+
+.DS_Store

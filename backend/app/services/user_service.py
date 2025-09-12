@@ -7,16 +7,11 @@ from app.models.auth import RegisterRequest
 
 
 class UserService:
-    def __init__(self):
+    def __init__(self, prisma_client=None):
+        self.prisma = prisma_client
         self.secret_key = os.getenv("SECRET_KEY")
         self.algorithm = os.getenv("ALGORITHM", "HS256")
         self.access_token_expire_minutes = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
-    
-    @property
-    def prisma(self):
-        # Use global client from main.py
-        from app.main import prisma_client
-        return prisma_client
     
     def hash_password(self, password: str) -> str:
         """เข้ารหัสรหัสผ่าน"""
@@ -115,3 +110,36 @@ class UserService:
             return None
         
         return user
+    
+    async def verify_access_token(self, token: str) -> str:
+        """ตรวจสอบ JWT token และคืนค่า user_id"""
+        try:
+            payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
+            user_id: str = payload.get("sub")
+            if user_id is None:
+                raise ValueError("Invalid token")
+            return user_id
+        except jwt.PyJWTError:
+            raise ValueError("Invalid token")
+    
+    async def get_user_by_id(self, user_id: str) -> Optional[dict]:
+        """ดึงข้อมูลผู้ใช้ตาม ID"""
+        try:
+            user = await self.prisma.user.find_unique(
+                where={"id": user_id}
+            )
+            if user:
+                return {
+                    "id": user.id,
+                    "email": user.email,
+                    "name": user.name,
+                    "surname": user.surname,
+                    "emailVerified": user.emailVerified,
+                    "role": user.role,
+                    "createdAt": user.createdAt,
+                    "updatedAt": user.updatedAt
+                }
+            return None
+        except Exception as e:
+            print(f"Error getting user by ID: {e}")
+            return None

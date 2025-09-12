@@ -1,13 +1,28 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Request
 from app.models.auth import RegisterRequest, RegisterResponse, VerifyOtpRequest, VerifyOtpResponse, ResendOtpRequest, ResendOtpResponse, LoginRequest, LoginResponse, ErrorResponse
 from app.services.otp_service import OtpService
 from app.services.user_service import UserService
+from app.services.audit_service import AuditService
 from datetime import datetime
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
-otp_service = OtpService()
-user_service = UserService()
+# ใช้ global prisma client จาก database.py
+from app.database import get_prisma_client
+
+# Services จะได้รับ prisma client ใน runtime
+otp_service = None
+user_service = None
+audit_service = None
+
+# Initialize services with prisma client
+def init_services():
+    global otp_service, user_service, audit_service
+    prisma_client = get_prisma_client()
+    if prisma_client:
+        otp_service = OtpService(prisma_client)
+        user_service = UserService(prisma_client)
+        audit_service = AuditService(prisma_client)
 
 
 @router.post("/register", response_model=RegisterResponse)
@@ -16,6 +31,8 @@ async def register(request: RegisterRequest):
     สมัครสมาชิกใหม่ - สร้าง OTP และส่งอีเมลยืนยัน
     """
     try:
+        init_services()  # Initialize services with prisma client
+        
         # ตรวจสอบว่า email มีอยู่ในระบบแล้วหรือไม่
         email_exists = await user_service.check_email_exists(request.email)
         if email_exists:
@@ -70,11 +87,13 @@ async def register(request: RegisterRequest):
 
 
 @router.post("/verify-otp", response_model=VerifyOtpResponse)
-async def verify_otp(request: VerifyOtpRequest):
+async def verify_otp(request: VerifyOtpRequest, req: Request):
     """
     ยืนยัน OTP และสร้างบัญชีผู้ใช้
     """
     try:
+        init_services()  # Initialize services with prisma client
+        
         # ตรวจสอบ OTP
         user_id = await otp_service.verify_otp(request.email, request.otp_code)
         
@@ -94,16 +113,31 @@ async def verify_otp(request: VerifyOtpRequest):
             )
         
         # อัปเดตสถานะ emailVerified เป็น True
-        from prisma import Prisma
-        prisma = Prisma()
-        await prisma.connect()
-        
-        updated_user = await prisma.user.update(
+        prisma_client = get_prisma_client()
+        updated_user = await prisma_client.user.update(
             where={"id": user_id},
             data={"emailVerified": True}
         )
         
-        await prisma.disconnect()
+        # สร้าง audit log สำหรับการสมัครสมาชิกสำเร็จ
+        try:
+            # ดึง IP address
+            client_ip = req.client.host
+            if "x-forwarded-for" in req.headers:
+                client_ip = req.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in req.headers:
+                client_ip = req.headers["x-real-ip"]
+            
+            user_agent = req.headers.get("user-agent")
+            
+            await audit_service.create_register_audit(
+                user_id=updated_user.id,
+                ip_address=client_ip,
+                user_agent=user_agent
+            )
+        except Exception as audit_error:
+            print(f"Error creating register audit log: {audit_error}")
+            # ไม่ให้ audit error หยุดการทำงานหลัก
         
         return VerifyOtpResponse(
             message="ยืนยันการสมัครสมาชิกเรียบร้อยแล้ว",
@@ -127,6 +161,8 @@ async def resend_otp(request: ResendOtpRequest):
     ส่ง OTP ใหม่เมื่อรหัสเดิมหมดอายุ
     """
     try:
+        init_services()  # Initialize services with prisma client
+        
         # ตรวจสอบว่า email มีอยู่ในระบบและยังไม่ได้ยืนยัน
         user = await user_service.get_user_by_email(request.email)
         if not user:
@@ -169,11 +205,13 @@ async def resend_otp(request: ResendOtpRequest):
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(request: LoginRequest):
+async def login(request: LoginRequest, req: Request):
     """
     เข้าสู่ระบบด้วย email และ password
     """
     try:
+        init_services()  # Initialize services with prisma client
+        
         # ตรวจสอบข้อมูลผู้ใช้และรหัสผ่าน
         user = await user_service.authenticate_user(request.email, request.password)
         
@@ -185,11 +223,31 @@ async def login(request: LoginRequest):
         
         # สร้าง JWT token
         access_token_data = {
-            "sub": user["email"],
+            "sub": user["id"],  # ใช้ user_id แทน email สำหรับ JWT sub
             "user_id": user["id"],
             "role": user["role"]
         }
         access_token = user_service.create_access_token(access_token_data)
+        
+        # สร้าง audit log สำหรับการ login สำเร็จ
+        try:
+            # ดึง IP address
+            client_ip = req.client.host
+            if "x-forwarded-for" in req.headers:
+                client_ip = req.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in req.headers:
+                client_ip = req.headers["x-real-ip"]
+            
+            user_agent = req.headers.get("user-agent")
+            
+            await audit_service.create_login_audit(
+                user_id=user["id"],
+                ip_address=client_ip,
+                user_agent=user_agent
+            )
+        except Exception as audit_error:
+            print(f"Error creating login audit log: {audit_error}")
+            # ไม่ให้ audit error หยุดการทำงานหลัก
         
         return LoginResponse(
             message="เข้าสู่ระบบสำเร็จ",

@@ -231,7 +231,7 @@ async def get_audit_stats(
         # ดึง top users (actors) - ใช้ query ธรรมดาแทน group_by เพราะ Prisma Python ไม่รองรับ
         top_actors_raw = await prisma_client.query_raw(
             """
-            SELECT "actorUserId", COUNT(*) as count
+            SELECT "actorUserId" as actor_user_id, COUNT(*) as count
             FROM "AuditLog"
             WHERE "actorUserId" IS NOT NULL
             GROUP BY "actorUserId"
@@ -243,7 +243,8 @@ async def get_audit_stats(
         # ดึงข้อมูล user สำหรับ top actors
         top_actors = []
         for actor_data in top_actors_raw:
-            user_id = actor_data.get("actorUserId") or actor_data.get("actorUserId")
+            # Use the alias from SQL query
+            user_id = actor_data.get("actor_user_id")
             if user_id:
                 user = await user_svc.get_user_by_id(user_id)
                 if user:

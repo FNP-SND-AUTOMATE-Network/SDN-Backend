@@ -1,6 +1,7 @@
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from app.models.audit import AuditLogCreate, AuditLogResponse, AuditLogFilter, AuditAction
+from app.utils.audit_rate_limiter import audit_rate_limiter
 import json
 
 
@@ -15,7 +16,14 @@ class AuditService:
             details_json = None
             if audit_data.details:
                 if isinstance(audit_data.details, dict):
-                    details_json = json.dumps(audit_data.details, ensure_ascii=False)
+                    try:
+                        details_json = json.dumps(audit_data.details, ensure_ascii=False, default=str)
+                    except Exception as json_error:
+                        print(f"JSON serialization error: {json_error}")
+                        print(f"Details content: {audit_data.details}")
+                        print(f"Details type: {type(audit_data.details)}")
+                        # ลองแปลงเป็น string แทน
+                        details_json = str(audit_data.details)
                 else:
                     details_json = str(audit_data.details)
 
@@ -29,12 +37,24 @@ class AuditService:
             )
 
             # แปลงกลับเป็น dict เพื่อ return
+            details_dict = None
+            if audit_log.details:
+                try:
+                    # ตรวจสอบว่าเป็น string หรือ dict อยู่แล้ว
+                    if isinstance(audit_log.details, str):
+                        details_dict = json.loads(audit_log.details)
+                    else:
+                        details_dict = audit_log.details
+                except:
+                    # หากแปลงไม่ได้ให้เก็บเป็น dict พร้อม raw data
+                    details_dict = {"raw": str(audit_log.details)}
+            
             return AuditLogResponse(
                 id=audit_log.id,
                 actor_user_id=audit_log.actorUserId,
                 target_user_id=audit_log.targetUserId,
                 action=audit_log.action,
-                details=json.loads(audit_log.details) if audit_log.details else None,
+                details=details_dict,
                 created_at=audit_log.createdAt
             )
         except Exception as e:
@@ -82,9 +102,13 @@ class AuditService:
                 details = None
                 if audit_log.details:
                     try:
-                        details = json.loads(audit_log.details)
+                        # ตรวจสอบว่าเป็น string หรือ dict อยู่แล้ว
+                        if isinstance(audit_log.details, str):
+                            details = json.loads(audit_log.details)
+                        else:
+                            details = audit_log.details
                     except:
-                        details = {"raw": audit_log.details}
+                        details = {"raw": str(audit_log.details)}
                 
                 # เพิ่มข้อมูล actor และ target ลงใน details (ดึงแยก)
                 if details is None:
@@ -149,9 +173,13 @@ class AuditService:
             details = None
             if audit_log.details:
                 try:
-                    details = json.loads(audit_log.details)
+                    # ตรวจสอบว่าเป็น string หรือ dict อยู่แล้ว
+                    if isinstance(audit_log.details, str):
+                        details = json.loads(audit_log.details)
+                    else:
+                        details = audit_log.details
                 except:
-                    details = {"raw": audit_log.details}
+                    details = {"raw": str(audit_log.details)}
             
             # เพิ่มข้อมูล actor และ target ลงใน details (ดึงแยก)
             if details is None:
@@ -261,6 +289,196 @@ class AuditService:
             actor_user_id=user_id,
             target_user_id=user_id,
             action=AuditAction.USER_LOGOUT,
+            details=details
+        )
+
+        return await self.create_audit_log(audit_data)
+    
+    # ========= User Management Audit Functions =========
+    
+    async def create_user_create_audit(self, actor_user_id: str, target_user_id: str, target_email: str, 
+                                      target_role: str, ip_address: str = None, user_agent: str = None) -> Optional[dict]:
+        """สร้าง audit log สำหรับการสร้าง user ใหม่"""
+        details = {
+            "event": "user_create",
+            "target_email": target_email,
+            "target_role": target_role,
+            "timestamp": datetime.now().isoformat(),
+            "created_via": "admin_panel"
+        }
+        
+        if ip_address:
+            details["ip_address"] = ip_address
+        
+        if user_agent:
+            details["user_agent"] = user_agent
+
+        audit_data = AuditLogCreate(
+            actor_user_id=actor_user_id,
+            target_user_id=target_user_id,
+            action=AuditAction.USER_CREATE,
+            details=details
+        )
+
+        return await self.create_audit_log(audit_data)
+    
+    async def create_user_update_audit(self, actor_user_id: str, target_user_id: str, changes: dict,
+                                      ip_address: str = None, user_agent: str = None) -> Optional[dict]:
+        """สร้าง audit log สำหรับการอัปเดต user"""
+        details = {
+            "event": "user_update",
+            "changes": changes,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if ip_address:
+            details["ip_address"] = ip_address
+        
+        if user_agent:
+            details["user_agent"] = user_agent
+
+        audit_data = AuditLogCreate(
+            actor_user_id=actor_user_id,
+            target_user_id=target_user_id,
+            action=AuditAction.USER_UPDATE,
+            details=details
+        )
+
+        return await self.create_audit_log(audit_data)
+    
+    async def create_user_delete_audit(self, actor_user_id: str, target_user_id: str, target_email: str,
+                                      target_role: str, ip_address: str = None, user_agent: str = None, 
+                                      actor_email: str = None, actor_name: str = None) -> Optional[dict]:
+        """สร้าง audit log สำหรับการลบ user"""
+        details = {
+            "event": "user_delete",
+            "target_email": target_email,
+            "target_role": target_role,
+            "deleted_by_user_id": actor_user_id,
+            "deleted_by_email": actor_email,
+            "deleted_by_name": actor_name,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if ip_address:
+            details["ip_address"] = ip_address
+        
+        if user_agent:
+            details["user_agent"] = user_agent
+
+        audit_data = AuditLogCreate(
+            actor_user_id=actor_user_id,
+            target_user_id=target_user_id,
+            action=AuditAction.USER_DELETE,
+            details=details
+        )
+
+        return await self.create_audit_log(audit_data)
+    
+    async def create_user_view_audit(self, actor_user_id: str, target_user_id: str, view_type: str = "detail",
+                                    ip_address: str = None, user_agent: str = None) -> Optional[dict]:
+        """สร้าง audit log สำหรับการดู user (มี rate limiting)"""
+        
+        # ตรวจสอบ rate limit ก่อนสร้าง audit log
+        if not audit_rate_limiter.should_create_audit_log(actor_user_id, "USER_VIEW", view_type):
+            return None  # ข้าม audit log
+        
+        details = {
+            "event": "user_view",
+            "view_type": view_type,  # "detail", "profile", "list"
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if ip_address:
+            details["ip_address"] = ip_address
+        
+        if user_agent:
+            details["user_agent"] = user_agent
+
+        audit_data = AuditLogCreate(
+            actor_user_id=actor_user_id,
+            target_user_id=target_user_id,
+            action=AuditAction.USER_VIEW,
+            details=details
+        )
+
+        return await self.create_audit_log(audit_data)
+    
+    async def create_user_list_audit(self, actor_user_id: str, filters: dict = None,
+                                    ip_address: str = None, user_agent: str = None) -> Optional[dict]:
+        """สร้าง audit log สำหรับการดูรายการ users (มี rate limiting)"""
+        
+        # ตรวจสอบ rate limit ก่อนสร้าง audit log
+        if not audit_rate_limiter.should_create_audit_log(actor_user_id, "USER_LIST"):
+            return None  # ข้าม audit log
+        
+        details = {
+            "event": "user_list",
+            "filters": filters or {},
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if ip_address:
+            details["ip_address"] = ip_address
+        
+        if user_agent:
+            details["user_agent"] = user_agent
+
+        audit_data = AuditLogCreate(
+            actor_user_id=actor_user_id,
+            target_user_id=None,  # list operation ไม่มี target specific
+            action=AuditAction.USER_LIST,
+            details=details
+        )
+
+        return await self.create_audit_log(audit_data)
+    
+    async def create_password_change_audit(self, actor_user_id: str, target_user_id: str, change_type: str = "self",
+                                          ip_address: str = None, user_agent: str = None) -> Optional[dict]:
+        """สร้าง audit log สำหรับการเปลี่ยนรหัสผ่าน"""
+        details = {
+            "event": "password_change",
+            "change_type": change_type,  # "self", "admin_reset"
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if ip_address:
+            details["ip_address"] = ip_address
+        
+        if user_agent:
+            details["user_agent"] = user_agent
+
+        audit_data = AuditLogCreate(
+            actor_user_id=actor_user_id,
+            target_user_id=target_user_id,
+            action=AuditAction.PASSWORD_CHANGE if change_type == "self" else AuditAction.PASSWORD_RESET,
+            details=details
+        )
+
+        return await self.create_audit_log(audit_data)
+    
+    async def create_role_promotion_audit(self, actor_user_id: str, target_user_id: str, old_role: str, 
+                                         new_role: str, promotion_type: str = "manual",
+                                         ip_address: str = None, user_agent: str = None) -> Optional[dict]:
+        """สร้าง audit log สำหรับการเปลี่ยน role"""
+        details = {
+            "event": "role_promotion",
+            "old_role": old_role,
+            "new_role": new_role,
+            "promotion_type": promotion_type,  # "manual", "after_verification"
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if ip_address:
+            details["ip_address"] = ip_address
+        
+        if user_agent:
+            details["user_agent"] = user_agent
+
+        audit_data = AuditLogCreate(
+            actor_user_id=actor_user_id,
+            target_user_id=target_user_id,
+            action=AuditAction.PROMOTE_ROLE,
             details=details
         )
 

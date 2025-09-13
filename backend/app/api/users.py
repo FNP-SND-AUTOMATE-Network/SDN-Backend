@@ -360,7 +360,7 @@ async def update_user(
             if request.surname is not None:
                 changes["surname"] = request.surname
             if request.role:
-                changes["role"] = request.role
+                changes["role"] = request.role.value
             if request.email_verified is not None:
                 changes["email_verified"] = request.email_verified
             if request.has_strong_mfa is not None:
@@ -647,7 +647,7 @@ async def get_my_profile(current_user: dict = Depends(get_current_user)):
                 detail="ไม่พบข้อมูลผู้ใช้งาน"
             )
         
-        # สร้าง audit log สำหรับการดู profile ของตัวเอง
+        # สร้าง audit log สำหรับการดู profile ของตัวเอง (มี rate limiting)
         try:
             await audit_svc.create_user_view_audit(
                 actor_user_id=current_user["id"],
@@ -693,13 +693,22 @@ async def promote_user_role(
         
         user_svc, audit_svc = get_services()
         
+        # ดึงข้อมูล user เก่าก่อนทำการ promote
+        old_user = await user_svc.get_user_by_id(user_id)
+        if not old_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="ไม่พบผู้ใช้งาน"
+            )
+        old_role = old_user["role"]
+        
         # เปลี่ยน role
         updated_user = await user_svc.promote_user_role_after_verification(user_id, target_role.value)
         
         if not updated_user:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="ไม่พบผู้ใช้งาน"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="ไม่สามารถเปลี่ยน role ได้"
             )
         
         # สร้าง audit log
@@ -711,10 +720,6 @@ async def promote_user_role(
                 client_ip = req.headers["x-real-ip"]
             
             user_agent = req.headers.get("user-agent") if req else "unknown"
-            
-            # ดึงข้อมูล user เก่า
-            old_user = await user_svc.get_user_by_id(user_id)
-            old_role = old_user["role"] if old_user else "UNKNOWN"
             
             await audit_svc.create_role_promotion_audit(
                 actor_user_id=current_user["id"],

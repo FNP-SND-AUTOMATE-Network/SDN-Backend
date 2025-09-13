@@ -1,6 +1,7 @@
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from app.models.audit import AuditLogCreate, AuditLogResponse, AuditLogFilter, AuditAction
+from app.utils.audit_rate_limiter import audit_rate_limiter
 import json
 
 
@@ -15,7 +16,14 @@ class AuditService:
             details_json = None
             if audit_data.details:
                 if isinstance(audit_data.details, dict):
-                    details_json = json.dumps(audit_data.details, ensure_ascii=False)
+                    try:
+                        details_json = json.dumps(audit_data.details, ensure_ascii=False, default=str)
+                    except Exception as json_error:
+                        print(f"JSON serialization error: {json_error}")
+                        print(f"Details content: {audit_data.details}")
+                        print(f"Details type: {type(audit_data.details)}")
+                        # ลองแปลงเป็น string แทน
+                        details_json = str(audit_data.details)
                 else:
                     details_json = str(audit_data.details)
 
@@ -29,12 +37,24 @@ class AuditService:
             )
 
             # แปลงกลับเป็น dict เพื่อ return
+            details_dict = None
+            if audit_log.details:
+                try:
+                    # ตรวจสอบว่าเป็น string หรือ dict อยู่แล้ว
+                    if isinstance(audit_log.details, str):
+                        details_dict = json.loads(audit_log.details)
+                    else:
+                        details_dict = audit_log.details
+                except:
+                    # หากแปลงไม่ได้ให้เก็บเป็น dict พร้อม raw data
+                    details_dict = {"raw": str(audit_log.details)}
+            
             return AuditLogResponse(
                 id=audit_log.id,
                 actor_user_id=audit_log.actorUserId,
                 target_user_id=audit_log.targetUserId,
                 action=audit_log.action,
-                details=json.loads(audit_log.details) if audit_log.details else None,
+                details=details_dict,
                 created_at=audit_log.createdAt
             )
         except Exception as e:
@@ -82,9 +102,13 @@ class AuditService:
                 details = None
                 if audit_log.details:
                     try:
-                        details = json.loads(audit_log.details)
+                        # ตรวจสอบว่าเป็น string หรือ dict อยู่แล้ว
+                        if isinstance(audit_log.details, str):
+                            details = json.loads(audit_log.details)
+                        else:
+                            details = audit_log.details
                     except:
-                        details = {"raw": audit_log.details}
+                        details = {"raw": str(audit_log.details)}
                 
                 # เพิ่มข้อมูล actor และ target ลงใน details (ดึงแยก)
                 if details is None:
@@ -149,9 +173,13 @@ class AuditService:
             details = None
             if audit_log.details:
                 try:
-                    details = json.loads(audit_log.details)
+                    # ตรวจสอบว่าเป็น string หรือ dict อยู่แล้ว
+                    if isinstance(audit_log.details, str):
+                        details = json.loads(audit_log.details)
+                    else:
+                        details = audit_log.details
                 except:
-                    details = {"raw": audit_log.details}
+                    details = {"raw": str(audit_log.details)}
             
             # เพิ่มข้อมูล actor และ target ลงใน details (ดึงแยก)
             if details is None:
@@ -349,7 +377,12 @@ class AuditService:
     
     async def create_user_view_audit(self, actor_user_id: str, target_user_id: str, view_type: str = "detail",
                                     ip_address: str = None, user_agent: str = None) -> Optional[dict]:
-        """สร้าง audit log สำหรับการดู user (เฉพาะกรณีที่สำคัญ)"""
+        """สร้าง audit log สำหรับการดู user (มี rate limiting)"""
+        
+        # ตรวจสอบ rate limit ก่อนสร้าง audit log
+        if not audit_rate_limiter.should_create_audit_log(actor_user_id, "USER_VIEW", view_type):
+            return None  # ข้าม audit log
+        
         details = {
             "event": "user_view",
             "view_type": view_type,  # "detail", "profile", "list"
@@ -373,7 +406,12 @@ class AuditService:
     
     async def create_user_list_audit(self, actor_user_id: str, filters: dict = None,
                                     ip_address: str = None, user_agent: str = None) -> Optional[dict]:
-        """สร้าง audit log สำหรับการดูรายการ users"""
+        """สร้าง audit log สำหรับการดูรายการ users (มี rate limiting)"""
+        
+        # ตรวจสอบ rate limit ก่อนสร้าง audit log
+        if not audit_rate_limiter.should_create_audit_log(actor_user_id, "USER_LIST"):
+            return None  # ข้าม audit log
+        
         details = {
             "event": "user_list",
             "filters": filters or {},

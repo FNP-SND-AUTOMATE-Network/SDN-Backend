@@ -2,7 +2,8 @@ import bcrypt
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 import os
-from jose import jwt, JWTError
+from jose import jwt
+from jose.exceptions import JWTError, JWSError, JWEError, JOSEError
 from app.models.auth import RegisterRequest
 from app.models.user import UserCreateRequest, UserUpdateRequest, UserFilter
 
@@ -120,8 +121,8 @@ class UserService:
             if user_id is None:
                 raise ValueError("Invalid token")
             return user_id
-        except JWTError:
-            raise ValueError("Invalid token")
+        except (JWTError, JWSError, JWEError, JOSEError) as e:
+            raise ValueError(f"Invalid token: {str(e)}")
     
     async def get_user_by_id(self, user_id: str) -> Optional[dict]:
         """ดึงข้อมูลผู้ใช้ตาม ID"""

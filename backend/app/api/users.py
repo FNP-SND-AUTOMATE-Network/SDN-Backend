@@ -232,12 +232,8 @@ async def get_users(
             # ลบ None values
             audit_filters = {k: v for k, v in audit_filters.items() if v is not None}
             
-            await audit_svc.create_user_list_audit(
-                actor_user_id=current_user["id"],
-                filters=audit_filters,
-                ip_address=client_ip,
-                user_agent=user_agent
-            )
+            # Note: ไม่ทำ audit log สำหรับการดู user list เพราะไม่จำเป็น
+            pass
         except Exception as audit_error:
             print(f"Error creating audit log: {audit_error}")
         
@@ -278,17 +274,7 @@ async def get_user_by_id(
                 detail="ไม่พบผู้ใช้งาน"
             )
         
-        # สร้าง audit log สำหรับการดู user detail
-        try:
-            await audit_svc.create_user_view_audit(
-                actor_user_id=current_user["id"],
-                target_user_id=user_id,
-                view_type="detail",
-                ip_address="unknown",  # ไม่มี Request object ใน parameter
-                user_agent="unknown"
-            )
-        except Exception as audit_error:
-            print(f"Error creating audit log: {audit_error}")
+        # Note: ไม่ทำ audit log สำหรับการดู user detail เพราะไม่จำเป็น
         
         return UserDetailResponse(**user)
         
@@ -647,17 +633,7 @@ async def get_my_profile(current_user: dict = Depends(get_current_user)):
                 detail="ไม่พบข้อมูลผู้ใช้งาน"
             )
         
-        # สร้าง audit log สำหรับการดู profile ของตัวเอง (มี rate limiting)
-        try:
-            await audit_svc.create_user_view_audit(
-                actor_user_id=current_user["id"],
-                target_user_id=current_user["id"],
-                view_type="profile",
-                ip_address="unknown",
-                user_agent="unknown"
-            )
-        except Exception as audit_error:
-            print(f"Error creating audit log: {audit_error}")
+        # Note: ไม่ทำ audit log สำหรับการดู profile เพราะไม่จำเป็น
         
         return UserDetailResponse(**user)
         

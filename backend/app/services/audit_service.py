@@ -1,7 +1,6 @@
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from app.models.audit import AuditLogCreate, AuditLogResponse, AuditLogFilter, AuditAction
-from app.utils.audit_rate_limiter import audit_rate_limiter
 import json
 
 
@@ -375,66 +374,8 @@ class AuditService:
 
         return await self.create_audit_log(audit_data)
     
-    async def create_user_view_audit(self, actor_user_id: str, target_user_id: str, view_type: str = "detail",
-                                    ip_address: str = None, user_agent: str = None) -> Optional[dict]:
-        """สร้าง audit log สำหรับการดู user (มี rate limiting)"""
-        
-        # ตรวจสอบ rate limit ก่อนสร้าง audit log
-        if not audit_rate_limiter.should_create_audit_log(actor_user_id, "USER_VIEW", view_type):
-            return None  # ข้าม audit log
-        
-        details = {
-            "event": "user_view",
-            "view_type": view_type,  # "detail", "profile", "list"
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        if ip_address:
-            details["ip_address"] = ip_address
-        
-        if user_agent:
-            details["user_agent"] = user_agent
-
-        audit_data = AuditLogCreate(
-            actor_user_id=actor_user_id,
-            target_user_id=target_user_id,
-            action=AuditAction.USER_VIEW,
-            details=details
-        )
-
-        return await self.create_audit_log(audit_data)
-    
-    async def create_user_list_audit(self, actor_user_id: str, filters: dict = None,
-                                    ip_address: str = None, user_agent: str = None) -> Optional[dict]:
-        """สร้าง audit log สำหรับการดูรายการ users (มี rate limiting)"""
-        
-        # ตรวจสอบ rate limit ก่อนสร้าง audit log
-        if not audit_rate_limiter.should_create_audit_log(actor_user_id, "USER_LIST"):
-            return None  # ข้าม audit log
-        
-        details = {
-            "event": "user_list",
-            "filters": filters or {},
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        if ip_address:
-            details["ip_address"] = ip_address
-        
-        if user_agent:
-            details["user_agent"] = user_agent
-
-        audit_data = AuditLogCreate(
-            actor_user_id=actor_user_id,
-            target_user_id=None,  # list operation ไม่มี target specific
-            action=AuditAction.USER_LIST,
-            details=details
-        )
-
-        return await self.create_audit_log(audit_data)
-    
     async def create_password_change_audit(self, actor_user_id: str, target_user_id: str, change_type: str = "self",
-                                          ip_address: str = None, user_agent: str = None) -> Optional[dict]:
+                                            ip_address: str = None, user_agent: str = None) -> Optional[dict]:
         """สร้าง audit log สำหรับการเปลี่ยนรหัสผ่าน"""
         details = {
             "event": "password_change",

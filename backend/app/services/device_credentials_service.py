@@ -103,6 +103,10 @@ class DeviceCredentialsService:
             if data.device_password is not None:
                 update_data["devicePasswordHash"] = self._hash_password(data.device_password)
             
+            # ตรวจสอบว่ามีข้อมูลที่จะอัปเดตหรือไม่
+            if not update_data:
+                raise ValueError("ไม่มีข้อมูลที่จะอัปเดต กรุณาระบุ device_username หรือ device_password")
+            
             # อัปเดต device credentials
             device_creds = await self.prisma.devicecredentials.update(
                 where={"userId": user_id},
@@ -120,7 +124,7 @@ class DeviceCredentialsService:
             
         except Exception as e:
             print(f"Error updating device credentials: {e}")
-            if "ไม่พบ Device Credentials" in str(e):
+            if "ไม่พบ Device Credentials" in str(e) or "ไม่มีข้อมูลที่จะอัปเดต" in str(e):
                 raise e
             return None
     

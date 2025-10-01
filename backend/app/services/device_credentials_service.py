@@ -15,8 +15,13 @@ class DeviceCredentialsService:
     
     def _hash_password(self, password: str) -> str:
         """Hash รหัสผ่านด้วย bcrypt"""
+        # ตรวจสอบ byte length เพื่อป้องกัน bcrypt truncation
+        password_bytes = password.encode('utf-8')
+        if len(password_bytes) > 72:
+            raise ValueError(f"รหัสผ่านยาวเกินไป ({len(password_bytes)} bytes) bcrypt รองรับได้สูงสุด 72 bytes")
+        
         salt = bcrypt.gensalt()
-        return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
+        return bcrypt.hashpw(password_bytes, salt).decode('utf-8')
     
     def _verify_password(self, password: str, hashed: str) -> bool:
         """ตรวจสอบรหัสผ่านกับ hash"""
@@ -79,7 +84,7 @@ class DeviceCredentialsService:
             
         except Exception as e:
             print(f"Error creating device credentials: {e}")
-            if "ผู้ใช้มี Device Credentials อยู่แล้ว" in str(e):
+            if "ผู้ใช้มี Device Credentials อยู่แล้ว" in str(e) or "รหัสผ่านยาวเกินไป" in str(e):
                 raise e
             return None
     
@@ -124,7 +129,7 @@ class DeviceCredentialsService:
             
         except Exception as e:
             print(f"Error updating device credentials: {e}")
-            if "ไม่พบ Device Credentials" in str(e) or "ไม่มีข้อมูลที่จะอัปเดต" in str(e):
+            if "ไม่พบ Device Credentials" in str(e) or "ไม่มีข้อมูลที่จะอัปเดต" in str(e) or "รหัสผ่านยาวเกินไป" in str(e):
                 raise e
             return None
     

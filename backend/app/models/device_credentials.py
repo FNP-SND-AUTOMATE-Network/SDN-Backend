@@ -10,13 +10,13 @@ class DeviceCredentialsBase(BaseModel):
 
 class DeviceCredentialsCreate(DeviceCredentialsBase):
     """Model สำหรับสร้าง Device Credentials ใหม่"""
-    device_password: str = Field(..., description="รหัสผ่านสำหรับเข้าใช้งานอุปกรณ์เครือข่าย", min_length=1, max_length=200)
+    device_password: str = Field(..., description="รหัสผ่านสำหรับเข้าใช้งานอุปกรณ์เครือข่าย", min_length=1, max_length=72)
 
 
 class DeviceCredentialsUpdate(BaseModel):
     """Model สำหรับอัปเดต Device Credentials"""
     device_username: Optional[str] = Field(None, description="ชื่อผู้ใช้สำหรับเข้าใช้งานอุปกรณ์เครือข่าย", min_length=1, max_length=100)
-    device_password: Optional[str] = Field(None, description="รหัสผ่านใหม่สำหรับเข้าใช้งานอุปกรณ์เครือข่าย", min_length=1, max_length=200)
+    device_password: Optional[str] = Field(None, description="รหัสผ่านใหม่สำหรับเข้าใช้งานอุปกรณ์เครือข่าย", min_length=1, max_length=72)
 
 
 class DeviceCredentialsResponse(DeviceCredentialsBase):

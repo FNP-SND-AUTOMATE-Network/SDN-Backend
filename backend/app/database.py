@@ -27,3 +27,8 @@ def is_prisma_client_ready():
     """Check if Prisma client is ready"""
     global prisma_client
     return prisma_client is not None
+
+
+def get_db():
+    """FastAPI dependency to get database client"""
+    return get_prisma_client()

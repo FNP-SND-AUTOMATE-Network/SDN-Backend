@@ -71,6 +71,9 @@ model User {
   actorLogs  AuditLog[] @relation("AuditActor")
   targetLogs AuditLog[] @relation("AuditTarget")
 
+  // Device Network Credentials
+  deviceCredentials DeviceCredentials?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -160,4 +163,22 @@ model AuditLog {
 
   @@index([actorUserId])
   @@index([targetUserId, action])
+}
+
+// ========= Device Network Credentials =========
+model DeviceCredentials {
+  id       String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId   String @unique @db.Uuid
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// ชื่อผู้ใช้สำหรับเข้าใช้งานอุปกรณ์เครือข่าย
+  deviceUsername String
+
+  /// รหัสผ่านสำหรับเข้าใช้งานอุปกรณ์เครือข่าย (เก็บเป็น hash)
+  devicePasswordHash String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
 }

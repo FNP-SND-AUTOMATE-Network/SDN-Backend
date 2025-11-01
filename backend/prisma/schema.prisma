@@ -4,13 +4,11 @@
 // Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
 // Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
 
-
 generator py {
   provider             = "prisma-client-py"
   recursive_type_depth = 5
   previewFeatures      = ["postgresqlExtensions"]
 }
-
 
 datasource db {
   provider   = "postgresql"
@@ -73,6 +71,9 @@ model User {
 
   // Device Network Credentials
   deviceCredentials DeviceCredentials?
+
+  // Policy
+  createdPolicies Policy[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -167,9 +168,9 @@ model AuditLog {
 
 // ========= Device Network Credentials =========
 model DeviceCredentials {
-  id       String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId   String @unique @db.Uuid
-  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String @unique @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   /// ชื่อผู้ใช้สำหรับเข้าใช้งานอุปกรณ์เครือข่าย
   deviceUsername String
@@ -182,3 +183,197 @@ model DeviceCredentials {
 
   @@index([userId])
 }
+
+// ========= Management Network =========
+
+// ========= Device Network =========
+model DeviceNetwork {
+  id                        String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  serial_number             String                 @unique
+  device_name               String
+  device_model              String
+  type                      TypeDevice             @default(SWITCH)
+  status                    StatusDevice           @default(ONLINE)
+  ip_address                String
+  mac_address               String                 @unique
+  description               String?
+  policy_id                 String?                @db.Uuid
+  os_id                     String?                @db.Uuid
+  backup_id                 String?                @db.Uuid
+  tag_id                    String?                @db.Uuid
+  local_site_id             String?                @db.Uuid
+  configuration_template_id String?                @db.Uuid
+  
+  configuration_template ConfigurationTemplate? @relation(fields: [configuration_template_id], references: [id], onDelete: SetNull)
+  operatingSystem        OperatingSystem?       @relation(fields: [os_id], references: [id], onDelete: SetNull)
+  policy                 Policy?                @relation(fields: [policy_id], references: [id], onDelete: SetNull)
+  backup                 Backup?                @relation(fields: [backup_id], references: [id], onDelete: SetNull)
+  tag                    Tag?                   @relation(fields: [tag_id], references: [tag_id], onDelete: SetNull)
+  localSite              LocalSite?             @relation(fields: [local_site_id], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([serial_number])
+}
+
+enum StatusDevice {
+  ONLINE
+  OFFLINE
+  MAINTENANCE
+  OTHER
+}
+
+enum TypeDevice {
+  SWITCH
+  ROUTER
+  FIREWALL
+  ACCESS_POINT
+  OTHER
+}
+
+model OperatingSystem {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  os_name     String  @unique
+  os_type     OsType  @default(OTHER)
+  description String?
+  tag_id      String? @db.Uuid
+
+  tag            Tag?            @relation(fields: [tag_id], references: [tag_id], onDelete: SetNull)
+  deviceNetworks DeviceNetwork[]
+  backups        Backup[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([os_name])
+}
+
+model Tag {
+  tag_id      String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tag_name    String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  operatingSystems       OperatingSystem[]
+  deviceNetworks         DeviceNetwork[]
+  configurationTemplates ConfigurationTemplate[]
+
+  @@index([tag_name])
+}
+
+enum OsType {
+  LINUX
+  WINDOWS
+  MACOS
+  BSD
+  UNIX
+  OTHER
+}
+
+model LocalSite {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  site_code      String   @unique
+  site_name      String?
+  site_type      SiteType @default(DataCenter)
+  building_name  String?
+  floor_number   Int?
+  rack_number    Int?
+  address        String?
+  address_detail String?
+  sub_district   String?
+  district       String?
+  city           String?
+  zip_code       String?
+  country        String?
+
+  deviceNetworks DeviceNetwork[]
+
+  @@index([site_code])
+  @@index([site_name])
+}
+
+enum SiteType {
+  DataCenter
+  BRANCH
+  OTHER
+}
+
+// ========= Policy =========
+model Policy {
+  id               String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  policy_name      String  @unique
+  description      String?
+  parent_policy_id String? @db.Uuid
+
+  parent_policy  Policy?         @relation("PolicyHierarchy", fields: [parent_policy_id], references: [id], onDelete: SetNull)
+  child_policies Policy[]        @relation("PolicyHierarchy")
+  deviceNetworks DeviceNetwork[]
+  backups        Backup[]
+
+  createdBy     String? @db.Uuid
+  createdByUser User?   @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([policy_name])
+}
+
+enum PolicyType {
+  NETWORK
+  SECURITY
+  OTHER
+}
+
+// ========= Backup =========
+model Backup {
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  backup_name String       @unique
+  description String?
+  policy_id   String?      @db.Uuid
+  status      BackupStatus @default(ONLINE)
+  auto_backup Boolean      @default(false)
+
+  os_id           String?          @db.Uuid
+  operatingSystem OperatingSystem? @relation(fields: [os_id], references: [id], onDelete: SetNull)
+
+  policy         Policy?         @relation(fields: [policy_id], references: [id], onDelete: SetNull)
+  deviceNetworks DeviceNetwork[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([backup_name])
+}
+
+enum BackupStatus {
+  ONLINE
+  OFFLINE
+  MAINTENANCE
+  OTHER
+}
+
+// ========= configuration Template =========
+model ConfigurationTemplate {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  template_name String       @unique
+  description   String?
+  template_type TemplateType @default(OTHER)
+
+  tag_name       String?
+  tag            Tag?            @relation(fields: [tag_name], references: [tag_name], onDelete: SetNull)
+  deviceNetworks DeviceNetwork[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([template_name])
+}
+
+enum TemplateType {
+  NETWORK
+  SECURITY
+  OTHER
+}
+
+//========== IPAM =========

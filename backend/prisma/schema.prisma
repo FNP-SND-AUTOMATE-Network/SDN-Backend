@@ -75,6 +75,9 @@ model User {
   // Policy
   createdPolicies Policy[]
 
+  // OS File Uploads
+  uploadedOSFiles OSFile[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -188,33 +191,72 @@ model DeviceCredentials {
 
 // ========= Device Network =========
 model DeviceNetwork {
-  id                        String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  serial_number             String                 @unique
+  id                        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  serial_number             String       @unique
   device_name               String
   device_model              String
-  type                      TypeDevice             @default(SWITCH)
-  status                    StatusDevice           @default(ONLINE)
-  ip_address                String
-  mac_address               String                 @unique
+  type                      TypeDevice   @default(SWITCH)
+  status                    StatusDevice @default(OFFLINE)
+  ip_address                String?
+  mac_address               String       @unique
   description               String?
-  policy_id                 String?                @db.Uuid
-  os_id                     String?                @db.Uuid
-  backup_id                 String?                @db.Uuid
-  tag_id                    String?                @db.Uuid
-  local_site_id             String?                @db.Uuid
-  configuration_template_id String?                @db.Uuid
-  
+  policy_id                 String?      @db.Uuid
+  os_id                     String?      @db.Uuid
+  backup_id                 String?      @db.Uuid
+  local_site_id             String?      @db.Uuid
+  configuration_template_id String?      @db.Uuid
+
   configuration_template ConfigurationTemplate? @relation(fields: [configuration_template_id], references: [id], onDelete: SetNull)
   operatingSystem        OperatingSystem?       @relation(fields: [os_id], references: [id], onDelete: SetNull)
   policy                 Policy?                @relation(fields: [policy_id], references: [id], onDelete: SetNull)
   backup                 Backup?                @relation(fields: [backup_id], references: [id], onDelete: SetNull)
-  tag                    Tag?                   @relation(fields: [tag_id], references: [tag_id], onDelete: SetNull)
   localSite              LocalSite?             @relation(fields: [local_site_id], references: [id], onDelete: SetNull)
+  
+  // Many-to-Many relation with Tags
+  tags                   Tag[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  interfaces Interface[]
+
   @@index([serial_number])
+}
+
+// ========= Interface (Network Interfaces) =========
+model Interface {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name             String           // เช่น GigabitEthernet0/1, eth0, Vlan10
+  device_id        String           @db.Uuid
+  device           DeviceNetwork    @relation(fields: [device_id], references: [id], onDelete: Cascade)
+  label            String?          // ชื่อย่อหรือป้ายกำกับ
+  status           InterfaceStatus  @default(DOWN)
+  type             InterfaceType    @default(PHYSICAL)
+  description      String?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([device_id, name])
+  @@index([device_id])
+  @@index([status])
+}
+
+enum InterfaceStatus {
+  UP
+  DOWN
+  ADMIN_DOWN
+  TESTING
+  OTHER
+}
+
+enum InterfaceType {
+  PHYSICAL
+  VIRTUAL
+  LOOPBACK
+  VLAN
+  TUNNEL
+  OTHER
 }
 
 enum StatusDevice {
@@ -237,21 +279,49 @@ model OperatingSystem {
   os_name     String  @unique
   os_type     OsType  @default(OTHER)
   description String?
-  tag_id      String? @db.Uuid
 
-  tag            Tag?            @relation(fields: [tag_id], references: [tag_id], onDelete: SetNull)
   deviceNetworks DeviceNetwork[]
   backups        Backup[]
+  files          OSFile[]
+  
+  // Many-to-Many relation with Tags
+  tags           Tag[]
+  
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
   @@index([os_name])
 }
 
+// ========= OS File (สำหรับเก็บไฟล์ OS images) =========
+model OSFile {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  os_id        String   @db.Uuid
+  operatingSystem OperatingSystem @relation(fields: [os_id], references: [id], onDelete: Cascade)
+  
+  file_name    String   // ชื่อไฟล์ต้นฉบับ
+  file_path    String   // Path ในระบบ (สำหรับ local storage) หรือ URL (สำหรับ cloud)
+  file_size    BigInt   // ขนาดไฟล์ (bytes)
+  file_type    String?  // MIME type (เช่น application/octet-stream)
+  version      String?  // Version ของ OS (15.7, 17.3)
+  checksum     String?  // MD5 หรือ SHA256 checksum สำหรับตรวจสอบความถูกต้อง
+  
+  uploaded_by  String?  @db.Uuid
+  uploadedByUser User?  @relation(fields: [uploaded_by], references: [id], onDelete: SetNull)
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([os_id])
+  @@index([version])
+}
+
 model Tag {
   tag_id      String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   tag_name    String   @unique
   description String?
+  type        TypeTag  @default(other)
+  color       String   @default("#3B82F6") // Hex color code สำหรับแสดงใน UI
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -262,12 +332,19 @@ model Tag {
   @@index([tag_name])
 }
 
+enum TypeTag {
+  tag
+  group
+  other
+}
+
 enum OsType {
-  LINUX
-  WINDOWS
-  MACOS
-  BSD
-  UNIX
+  CISCO_IOS
+  CISCO_NXOS
+  CISCO_ASA
+  CISCO_Nexus
+  CISCO_IOS_XR
+  CISCO_IOS_XE
   OTHER
 }
 
@@ -288,6 +365,9 @@ model LocalSite {
   country        String?
 
   deviceNetworks DeviceNetwork[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([site_code])
   @@index([site_name])
@@ -361,9 +441,11 @@ model ConfigurationTemplate {
   description   String?
   template_type TemplateType @default(OTHER)
 
-  tag_name       String?
-  tag            Tag?            @relation(fields: [tag_name], references: [tag_name], onDelete: SetNull)
   deviceNetworks DeviceNetwork[]
+  
+  // Many-to-Many relation with Tags
+  tags           Tag[]
+  
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 

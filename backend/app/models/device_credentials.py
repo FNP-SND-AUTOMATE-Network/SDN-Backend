@@ -46,3 +46,9 @@ class DeviceCredentialsUpdateResponse(BaseModel):
 class DeviceCredentialsDeleteResponse(BaseModel):
     """Model สำหรับการตอบกลับหลังจากลบ Device Credentials"""
     message: str = Field(..., description="ข้อความแจ้งผลลัพธ์")
+
+
+class DeviceCredentialsVerifyRequest(BaseModel):
+    """Model สำหรับตรวจสอบ Device Credentials"""
+    username: str = Field(..., description="ชื่อผู้ใช้ที่ต้องการตรวจสอบ", min_length=1)
+    password: str = Field(..., description="รหัสผ่านที่ต้องการตรวจสอบ", min_length=1)

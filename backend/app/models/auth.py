@@ -84,16 +84,68 @@ class LoginRequest(BaseModel):
 # Login Response
 class LoginResponse(BaseModel):
     message: str
-    access_token: str
+    access_token: Optional[str] = None
     token_type: str = "bearer"
     user_id: str
     email: str
     name: Optional[str]
     surname: Optional[str]
     role: str
+    requires_totp: bool = False
+    temp_token: Optional[str] = None
+
+
+class VerifyTotpLoginRequest(BaseModel):
+    temp_token: str
+    otp_code: str
+
+    @validator('otp_code')
+    def validate_otp_code(cls, v):
+        if not v.isdigit() or len(v) != 6:
+            raise ValueError('OTP ต้องเป็นตัวเลข 6 หลัก')
+        return v
 
 
 # Error Response
 class ErrorResponse(BaseModel):
     error: str
     detail: Optional[str] = None
+
+
+# TOTP Setup Response
+class TotpSetupResponse(BaseModel):
+    secret: str
+    provisioning_uri: str
+
+
+# TOTP Verify Request
+class TotpVerifyRequest(BaseModel):
+    secret: str  # Secret ที่ได้จาก /auth/mfa/setup
+    otp_code: str
+
+    @validator('otp_code')
+    def validate_otp_code(cls, v):
+        if not v.isdigit() or len(v) != 6:
+            raise ValueError('OTP ต้องเป็นตัวเลข 6 หลัก')
+        return v
+    
+    @validator('secret')
+    def validate_secret(cls, v):
+        if not v or len(v.strip()) < 16:
+            raise ValueError('Secret ต้องมีความยาวอย่างน้อย 16 ตัวอักษร')
+        return v.strip()
+
+
+class TotpVerifyOtpRequest(BaseModel):
+    otp_code: str
+
+    @validator('otp_code')
+    def validate_otp_code(cls, v):
+        if not v.isdigit() or len(v) != 6:
+            raise ValueError('OTP ต้องเป็นตัวเลข 6 หลัก')
+        return v
+
+# TOTP Disable Request
+class TotpDisableRequest(BaseModel):
+    password: str
+

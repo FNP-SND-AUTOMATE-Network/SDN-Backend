@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from app.api import health, auth, audit, users, device_credentials
+from app.api import health, auth, audit, users, device_credentials, local_sites, tags, operating_systems, policies, backups, configuration_templates, device_networks, interfaces
 from app.database import set_prisma_client
 
 @asynccontextmanager
@@ -41,3 +41,11 @@ app.include_router(auth.router)
 app.include_router(audit.router)
 app.include_router(users.router)
 app.include_router(device_credentials.router)
+app.include_router(local_sites.router)
+app.include_router(tags.router)
+app.include_router(operating_systems.router)
+app.include_router(policies.router)
+app.include_router(backups.router)
+app.include_router(configuration_templates.router)
+app.include_router(device_networks.router)
+app.include_router(interfaces.router)

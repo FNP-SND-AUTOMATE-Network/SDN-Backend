@@ -4,13 +4,17 @@ from app.database import get_db
 from app.api.users import get_current_user
 from app.services.device_credentials_service import DeviceCredentialsService
 from app.models.device_credentials import (
-    DeviceCredentialsCreate,
     DeviceCredentialsUpdate,
     DeviceCredentialsResponse,
     DeviceCredentialsCreateResponse,
     DeviceCredentialsUpdateResponse,
-    DeviceCredentialsDeleteResponse
+    DeviceCredentialsDeleteResponse,
+    DeviceCredentialsVerifyRequest,
+    DeviceCredentialsCreate
 )
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/device-credentials", tags=["Device Network Credentials"])
 
@@ -42,7 +46,7 @@ async def get_device_credentials(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error in get_device_credentials: {e}")
+        logger.error(f"Error in get_device_credentials: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="เกิดข้อผิดพลาดในการดึงข้อมูล Device Network Credentials"
@@ -89,7 +93,7 @@ async def create_device_credentials(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error in create_device_credentials: {e}")
+        logger.error(f"Error in create_device_credentials: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="เกิดข้อผิดพลาดในการสร้าง Device Network Credentials"
@@ -135,7 +139,7 @@ async def update_device_credentials(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error in update_device_credentials: {e}")
+        logger.error(f"Error in update_device_credentials: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="เกิดข้อผิดพลาดในการอัปเดต Device Network Credentials"
@@ -176,7 +180,7 @@ async def delete_device_credentials(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error in delete_device_credentials: {e}")
+        logger.error(f"Error in delete_device_credentials: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="เกิดข้อผิดพลาดในการลบ Device Network Credentials"
@@ -189,25 +193,18 @@ async def delete_device_credentials(
     description="ตรวจสอบความถูกต้องของ Device Network Credentials สำหรับการเข้าใช้งานอุปกรณ์"
 )
 async def verify_device_credentials(
-    credentials: Dict[str, str],
+    credentials: DeviceCredentialsVerifyRequest,
     db=Depends(get_db),
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """ตรวจสอบ Device Network Credentials"""
     try:
-        # ตรวจสอบ input
-        if "username" not in credentials or "password" not in credentials:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="กรุณาระบุ username และ password"
-            )
-        
         device_creds_svc = DeviceCredentialsService(db)
         
         is_valid = await device_creds_svc.verify_device_credentials(
             user_id=current_user["id"],
-            username=credentials["username"],
-            password=credentials["password"]
+            username=credentials.username,
+            password=credentials.password
         )
         
         if not is_valid:
@@ -224,7 +221,7 @@ async def verify_device_credentials(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error in verify_device_credentials: {e}")
+        logger.error(f"Error in verify_device_credentials: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="เกิดข้อผิดพลาดในการตรวจสอบ Device Network Credentials"

@@ -7,3 +7,4 @@ resend>=0.8.0
 python-jose[cryptography]>=3.3.0
 python-multipart>=0.0.6
 requests>=2.31.0
+pyotp>=2.9.0

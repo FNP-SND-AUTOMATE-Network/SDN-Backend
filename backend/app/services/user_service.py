@@ -124,6 +124,15 @@ class UserService:
         except (JWTError, JWSError, JWEError, JOSEError) as e:
             raise ValueError(f"Invalid token: {str(e)}")
     
+    def verify_token(self, token: str) -> dict:
+        """ตรวจสอบ JWT token และคืนค่า payload ทั้งหมด"""
+        try:
+            payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
+            return payload
+        except (JWTError, JWSError, JWEError, JOSEError) as e:
+            raise ValueError(f"Invalid token: {str(e)}")
+
+    
     async def get_user_by_id(self, user_id: str) -> Optional[dict]:
         """ดึงข้อมูลผู้ใช้ตาม ID"""
         try:

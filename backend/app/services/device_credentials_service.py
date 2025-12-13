@@ -48,7 +48,7 @@ class DeviceCredentialsService:
             
         except Exception as e:
             print(f"Error getting device credentials: {e}")
-            return None
+            raise e
     
     async def create_device_credentials(self, user_id: str, data: DeviceCredentialsCreate) -> Optional[DeviceCredentialsResponse]:
         """สร้าง Device Credentials ใหม่"""
@@ -84,9 +84,7 @@ class DeviceCredentialsService:
             
         except Exception as e:
             print(f"Error creating device credentials: {e}")
-            if "ผู้ใช้มี Device Credentials อยู่แล้ว" in str(e) or "รหัสผ่านยาวเกินไป" in str(e):
-                raise e
-            return None
+            raise e
     
     async def update_device_credentials(self, user_id: str, data: DeviceCredentialsUpdate) -> Optional[DeviceCredentialsResponse]:
         """อัปเดต Device Credentials"""
@@ -129,9 +127,7 @@ class DeviceCredentialsService:
             
         except Exception as e:
             print(f"Error updating device credentials: {e}")
-            if "ไม่พบ Device Credentials" in str(e) or "ไม่มีข้อมูลที่จะอัปเดต" in str(e) or "รหัสผ่านยาวเกินไป" in str(e):
-                raise e
-            return None
+            raise e
     
     async def delete_device_credentials(self, user_id: str) -> bool:
         """ลบ Device Credentials"""
@@ -153,9 +149,7 @@ class DeviceCredentialsService:
             
         except Exception as e:
             print(f"Error deleting device credentials: {e}")
-            if "ไม่พบ Device Credentials" in str(e):
-                raise e
-            return False
+            raise e
     
     async def verify_device_credentials(self, user_id: str, username: str, password: str) -> bool:
         """ตรวจสอบ Device Credentials สำหรับการเข้าใช้งาน"""

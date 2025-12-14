@@ -146,16 +146,6 @@ pytest
 3. สร้าง API endpoint ใน `app/api/`
 4. Register router ใน `app/main.py`
 
-### Environment Variables
-
-| Variable                      | Description                  | Default |
-| ----------------------------- | ---------------------------- | ------- |
-| `DATABASE_URL`                | PostgreSQL connection string | -       |
-| `SECRET_KEY`                  | JWT secret key               | -       |
-| `ALGORITHM`                   | JWT algorithm                | HS256   |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | Token expiration             | 60      |
-| `RESEND_API_KEY`              | Resend API key               | -       |
-
 ## 🐛 Troubleshooting
 
 ### ปัญหาที่พบบ่อย

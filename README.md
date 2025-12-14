@@ -17,9 +17,9 @@ Backend API สำหรับระบบจัดการ Software-Defined Ne
 
 - Python 3.12.2
 - Docker & Docker Compose
-- supabase (postgresSQL)
+- supabase (postgreSQL)
 - FastAPI 
-- ORM(สำหรับ Prisma)
+- Prisma ORM
 
 ## 🛠️ การติดตั้งและเริ่มต้นใช้งาน
 

@@ -27,11 +27,9 @@ from prisma import Prisma
 router = APIRouter(prefix="/operating-systems", tags=["Operating Systems"])
 
 def get_os_service(db: Prisma = Depends(get_db)) -> OperatingSystemService:
-    """Get OperatingSystemService instance"""
     return OperatingSystemService(db)
 
 def get_file_service(db: Prisma = Depends(get_db)) -> OSFileService:
-    """Get OSFileService instance"""
     return OSFileService(db)
 
 @router.get("/", response_model=OperatingSystemListResponse)
@@ -44,15 +42,6 @@ async def get_operating_systems(
     current_user: Dict[str, Any] = Depends(get_current_user),
     os_svc: OperatingSystemService = Depends(get_os_service)
 ):
-    """
-    ดึงรายการ Operating System ทั้งหมด
-    
-    - รองรับ pagination
-    - รองรับ filter ตาม os_type และ tag_id
-    - รองรับการค้นหา
-    - แสดงจำนวนการใช้งานใน Device และ Backup
-    - ต้องเป็น authenticated user
-    """
     try:
         operating_systems, total = await os_svc.get_operating_systems(
             page=page,
@@ -72,7 +61,7 @@ async def get_operating_systems(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการดึงรายการ Operating System: {str(e)}"
+            detail=f"Error fetching operating systems: {str(e)}"
         )
 
 @router.get("/{os_id}", response_model=OperatingSystemResponse)
@@ -82,20 +71,13 @@ async def get_operating_system(
     current_user: Dict[str, Any] = Depends(get_current_user),
     os_svc: OperatingSystemService = Depends(get_os_service)
 ):
-    """
-    ดึงข้อมูล Operating System ตาม ID
-    
-    - แสดงจำนวนการใช้งาน
-    - แสดงข้อมูล Tag ที่เชื่อมโยง
-    - ต้องเป็น authenticated user
-    """
     try:
         operating_system = await os_svc.get_operating_system_by_id(os_id, include_usage=include_usage)
         
         if not operating_system:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="ไม่พบ Operating System ที่ต้องการ"
+                detail="Operating System not found"
             )
         
         return operating_system
@@ -105,7 +87,7 @@ async def get_operating_system(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการดึงข้อมูล Operating System: {str(e)}"
+            detail=f"Error fetching operating system: {str(e)}"
         )
 
 @router.get("/{os_id}/usage", response_model=OperatingSystemUsageResponse)
@@ -114,19 +96,13 @@ async def get_operating_system_usage(
     current_user: Dict[str, Any] = Depends(get_current_user),
     os_svc: OperatingSystemService = Depends(get_os_service)
 ):
-    """
-    ดึงข้อมูลการใช้งาน Operating System โดยละเอียด
-    
-    - แสดงรายการ Device และ Backup ที่ใช้ OS นี้
-    - ต้องเป็น authenticated user
-    """
     try:
         usage = await os_svc.get_operating_system_usage(os_id)
         
         if not usage:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="ไม่พบ Operating System ที่ต้องการ"
+                detail="Operating System not found"
             )
         
         return usage
@@ -136,7 +112,7 @@ async def get_operating_system_usage(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการดึงข้อมูลการใช้งาน Operating System: {str(e)}"
+            detail=f"Failed to get operating system usage: {str(e)}"
         )
 
 @router.post("/", response_model=OperatingSystemCreateResponse, status_code=status.HTTP_201_CREATED)
@@ -145,19 +121,12 @@ async def create_operating_system(
     current_user: Dict[str, Any] = Depends(get_current_user),
     os_svc: OperatingSystemService = Depends(get_os_service)
 ):
-    """
-    สร้าง Operating System ใหม่
-    
-    - ต้องเป็น ENGINEER, ADMIN หรือ OWNER
-    - os_name ต้องไม่ซ้ำ
-    - สามารถเชื่อมโยงกับ Tag ได้
-    """
     try:
         # ตรวจสอบสิทธิ์ (ต้องเป็น ENGINEER ขึ้นไป)
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="ไม่มีสิทธิ์สร้าง Operating System ต้องเป็น ENGINEER, ADMIN หรือ OWNER"
+                detail="You do not have permission to create an operating system"
             )
 
         operating_system = await os_svc.create_operating_system(os_data)
@@ -165,11 +134,11 @@ async def create_operating_system(
         if not operating_system:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถสร้าง Operating System ได้"
+                detail="Failed to create operating system"
             )
 
         return OperatingSystemCreateResponse(
-            message="สร้าง Operating System สำเร็จ",
+            message="Operating system created successfully",
             operating_system=operating_system
         )
 
@@ -183,7 +152,7 @@ async def create_operating_system(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการสร้าง Operating System: {str(e)}"
+            detail=f"Failed to create operating system: {str(e)}"
         )
 
 @router.put("/{os_id}", response_model=OperatingSystemUpdateResponse)
@@ -193,19 +162,12 @@ async def update_operating_system(
     current_user: Dict[str, Any] = Depends(get_current_user),
     os_svc: OperatingSystemService = Depends(get_os_service)
 ):
-    """
-    อัปเดต Operating System
-    
-    - ต้องเป็น ENGINEER, ADMIN หรือ OWNER
-    - สามารถอัปเดตบางฟิลด์ได้
-    - สามารถเปลี่ยน Tag ได้
-    """
     try:
         # ตรวจสอบสิทธิ์ (ต้องเป็น ENGINEER ขึ้นไป)
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="ไม่มีสิทธิ์แก้ไข Operating System ต้องเป็น ENGINEER, ADMIN หรือ OWNER"
+                detail="You do not have permission to update an operating system"
             )
 
         operating_system = await os_svc.update_operating_system(os_id, update_data)
@@ -213,11 +175,11 @@ async def update_operating_system(
         if not operating_system:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถอัปเดต Operating System ได้"
+                detail="Failed to update operating system"
             )
 
         return OperatingSystemUpdateResponse(
-            message="อัปเดต Operating System สำเร็จ",
+            message="Operating system updated successfully",
             operating_system=operating_system
         )
 
@@ -231,23 +193,16 @@ async def update_operating_system(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการอัปเดต Operating System: {str(e)}"
+            detail=f"Error updating operating system: {str(e)}"
         )
 
 @router.delete("/{os_id}", response_model=OperatingSystemDeleteResponse)
 async def delete_operating_system(
     os_id: str,
-    force: bool = Query(False, description="บังคับลบแม้มีการใช้งาน (ใช้ด้วยความระมัดระวัง)"),
+    force: bool = Query(False, description="Force delete even if in use"),
     current_user: Dict[str, Any] = Depends(get_current_user),
     os_svc: OperatingSystemService = Depends(get_os_service)
 ):
-    """
-    ลบ Operating System
-    
-    - ต้องเป็น ADMIN หรือ OWNER
-    - ไม่สามารถลบถ้ามีการใช้งานอยู่ (ยกเว้น force=true)
-    - force=true ต้องเป็น OWNER เท่านั้น
-    """
     try:
         # ตรวจสอบสิทธิ์
         if force:
@@ -255,14 +210,14 @@ async def delete_operating_system(
             if current_user["role"] != "OWNER":
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="การลบแบบบังคับต้องเป็น OWNER เท่านั้น"
+                    detail="You do not have permission to force delete an operating system"
                 )
         else:
             # ลบปกติต้องเป็น ADMIN หรือ OWNER
             if current_user["role"] not in ["ADMIN", "OWNER"]:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="ไม่มีสิทธิ์ลบ Operating System ต้องเป็น ADMIN หรือ OWNER"
+                    detail="You do not have permission to delete an operating system"
                 )
 
         success = await os_svc.delete_operating_system(os_id, force=force)
@@ -270,11 +225,11 @@ async def delete_operating_system(
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถลบ Operating System ได้"
+                detail="Failed to delete operating system"
             )
 
         return OperatingSystemDeleteResponse(
-            message="ลบ Operating System สำเร็จ"
+            message="Operating system deleted successfully"
         )
 
     except ValueError as e:
@@ -287,7 +242,7 @@ async def delete_operating_system(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการลบ Operating System: {str(e)}"
+            detail=f"Failed to delete operating system: {str(e)}"
         )
 
 # ========= OS File Management Endpoints =========
@@ -300,18 +255,11 @@ async def upload_os_file(
     current_user: Dict[str, Any] = Depends(get_current_user),
     file_svc: OSFileService = Depends(get_file_service)
 ):
-    """
-    อัปโหลดไฟล์สำหรับ Operating System
-    
-    - ต้องเป็น ENGINEER, ADMIN หรือ OWNER
-    - รองรับไฟล์ขนาดใหญ่ (OS images)
-    - คำนวณ checksum อัตโนมัติ
-    """
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="ไม่มีสิทธิ์อัปโหลดไฟล์ ต้องเป็น ENGINEER, ADMIN หรือ OWNER"
+                detail="You do not have permission to upload an OS file"
             )
 
         # อ่านไฟล์
@@ -330,11 +278,11 @@ async def upload_os_file(
         if not os_file:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถอัปโหลดไฟล์ได้"
+                detail="Failed to upload OS file"
             )
 
         return OSFileUploadResponse(
-            message=f"อัปโหลดไฟล์ {file.filename} สำเร็จ",
+            message=f"OS file {file.filename} uploaded successfully",
             file=os_file
         )
 
@@ -348,7 +296,7 @@ async def upload_os_file(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการอัปโหลดไฟล์: {str(e)}"
+            detail=f"Failed to upload OS file: {str(e)}"
         )
 
 @router.get("/{os_id}/files", response_model=OSFileListResponse)
@@ -357,13 +305,6 @@ async def get_os_files(
     current_user: Dict[str, Any] = Depends(get_current_user),
     file_svc: OSFileService = Depends(get_file_service)
 ):
-    """
-    ดึงรายการไฟล์ทั้งหมดของ Operating System
-    
-    - แสดงชื่อไฟล์, ขนาด, version, checksum
-    - แสดงผู้อัปโหลด
-    - ต้องเป็น authenticated user
-    """
     try:
         files = await file_svc.get_files_by_os(os_id)
 
@@ -375,7 +316,7 @@ async def get_os_files(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการดึงรายการไฟล์: {str(e)}"
+            detail=f"Failed to get OS files: {str(e)}"
         )
 
 @router.get("/{os_id}/files/{file_id}/download")
@@ -385,12 +326,6 @@ async def download_os_file(
     current_user: Dict[str, Any] = Depends(get_current_user),
     file_svc: OSFileService = Depends(get_file_service)
 ):
-    """
-    ดาวน์โหลดไฟล์ Operating System
-    
-    - ส่งไฟล์กลับไปให้ client
-    - ต้องเป็น authenticated user
-    """
     try:
         # ดึงข้อมูลไฟล์
         os_file = await file_svc.get_file_by_id(file_id)
@@ -398,7 +333,7 @@ async def download_os_file(
         if not os_file or os_file.os_id != os_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="ไม่พบไฟล์ที่ต้องการ"
+                detail="File not found"
             )
 
         # ดึง path ของไฟล์
@@ -407,7 +342,7 @@ async def download_os_file(
         if not file_path or not file_path.exists():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="ไม่พบไฟล์ในระบบ"
+                detail="File not found"
             )
 
         # ส่งไฟล์กลับไป
@@ -422,7 +357,7 @@ async def download_os_file(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการดาวน์โหลดไฟล์: {str(e)}"
+            detail=f"Failed to download OS file: {str(e)}"
         )
 
 @router.delete("/{os_id}/files/{file_id}", response_model=OSFileDeleteResponse)
@@ -432,17 +367,11 @@ async def delete_os_file(
     current_user: Dict[str, Any] = Depends(get_current_user),
     file_svc: OSFileService = Depends(get_file_service)
 ):
-    """
-    ลบไฟล์ Operating System
-    
-    - ลบทั้งไฟล์และ record
-    - ต้องเป็น ADMIN หรือ OWNER
-    """
     try:
         if current_user["role"] not in ["ADMIN", "OWNER"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="ไม่มีสิทธิ์ลบไฟล์ ต้องเป็น ADMIN หรือ OWNER"
+                detail="You do not have permission to delete an OS file"
             )
 
         # ตรวจสอบว่าไฟล์เป็นของ OS นี้
@@ -450,7 +379,7 @@ async def delete_os_file(
         if not os_file or os_file.os_id != os_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="ไม่พบไฟล์ที่ต้องการ"
+                detail="File not found"
             )
 
         success = await file_svc.delete_file(file_id)
@@ -458,11 +387,11 @@ async def delete_os_file(
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถลบไฟล์ได้"
+                detail="Failed to delete OS file"
             )
 
         return OSFileDeleteResponse(
-            message="ลบไฟล์สำเร็จ"
+            message="OS file deleted successfully"
         )
 
     except ValueError as e:
@@ -475,7 +404,7 @@ async def delete_os_file(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการลบไฟล์: {str(e)}"
+            detail=f"Failed to delete OS file: {str(e)}"
         )
 
 # ========= OS Tag Management Endpoints =========
@@ -487,17 +416,11 @@ async def assign_tags_to_os(
     current_user: Dict[str, Any] = Depends(get_current_user),
     os_svc: OperatingSystemService = Depends(get_os_service)
 ):
-    """
-    เพิ่ม Tags ให้กับ Operating System
-    
-    - ต้องเป็น ENGINEER, ADMIN หรือ OWNER
-    - สามารถเพิ่มหลาย tags พร้อมกันได้
-    """
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="ไม่มีสิทธิ์จัดการ Tags ต้องเป็น ENGINEER, ADMIN หรือ OWNER"
+                detail="You do not have permission to manage tags"
             )
 
         os = await os_svc.assign_tags(os_id, tag_ids)
@@ -505,11 +428,11 @@ async def assign_tags_to_os(
         if not os:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถเพิ่ม Tags ได้"
+                detail="Failed to assign tags"
             )
 
         return OperatingSystemUpdateResponse(
-            message=f"เพิ่ม {len(tag_ids)} Tags สำเร็จ",
+            message=f"Successfully assigned {len(tag_ids)} tags",
             operating_system=os
         )
 
@@ -523,7 +446,7 @@ async def assign_tags_to_os(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการเพิ่ม Tags: {str(e)}"
+            detail=f"Failed to assign tags: {str(e)}"
         )
 
 @router.delete("/{os_id}/tags", response_model=OperatingSystemUpdateResponse)
@@ -533,17 +456,11 @@ async def remove_tags_from_os(
     current_user: Dict[str, Any] = Depends(get_current_user),
     os_svc: OperatingSystemService = Depends(get_os_service)
 ):
-    """
-    ลบ Tags ออกจาก Operating System
-    
-    - ต้องเป็น ENGINEER, ADMIN หรือ OWNER
-    - สามารถลบหลาย tags พร้อมกันได้
-    """
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="ไม่มีสิทธิ์จัดการ Tags ต้องเป็น ENGINEER, ADMIN หรือ OWNER"
+                detail="You do not have permission to manage tags"
             )
 
         os = await os_svc.remove_tags(os_id, tag_ids)
@@ -551,11 +468,11 @@ async def remove_tags_from_os(
         if not os:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถลบ Tags ได้"
+                detail="Failed to remove tags"
             )
 
         return OperatingSystemUpdateResponse(
-            message=f"ลบ {len(tag_ids)} Tags สำเร็จ",
+            message=f"Successfully removed {len(tag_ids)} tags",
             operating_system=os
         )
 
@@ -569,6 +486,6 @@ async def remove_tags_from_os(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการลบ Tags: {str(e)}"
+            detail=f"Failed to remove tags: {str(e)}"
         )
 

@@ -7,13 +7,13 @@ from app.models.configuration_template import (
 )
 
 class ConfigurationTemplateService:
-    """Service สำหรับจัดการ Configuration Template"""
+    #Service สำหรับจัดการ Configuration Template
 
     def __init__(self, prisma_client):
         self.prisma = prisma_client
 
     async def create_template(self, template_data: ConfigurationTemplateCreate) -> Optional[ConfigurationTemplateResponse]:
-        """สร้าง Configuration Template ใหม่"""
+        #สร้าง Configuration Template ใหม่
         try:
             # ตรวจสอบว่า template_name ซ้ำหรือไม่
             existing_template = await self.prisma.configurationtemplate.find_unique(
@@ -77,7 +77,7 @@ class ConfigurationTemplateService:
         tag_name: Optional[str] = None,
         include_usage: bool = False
     ) -> tuple[List[ConfigurationTemplateResponse], int]:
-        """ดึงรายการ Configuration Template ทั้งหมด"""
+        #ดึงรายการ Configuration Template ทั้งหมด
         try:
             where_conditions: Dict[str, Any] = {}
             
@@ -140,7 +140,7 @@ class ConfigurationTemplateService:
             return [], 0
 
     async def get_template_by_id(self, template_id: str, include_usage: bool = False) -> Optional[ConfigurationTemplateResponse]:
-        """ดึงข้อมูล Configuration Template ตาม ID"""
+        #ดึงข้อมูล Configuration Template ตาม ID
         try:
             include_options: Dict[str, Any] = {"tag": True}
             if include_usage:
@@ -182,7 +182,7 @@ class ConfigurationTemplateService:
             return None
 
     async def update_template(self, template_id: str, update_data: ConfigurationTemplateUpdate) -> Optional[ConfigurationTemplateResponse]:
-        """อัปเดต Configuration Template"""
+        #อัปเดต Configuration Template
         try:
             existing_template = await self.prisma.configurationtemplate.find_unique(
                 where={"id": template_id}
@@ -259,7 +259,7 @@ class ConfigurationTemplateService:
             return None
 
     async def delete_template(self, template_id: str, force: bool = False) -> bool:
-        """ลบ Configuration Template"""
+        #ลบ Configuration Template
         try:
             existing_template = await self.prisma.configurationtemplate.find_unique(
                 where={"id": template_id},

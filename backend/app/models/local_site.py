@@ -4,13 +4,11 @@ from datetime import datetime
 from enum import Enum
 
 class SiteType(str, Enum):
-    """ประเภทของสถานที่"""
     DATA_CENTER = "DataCenter"
     BRANCH = "BRANCH"
     OTHER = "OTHER"
 
 class LocalSiteBase(BaseModel):
-    """Base model สำหรับ LocalSite"""
     site_code: str = Field(..., description="รหัสสถานที่ (ต้องไม่ซ้ำ)", min_length=1, max_length=50)
     site_name: Optional[str] = Field(None, description="ชื่อสถานที่", max_length=200)
     site_type: SiteType = Field(SiteType.DATA_CENTER, description="ประเภทสถานที่")
@@ -26,11 +24,9 @@ class LocalSiteBase(BaseModel):
     country: Optional[str] = Field(None, description="ประเทศ", max_length=100)
 
 class LocalSiteCreate(LocalSiteBase):
-    """Model สำหรับสร้าง LocalSite ใหม่"""
     pass
 
 class LocalSiteUpdate(BaseModel):
-    """Model สำหรับอัปเดต LocalSite"""
     site_code: Optional[str] = Field(None, description="รหัสสถานที่ (ต้องไม่ซ้ำ)", min_length=1, max_length=50)
     site_name: Optional[str] = Field(None, description="ชื่อสถานที่", max_length=200)
     site_type: Optional[SiteType] = Field(None, description="ประเภทสถานที่")
@@ -46,7 +42,6 @@ class LocalSiteUpdate(BaseModel):
     country: Optional[str] = Field(None, description="ประเทศ", max_length=100)
 
 class LocalSiteResponse(LocalSiteBase):
-    """Model สำหรับ response ของ LocalSite"""
     id: str = Field(..., description="ID ของสถานที่")
     created_at: datetime
     updated_at: datetime
@@ -56,23 +51,19 @@ class LocalSiteResponse(LocalSiteBase):
         from_attributes = True
 
 class LocalSiteListResponse(BaseModel):
-    """Model สำหรับ response ของรายการ LocalSite"""
     total: int = Field(..., description="จำนวนทั้งหมด")
     page: int = Field(..., description="หน้าปัจจุบัน")
     page_size: int = Field(..., description="ขนาดหน้า")
     sites: list[LocalSiteResponse] = Field(..., description="รายการสถานที่")
 
 class LocalSiteCreateResponse(BaseModel):
-    """Model สำหรับ response เมื่อสร้าง LocalSite สำเร็จ"""
     message: str
     site: LocalSiteResponse
 
 class LocalSiteUpdateResponse(BaseModel):
-    """Model สำหรับ response เมื่ออัปเดต LocalSite สำเร็จ"""
     message: str
     site: LocalSiteResponse
 
 class LocalSiteDeleteResponse(BaseModel):
-    """Model สำหรับ response เมื่อลบ LocalSite สำเร็จ"""
     message: str
 

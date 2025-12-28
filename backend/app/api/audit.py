@@ -25,7 +25,6 @@ audit_service = None
 user_service = None
 
 def get_services():
-    """Get initialized services, creating them if needed"""
     global audit_service, user_service
     
     # Initialize services if not already done
@@ -44,12 +43,12 @@ def get_services():
 
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """ตรวจสอบ JWT token และดึงข้อมูล user"""
+    #ตรวจสอบ JWT token และดึงข้อมูล user
     try:
         # Get initialized services
         audit_svc, user_svc = get_services()
         
-        # ตรวจสอบ token
+        #ตรวจสอบ token
         user_id = await user_svc.verify_access_token(credentials.credentials)
         
         # ดึงข้อมูล user
@@ -70,26 +69,15 @@ async def get_audit_logs(
     action: Optional[AuditAction] = Query(None, description="Filter by action"),
     start_date: Optional[datetime] = Query(None, description="Filter from date (ISO format)"),
     end_date: Optional[datetime] = Query(None, description="Filter to date (ISO format)"),
-    limit: int = Query(50, ge=1, le=1000, description="จำนวนรายการต่อหน้า"),
-    offset: int = Query(0, ge=0, description="เริ่มจากรายการที่"),
+    limit: int = Query(50, ge=1, le=1000, description="Number of items per page"),
+    offset: int = Query(0, ge=0, description="Start from item"),
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    ดึงรายการ Audit Logs
-    
-    - **actor_user_id**: Filter ตาม user ที่ทำการกระทำ
-    - **target_user_id**: Filter ตาม user ที่ถูกกระทำ
-    - **action**: Filter ตามประเภทการกระทำ
-    - **start_date**: วันที่เริ่มต้น (ISO format)
-    - **end_date**: วันที่สิ้นสุด (ISO format)
-    - **limit**: จำนวนรายการต่อหน้า (1-1000)
-    - **offset**: เริ่มจากรายการที่
-    """
     try:
         # Get initialized services
         audit_svc, user_svc = get_services()
         
-        # สร้าง filter object
+        #สร้าง filter object
         filters = AuditLogFilter(
             actor_user_id=actor_user_id,
             target_user_id=target_user_id,
@@ -100,10 +88,10 @@ async def get_audit_logs(
             offset=offset
         )
 
-        # ดึงข้อมูล
+        #ดึงข้อมูล
         audit_logs, total = await audit_svc.get_audit_logs(filters)
 
-        # คำนวณ has_more
+        #คำนวณ has_more
         has_more = (offset + limit) < total
 
         return AuditLogListResponse(
@@ -116,7 +104,7 @@ async def get_audit_logs(
 
     except Exception as e:
         print(f"Error getting audit logs: {e}")
-        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดในการดึงข้อมูล Audit Logs")
+        raise HTTPException(status_code=500, detail="Error getting audit logs")
 
 
 @router.get("/logs/{audit_id}", response_model=AuditLogResponse)
@@ -124,9 +112,6 @@ async def get_audit_log(
     audit_id: str,
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    ดึง Audit Log ตาม ID
-    """
     try:
         # Get initialized services
         audit_svc, user_svc = get_services()
@@ -134,7 +119,7 @@ async def get_audit_log(
         audit_log = await audit_svc.get_audit_log_by_id(audit_id)
         
         if not audit_log:
-            raise HTTPException(status_code=404, detail="ไม่พบ Audit Log ที่ระบุ")
+            raise HTTPException(status_code=404, detail="Audit Log not found")
         
         return audit_log
 
@@ -142,7 +127,7 @@ async def get_audit_log(
         raise
     except Exception as e:
         print(f"Error getting audit log: {e}")
-        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดในการดึงข้อมูล Audit Log")
+        raise HTTPException(status_code=500, detail="Error getting audit log")
 
 
 @router.post("/logs", response_model=AuditLogResponse)
@@ -151,16 +136,13 @@ async def create_audit_log(
     audit_data: AuditLogCreate,
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    สร้าง Audit Log ใหม่ (สำหรับ admin เท่านั้น)
-    """
     try:
         # Get initialized services
         audit_svc, user_svc = get_services()
         
         # ตรวจสอบสิทธิ์ admin (สมมติว่า role เป็น ADMIN)
         if current_user.get("role") != "ADMIN":
-            raise HTTPException(status_code=403, detail="ไม่มีสิทธิ์สร้าง Audit Log")
+            raise HTTPException(status_code=403, detail="User does not have permission to create audit log")
 
         # เพิ่มข้อมูล IP และ User Agent ลงใน details
         if not audit_data.details:
@@ -190,20 +172,17 @@ async def create_audit_log(
         raise
     except Exception as e:
         print(f"Error creating audit log: {e}")
-        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดในการสร้าง Audit Log")
+        raise HTTPException(status_code=500, detail="Error creating audit log")
 
 
 @router.get("/stats")
 async def get_audit_stats(
-    start_date: Optional[datetime] = Query(None, description="วันที่เริ่มต้น"),
-    end_date: Optional[datetime] = Query(None, description="วันที่สิ้นสุด"),
+    start_date: Optional[datetime] = Query(None, description="Start date"),
+    end_date: Optional[datetime] = Query(None, description="End date"),
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    ดึงสถิติ Audit Logs
-    """
     try:
-        # สร้าง where clause สำหรับ date filter
+        #สร้าง where clause สำหรับ date filter
         where_clause = {}
         if start_date or end_date:
             date_filter = {}
@@ -267,4 +246,4 @@ async def get_audit_stats(
 
     except Exception as e:
         print(f"Error getting audit stats: {e}")
-        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดในการดึงสถิติ Audit Logs")
+        raise HTTPException(status_code=500, detail="Error getting audit stats")

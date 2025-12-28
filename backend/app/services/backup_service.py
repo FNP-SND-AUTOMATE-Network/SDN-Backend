@@ -8,13 +8,13 @@ from app.models.backup import (
 )
 
 class BackupService:
-    """Service สำหรับจัดการ Backup"""
+    #Service สำหรับจัดการ Backup
 
     def __init__(self, prisma_client):
         self.prisma = prisma_client
 
     async def create_backup(self, backup_data: BackupCreate) -> Optional[BackupResponse]:
-        """สร้าง Backup ใหม่"""
+        #สร้าง Backup ใหม่
         try:
             # ตรวจสอบว่า backup_name ซ้ำหรือไม่
             existing_backup = await self.prisma.backup.find_unique(
@@ -97,7 +97,7 @@ class BackupService:
         auto_backup: Optional[bool] = None,
         include_usage: bool = False
     ) -> tuple[List[BackupResponse], int]:
-        """ดึงรายการ Backup ทั้งหมด"""
+        #ดึงรายการ Backup ทั้งหมด
         try:
             where_conditions: Dict[str, Any] = {}
             
@@ -178,7 +178,7 @@ class BackupService:
             return [], 0
 
     async def get_backup_by_id(self, backup_id: str, include_usage: bool = False) -> Optional[BackupResponse]:
-        """ดึงข้อมูล Backup ตาม ID"""
+        #ดึงข้อมูล Backup ตาม ID
         try:
             include_options: Dict[str, Any] = {
                 "policy": True,
@@ -232,7 +232,7 @@ class BackupService:
             return None
 
     async def update_backup(self, backup_id: str, update_data: BackupUpdate) -> Optional[BackupResponse]:
-        """อัปเดต Backup"""
+        #อัปเดต Backup
         try:
             existing_backup = await self.prisma.backup.find_unique(where={"id": backup_id})
 
@@ -325,7 +325,7 @@ class BackupService:
             return None
 
     async def delete_backup(self, backup_id: str, force: bool = False) -> bool:
-        """ลบ Backup"""
+        #ลบ Backup
         try:
             existing_backup = await self.prisma.backup.find_unique(
                 where={"id": backup_id},

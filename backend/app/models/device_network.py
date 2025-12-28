@@ -119,7 +119,6 @@ class DeviceNetworkDeleteResponse(BaseModel):
 
 
 class DeviceTagAssignment(BaseModel):
-    """Model สำหรับการเพิ่ม/ลบ Tags"""
     tag_ids: list[str] = Field(..., description="รายการ Tag IDs", min_length=1)
 
 

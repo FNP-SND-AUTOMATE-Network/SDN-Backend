@@ -7,22 +7,22 @@ from app.models.local_site import (
 )
 
 class LocalSiteService:
-    """Service สำหรับจัดการ LocalSite"""
+    #Service สำหรับจัดการ LocalSite
 
     def __init__(self, prisma_client):
         self.prisma = prisma_client
 
     async def create_local_site(self, site_data: LocalSiteCreate) -> Optional[LocalSiteResponse]:
-        """สร้าง LocalSite ใหม่"""
+        #สร้าง LocalSite ใหม่
         try:
-            # ตรวจสอบว่า site_code ซ้ำหรือไม่
+            #ตรวจสอบว่า site_code ซ้ำหรือไม่
             existing_site = await self.prisma.localsite.find_unique(
                 where={"site_code": site_data.site_code}
             )
             if existing_site:
                 raise ValueError(f"รหัสสถานที่ {site_data.site_code} มีอยู่ในระบบแล้ว")
 
-            # สร้าง LocalSite ใหม่
+            #สร้าง LocalSite ใหม่
             site = await self.prisma.localsite.create(
                 data={
                     "site_code": site_data.site_code,
@@ -74,9 +74,9 @@ class LocalSiteService:
         site_type: Optional[str] = None,
         search: Optional[str] = None
     ) -> tuple[List[LocalSiteResponse], int]:
-        """ดึงรายการ LocalSite ทั้งหมด พร้อม pagination และ filter"""
+        #ดึงรายการ LocalSite ทั้งหมด พร้อม pagination และ filter
         try:
-            # สร้าง filter conditions
+            #สร้าง filter conditions
             where_conditions: Dict[str, Any] = {}
             
             if site_type:
@@ -90,10 +90,10 @@ class LocalSiteService:
                     {"city": {"contains": search, "mode": "insensitive"}}
                 ]
 
-            # นับจำนวนทั้งหมด
+            #นับจำนวนทั้งหมด
             total = await self.prisma.localsite.count(where=where_conditions)
 
-            # ดึงข้อมูลตาม pagination
+            #ดึงข้อมูลตาม pagination
             skip = (page - 1) * page_size
             sites = await self.prisma.localsite.find_many(
                 where=where_conditions,
@@ -105,7 +105,7 @@ class LocalSiteService:
                 }
             )
 
-            # แปลงเป็น response model
+            #แปลงเป็น response model
             site_responses = []
             for site in sites:
                 site_responses.append(LocalSiteResponse(
@@ -135,7 +135,7 @@ class LocalSiteService:
             return [], 0
 
     async def get_local_site_by_id(self, site_id: str) -> Optional[LocalSiteResponse]:
-        """ดึงข้อมูล LocalSite ตาม ID"""
+        #ดึงข้อมูล LocalSite ตาม ID
         try:
             site = await self.prisma.localsite.find_unique(
                 where={"id": site_id},
@@ -176,9 +176,9 @@ class LocalSiteService:
         site_id: str,
         update_data: LocalSiteUpdate
     ) -> Optional[LocalSiteResponse]:
-        """อัปเดต LocalSite"""
+        #อัปเดต LocalSite
         try:
-            # ตรวจสอบว่า site มีอยู่หรือไม่
+            #ตรวจสอบว่า site มีอยู่หรือไม่
             existing_site = await self.prisma.localsite.find_unique(
                 where={"id": site_id}
             )
@@ -186,11 +186,11 @@ class LocalSiteService:
             if not existing_site:
                 raise ValueError("ไม่พบสถานที่ที่ต้องการอัปเดต")
 
-            # เตรียมข้อมูลสำหรับอัปเดต
+            #เตรียมข้อมูลสำหรับอัปเดต
             update_dict: Dict[str, Any] = {}
             
             if update_data.site_code is not None:
-                # ตรวจสอบว่า site_code ซ้ำหรือไม่
+                #ตรวจสอบว่า site_code ซ้ำหรือไม่
                 if update_data.site_code != existing_site.site_code:
                     duplicate = await self.prisma.localsite.find_unique(
                         where={"site_code": update_data.site_code}
@@ -275,9 +275,9 @@ class LocalSiteService:
             return None
 
     async def delete_local_site(self, site_id: str) -> bool:
-        """ลบ LocalSite"""
+        #ลบ LocalSite
         try:
-            # ตรวจสอบว่า site มีอยู่หรือไม่
+            #ตรวจสอบว่า site มีอยู่หรือไม่
             existing_site = await self.prisma.localsite.find_unique(
                 where={"id": site_id},
                 include={

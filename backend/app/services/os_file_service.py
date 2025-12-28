@@ -9,16 +9,16 @@ from app.models.os_file import (
 )
 
 class OSFileService:
-    """Service สำหรับจัดการ OS File uploads"""
+    #Service สำหรับจัดการ OS File uploads
 
     def __init__(self, prisma_client):
         self.prisma = prisma_client
-        # กำหนด upload directory
+        #กำหนด upload directory
         self.upload_dir = Path("/app/uploads/os_files")
         self.upload_dir.mkdir(parents=True, exist_ok=True)
 
     def _calculate_checksum(self, file_content: bytes) -> str:
-        """คำนวณ SHA256 checksum ของไฟล์"""
+        #คำนวณ SHA256 checksum ของไฟล์
         return hashlib.sha256(file_content).hexdigest()
 
     async def save_file(
@@ -30,26 +30,26 @@ class OSFileService:
         version: Optional[str],
         user_id: str
     ) -> Optional[OSFileResponse]:
-        """บันทึกไฟล์และสร้าง record ในฐานข้อมูล"""
+        #บันทึกไฟล์และสร้าง record ในฐานข้อมูล
         try:
-            # ตรวจสอบว่า OS มีอยู่จริง
+            #ตรวจสอบว่า OS มีอยู่จริง
             os = await self.prisma.operatingsystem.find_unique(where={"id": os_id})
             if not os:
                 raise ValueError(f"ไม่พบ Operating System ID: {os_id}")
 
-            # คำนวณ checksum
+            #คำนวณ checksum
             checksum = self._calculate_checksum(file_content)
             file_size = len(file_content)
 
-            # สร้างชื่อไฟล์ที่ไม่ซ้ำ (ใช้ checksum prefix)
+            #สร้างชื่อไฟล์ที่ไม่ซ้ำ (ใช้ checksum prefix)
             safe_filename = f"{checksum[:8]}_{file_name}"
             file_path = self.upload_dir / safe_filename
 
-            # บันทึกไฟล์
+            #บันทึกไฟล์
             with open(file_path, "wb") as f:
                 f.write(file_content)
 
-            # บันทึก record ในฐานข้อมูล
+            #บันทึก record ในฐานข้อมูล
             os_file = await self.prisma.osfile.create(
                 data={
                     "os_id": os_id,
@@ -71,7 +71,7 @@ class OSFileService:
 
         except Exception as e:
             print(f"Error saving file: {e}")
-            # ลบไฟล์ถ้าบันทึก record ไม่สำเร็จ
+            #ลบไฟล์ถ้าบันทึก record ไม่สำเร็จ
             if 'file_path' in locals() and file_path.exists():
                 file_path.unlink()
             
@@ -80,7 +80,7 @@ class OSFileService:
             return None
 
     def _build_file_response(self, os_file) -> OSFileResponse:
-        """สร้าง OSFileResponse จาก Prisma object"""
+        #สร้าง OSFileResponse จาก Prisma object
         
         uploaded_by_user = None
         if os_file.uploadedByUser:
@@ -116,7 +116,7 @@ class OSFileService:
         )
 
     async def get_files_by_os(self, os_id: str) -> List[OSFileResponse]:
-        """ดึงรายการไฟล์ทั้งหมดของ OS"""
+        #ดึงรายการไฟล์ทั้งหมดของ OS
         try:
             files = await self.prisma.osfile.find_many(
                 where={"os_id": os_id},
@@ -134,7 +134,7 @@ class OSFileService:
             return []
 
     async def get_file_by_id(self, file_id: str) -> Optional[OSFileResponse]:
-        """ดึงข้อมูลไฟล์ตาม ID"""
+        #ดึงข้อมูลไฟล์ตาม ID
         try:
             os_file = await self.prisma.osfile.find_unique(
                 where={"id": file_id},
@@ -154,19 +154,19 @@ class OSFileService:
             return None
 
     async def delete_file(self, file_id: str) -> bool:
-        """ลบไฟล์และ record"""
+        #ลบไฟล์และ record
         try:
             os_file = await self.prisma.osfile.find_unique(where={"id": file_id})
 
             if not os_file:
                 raise ValueError("ไม่พบไฟล์ที่ต้องการลบ")
 
-            # ลบไฟล์จาก filesystem
+            #ลบไฟล์จาก filesystem
             file_path = Path(os_file.file_path)
             if file_path.exists():
                 file_path.unlink()
 
-            # ลบ record จากฐานข้อมูล
+            #ลบ record จากฐานข้อมูล
             await self.prisma.osfile.delete(where={"id": file_id})
 
             return True
@@ -178,7 +178,7 @@ class OSFileService:
             return False
 
     def get_file_path(self, file_id: str, file_path: str) -> Optional[Path]:
-        """ดึง path ของไฟล์สำหรับดาวน์โหลด"""
+        #ดึง path ของไฟล์สำหรับดาวน์โหลด
         try:
             path = Path(file_path)
             if path.exists():

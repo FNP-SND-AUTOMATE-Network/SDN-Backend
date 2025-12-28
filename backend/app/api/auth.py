@@ -47,19 +47,16 @@ def get_services():
 
 @router.post("/register", response_model=RegisterResponse)
 async def register(request: RegisterRequest):
-    """
-    สมัครสมาชิกใหม่ - สร้าง OTP และส่งอีเมลยืนยัน
-    """
     try:
         # Get initialized services
         otp_svc, user_svc, audit_svc, _ = get_services()
         
-        # ตรวจสอบว่า email มีอยู่ในระบบแล้วหรือไม่
+        #ตรวจสอบว่า email มีอยู่ในระบบแล้วหรือไม่
         email_exists = await user_svc.check_email_exists(request.email)
         if email_exists:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="อีเมลนี้มีอยู่ในระบบแล้ว"
+                detail="Email already exists"
             )
         
         # ใช้ global prisma client แทนการสร้างใหม่
@@ -85,11 +82,11 @@ async def register(request: RegisterRequest):
         if not email_sent:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถส่งอีเมลยืนยันได้ กรุณาลองใหม่อีกครั้ง"
+                detail="Error in send_otp_email"
             )
         
         return RegisterResponse(
-            message="ส่งรหัสยืนยันไปยังอีเมลของคุณแล้ว กรุณาตรวจสอบอีเมลและยืนยันการสมัครสมาชิก",
+            message="OTP sent to your email. Please check your email and confirm your registration.",
             email=request.email,
             expires_at=expires_at
         )
@@ -99,26 +96,23 @@ async def register(request: RegisterRequest):
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการสมัครสมาชิก: {str(e)}"
+            detail=f"Error in register: {str(e)}"
         )
 
 
 @router.post("/verify-otp", response_model=VerifyOtpResponse)
 async def verify_otp(request: VerifyOtpRequest, req: Request):
-    """
-    ยืนยัน OTP และสร้างบัญชีผู้ใช้
-    """
     try:
         # Get initialized services
         otp_svc, user_svc, audit_svc, _ = get_services()
         
-        # ตรวจสอบ OTP
+        #ตรวจสอบ OTP
         user_id = await otp_svc.verify_otp(request.email, request.otp_code)
         
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="รหัสยืนยันไม่ถูกต้องหรือหมดอายุแล้ว กรุณาลองใหม่อีกครั้ง"
+                detail="Invalid or expired OTP code. Please try again."
             )
         
         # ดึงข้อมูล user ที่สร้างไว้ชั่วคราว
@@ -127,7 +121,7 @@ async def verify_otp(request: VerifyOtpRequest, req: Request):
         if not temp_user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="ไม่พบข้อมูลการสมัครสมาชิก กรุณาสมัครสมาชิกใหม่"
+                detail="User not found. Please register again."
             )
         
         # อัปเดตสถานะ emailVerified เป็น True ใช้ global client
@@ -158,7 +152,7 @@ async def verify_otp(request: VerifyOtpRequest, req: Request):
             # ไม่ให้ audit error หยุดการทำงานหลัก
         
         return VerifyOtpResponse(
-            message="ยืนยันการสมัครสมาชิกเรียบร้อยแล้ว",
+            message="OTP verified successfully",
             user_id=updated_user.id,
             email=updated_user.email,
             email_verified=True
@@ -169,31 +163,28 @@ async def verify_otp(request: VerifyOtpRequest, req: Request):
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการยืนยัน: {str(e)}"
+            detail=f"Error in verify_otp: {str(e)}"
         )
 
 
 @router.post("/resend-otp", response_model=ResendOtpResponse)
 async def resend_otp(request: ResendOtpRequest):
-    """
-    ส่ง OTP ใหม่เมื่อรหัสเดิมหมดอายุ
-    """
     try:
         # Get initialized services
         otp_svc, user_svc, audit_svc, _ = get_services()
         
-        # ตรวจสอบว่า email มีอยู่ในระบบและยังไม่ได้ยืนยัน
+        #ตรวจสอบว่า email มีอยู่ในระบบและยังไม่ได้ยืนยัน
         user = await user_svc.get_user_by_email(request.email)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="ไม่พบข้อมูลการสมัครสมาชิก กรุณาสมัครสมาชิกใหม่"
+                detail="User not found. Please register again."
             )
         
         if user["emailVerified"]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="อีเมลนี้ได้รับการยืนยันแล้ว"
+                detail="Email already verified"
             )
         
         # สร้าง OTP ใหม่
@@ -205,11 +196,11 @@ async def resend_otp(request: ResendOtpRequest):
         if not email_sent:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถส่งอีเมลยืนยันได้ กรุณาลองใหม่อีกครั้ง"
+                detail="Error in send_otp_email"
             )
         
         return ResendOtpResponse(
-            message="ส่งรหัสยืนยันใหม่ไปยังอีเมลของคุณแล้ว กรุณาตรวจสอบอีเมลและยืนยันการสมัครสมาชิก",
+            message="OTP sent to your email. Please check your email and confirm your registration.",
             email=request.email,
             expires_at=expires_at
         )
@@ -219,32 +210,26 @@ async def resend_otp(request: ResendOtpRequest):
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการส่งรหัสยืนยันใหม่: {str(e)}"
+            detail=f"Error in resend_otp: {str(e)}"
         )
 
 
 @router.post("/login", response_model=LoginResponse)
 async def login(request: LoginRequest, req: Request):
-    """
-    เข้าสู่ระบบด้วย email และ password
-    
-    ถ้าเปิดใช้งาน TOTP ไว้ ระบบจะส่ง requires_totp = True พร้อม temp_token
-    ต้องเรียกใช้ /auth/mfa-verify-totp-login เพื่อยืนยันรหัส TOTP
-    """
     try:
         # Get initialized services
         otp_svc, user_svc, audit_svc, totp_svc = get_services()
         
-        # ตรวจสอบข้อมูลผู้ใช้และรหัสผ่าน
+        #ตรวจสอบข้อมูลผู้ใช้และรหัสผ่าน
         user = await user_svc.authenticate_user(request.email, request.password)
         
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="อีเมลหรือรหัสผ่านไม่ถูกต้อง หรือยังไม่ได้ยืนยันอีเมล"
+                detail="Invalid email or password"
             )
         
-        # ตรวจสอบว่ามีการเปิดใช้งาน TOTP หรือไม่
+        #ตรวจสอบว่ามีการเปิดใช้งาน TOTP หรือไม่
         print(f"[DEBUG] Checking TOTP for user: {user['id']}")
         totp_secret = await totp_svc.get_user_totp_secret(user["id"])
         print(f"[DEBUG] TOTP secret result: {totp_secret is not None}")
@@ -263,7 +248,7 @@ async def login(request: LoginRequest, req: Request):
             print(f"[DEBUG] temp_token created: {temp_token[:20]}...")
             
             return LoginResponse(
-                message="กรุณายืนยันรหัส TOTP",
+                message="Please verify TOTP code",
                 user_id=user["id"],
                 email=user["email"],
                 name=user["name"],
@@ -273,17 +258,17 @@ async def login(request: LoginRequest, req: Request):
                 temp_token=temp_token
             )
         
-        # ถ้าไม่ต้องใช้ TOTP สร้าง access token ปกติ
+        #ถ้าไม่ต้องใช้ TOTP สร้าง access token ปกติ
         access_token_data = {
-            "sub": user["id"],  # ใช้ user_id แทน email สำหรับ JWT sub
+            "sub": user["id"],  #ใช้ user_id แทน email สำหรับ JWT sub
             "user_id": user["id"],
             "role": user["role"]
         }
         access_token = user_svc.create_access_token(access_token_data)
         
-        # สร้าง audit log สำหรับการ login สำเร็จ
+        #สร้าง audit log สำหรับการ login สำเร็จ
         try:
-            # ดึง IP address
+            #ดึง IP address
             client_ip = req.client.host
             if "x-forwarded-for" in req.headers:
                 client_ip = req.headers["x-forwarded-for"].split(",")[0].strip()
@@ -299,10 +284,10 @@ async def login(request: LoginRequest, req: Request):
             )
         except Exception as audit_error:
             print(f"Error creating login audit log: {audit_error}")
-            # ไม่ให้ audit error หยุดการทำงานหลัก
+            #ไม่ให้ audit error หยุดการทำงานหลัก
         
         return LoginResponse(
-            message="เข้าสู่ระบบสำเร็จ",
+            message="Login successful",
             access_token=access_token,
             token_type="bearer",
             user_id=user["id"],
@@ -317,7 +302,7 @@ async def login(request: LoginRequest, req: Request):
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการเข้าสู่ระบบ: {str(e)}"
+            detail=f"Error in login: {str(e)}"
         )
 
 
@@ -327,16 +312,13 @@ async def login(request: LoginRequest, req: Request):
 async def setup_totp(
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    ขอ Secret Key และ QR Code URL สำหรับตั้งค่า TOTP
-    """
     try:
         _, _, _, totp_svc = get_services()
         
-        # สร้าง Secret ใหม่
+        #สร้าง Secret ใหม่
         secret = totp_svc.generate_secret()
         
-        # สร้าง URL สำหรับ QR Code
+        #สร้าง URL สำหรับ QR Code
         provisioning_uri = totp_svc.get_provisioning_uri(secret, current_user["email"])
         
         return TotpSetupResponse(
@@ -347,7 +329,7 @@ async def setup_totp(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการขอตั้งค่า TOTP: {str(e)}"
+            detail=f"Error in setup_totp: {str(e)}"
         )
 
 
@@ -356,23 +338,12 @@ async def verify_totp_setup(
     request: TotpVerifyRequest,
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    ยืนยันรหัส TOTP เพื่อเปิดใช้งาน
-    
-    ต้องส่ง JSON body:
-    {
-        "secret": "xxxxx",      // Secret key ที่ได้จาก /auth/mfa/setup
-        "otp_code": "123456"    // รหัส 6 หลักจาก Authenticator App
-    }
-    
-    หมายเหตุ: ต้องส่ง Header "Content-Type: application/json"
-    """
     try:
-        # Validate request data
+        #Validate request data
         if not request.secret or not request.otp_code:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="กรุณาส่ง secret และ otp_code ใน request body"
+                detail="Invalid request data"
             )
         
         _, _, audit_svc, totp_svc = get_services()
@@ -383,7 +354,7 @@ async def verify_totp_setup(
         if not is_valid:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="รหัส TOTP ไม่ถูกต้อง หรือหมดอายุแล้ว กรุณาใช้รหัสใหม่"
+                detail="Invalid TOTP code"
             )
         
         # บันทึกและเปิดใช้งาน TOTP
@@ -392,7 +363,7 @@ async def verify_totp_setup(
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถเปิดใช้งาน TOTP ได้"
+                detail="Error in enable_totp"
             )
             
         # Audit Log
@@ -406,7 +377,7 @@ async def verify_totp_setup(
             print(f"Error creating audit log: {audit_error}")
             # ไม่ให้ audit error หยุดการทำงานหลัก
         
-        return {"message": "เปิดใช้งาน TOTP เรียบร้อยแล้ว"}
+        return {"message": "TOTP enabled successfully"}
         
     except HTTPException:
         raise
@@ -414,13 +385,13 @@ async def verify_totp_setup(
         # Handle validation errors from Pydantic
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"ข้อมูลไม่ถูกต้อง: {str(e)}"
+            detail=f"Invalid request data: {str(e)}"
         )
     except Exception as e:
         print(f"Error in verify_totp_setup: {type(e).__name__}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการยืนยัน TOTP: {str(e)}"
+            detail=f"Error in verify_totp_setup: {str(e)}"
         )
 
 
@@ -428,23 +399,12 @@ async def verify_totp_setup(
 
 @router.post("/mfa-verify-totp-login", response_model=LoginResponse)
 async def verify_totp_login(request: VerifyTotpLoginRequest):
-    """
-    ยืนยันรหัส TOTP สำหรับการเข้าสู่ระบบ
-    
-    ต้องส่ง:
-    {
-        "temp_token": "...",    // Temporary token ที่ได้จาก /auth/login
-        "otp_code": "123456"    // รหัส 6 หลักจาก Authenticator App
-    }
-    
-    หมายเหตุ: ต้องส่ง Header "Content-Type: application/json"
-    """
     try:
         print(f"[DEBUG] Verifying TOTP login, OTP code: {request.otp_code}")
-        # Get initialized services
+        #Get initialized services
         _, user_svc, audit_svc, totp_svc = get_services()
         
-        # ตรวจสอบ temp token
+        #ตรวจสอบ temp token
         try:
             print(f"[DEBUG] Verifying temp_token...")
             token_data = user_svc.verify_token(request.temp_token)
@@ -466,7 +426,7 @@ async def verify_totp_login(request: VerifyTotpLoginRequest):
                 )
             
             print(f"[DEBUG] Getting user by id: {user_id}")
-            # ดึงข้อมูลผู้ใช้
+            #ดึงข้อมูลผู้ใช้
             user = await user_svc.get_user_by_id(user_id)
             if not user:
                 print(f"[DEBUG] User not found")
@@ -554,14 +514,11 @@ async def disable_totp(
     request: TotpDisableRequest,
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    ปิดการใช้งาน TOTP (ต้องยืนยันรหัสผ่าน)
-    """
     try:
         print(f"[DEBUG] Disable TOTP request: password length = {len(request.password)}")
         _, user_svc, audit_svc, totp_svc = get_services()
         
-        # ตรวจสอบรหัสผ่านเพื่อความปลอดภัย
+        #ตรวจสอบรหัสผ่านเพื่อความปลอดภัย
         user = await user_svc.authenticate_user(current_user["email"], request.password)
         if not user:
             raise HTTPException(

@@ -9,13 +9,13 @@ from app.models.policy import (
 )
 
 class PolicyService:
-    """Service สำหรับจัดการ Policy"""
+    #Service สำหรับจัดการ Policy
 
     def __init__(self, prisma_client):
         self.prisma = prisma_client
 
     async def create_policy(self, policy_data: PolicyCreate, user_id: str) -> Optional[PolicyResponse]:
-        """สร้าง Policy ใหม่"""
+        #สร้าง Policy ใหม่
         try:
             # ตรวจสอบว่า policy_name ซ้ำหรือไม่
             existing_policy = await self.prisma.policy.find_unique(
@@ -94,7 +94,7 @@ class PolicyService:
         parent_policy_id: Optional[str] = None,
         include_usage: bool = False
     ) -> tuple[List[PolicyResponse], int]:
-        """ดึงรายการ Policy ทั้งหมด"""
+        #ดึงรายการ Policy ทั้งหมด
         try:
             where_conditions: Dict[str, Any] = {}
             
@@ -173,7 +173,7 @@ class PolicyService:
             return [], 0
 
     async def get_policy_by_id(self, policy_id: str, include_usage: bool = False) -> Optional[PolicyResponse]:
-        """ดึงข้อมูล Policy ตาม ID"""
+        #ดึงข้อมูล Policy ตาม ID
         try:
             include_options: Dict[str, Any] = {
                 "createdByUser": True,
@@ -233,7 +233,7 @@ class PolicyService:
             return None
 
     async def update_policy(self, policy_id: str, update_data: PolicyUpdate) -> Optional[PolicyResponse]:
-        """อัปเดต Policy"""
+        #อัปเดต Policy
         try:
             existing_policy = await self.prisma.policy.find_unique(
                 where={"id": policy_id}
@@ -329,7 +329,7 @@ class PolicyService:
             return None
 
     async def delete_policy(self, policy_id: str, force: bool = False) -> bool:
-        """ลบ Policy"""
+        #ลบ Policy
         try:
             existing_policy = await self.prisma.policy.find_unique(
                 where={"id": policy_id},

@@ -17,28 +17,18 @@ from prisma import Prisma
 router = APIRouter(prefix="/policies", tags=["Policies"])
 
 def get_policy_service(db: Prisma = Depends(get_db)) -> PolicyService:
-    """Get PolicyService instance"""
     return PolicyService(db)
 
 @router.get("/", response_model=PolicyListResponse)
 async def get_policies(
-    page: int = Query(1, ge=1, description="หน้าที่ต้องการ"),
-    page_size: int = Query(20, ge=1, le=100, description="จำนวนรายการต่อหน้า"),
-    search: Optional[str] = Query(None, description="ค้นหาจาก policy_name, description"),
-    parent_policy_id: Optional[str] = Query(None, description="กรองตาม Parent Policy ID"),
-    include_usage: bool = Query(False, description="รวมจำนวนการใช้งาน"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Page size"),
+    search: Optional[str] = Query(None, description="Search by policy_name, description"),
+    parent_policy_id: Optional[str] = Query(None, description="Filter by parent policy ID"),
+    include_usage: bool = Query(False, description="Include usage count"),
     current_user: Dict[str, Any] = Depends(get_current_user),
     policy_svc: PolicyService = Depends(get_policy_service)
 ):
-    """
-    ดึงรายการ Policy ทั้งหมด
-    
-    - รองรับ pagination
-    - รองรับการค้นหา
-    - รองรับ hierarchy (parent-child)
-    - แสดงผู้สร้าง Policy
-    - ต้องเป็น authenticated user
-    """
     try:
         policies, total = await policy_svc.get_policies(
             page=page,
@@ -58,31 +48,23 @@ async def get_policies(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการดึงรายการ Policy: {str(e)}"
+            detail=f"Error getting policies: {str(e)}"
         )
 
 @router.get("/{policy_id}", response_model=PolicyResponse)
 async def get_policy(
     policy_id: str,
-    include_usage: bool = Query(False, description="รวมจำนวนการใช้งาน"),
+    include_usage: bool = Query(False, description="Include usage count"),
     current_user: Dict[str, Any] = Depends(get_current_user),
     policy_svc: PolicyService = Depends(get_policy_service)
 ):
-    """
-    ดึงข้อมูล Policy ตาม ID
-    
-    - แสดงจำนวนการใช้งาน
-    - แสดง Parent Policy
-    - แสดงผู้สร้าง
-    - ต้องเป็น authenticated user
-    """
     try:
         policy = await policy_svc.get_policy_by_id(policy_id, include_usage=include_usage)
         
         if not policy:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="ไม่พบ Policy ที่ต้องการ"
+                detail="Policy not found"
             )
         
         return policy
@@ -92,7 +74,7 @@ async def get_policy(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการดึงข้อมูล Policy: {str(e)}"
+            detail=f"Error getting policy: {str(e)}"
         )
 
 @router.post("/", response_model=PolicyCreateResponse, status_code=status.HTTP_201_CREATED)
@@ -101,18 +83,11 @@ async def create_policy(
     current_user: Dict[str, Any] = Depends(get_current_user),
     policy_svc: PolicyService = Depends(get_policy_service)
 ):
-    """
-    สร้าง Policy ใหม่
-    
-    - ต้องเป็น ENGINEER, ADMIN หรือ OWNER
-    - policy_name ต้องไม่ซ้ำ
-    - สามารถกำหนด Parent Policy ได้ (hierarchy)
-    """
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="ไม่มีสิทธิ์สร้าง Policy ต้องเป็น ENGINEER, ADMIN หรือ OWNER"
+                detail="You do not have permission to create a policy"
             )
 
         policy = await policy_svc.create_policy(policy_data, current_user["id"])
@@ -120,11 +95,11 @@ async def create_policy(
         if not policy:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถสร้าง Policy ได้"
+                detail="Failed to create policy"
             )
 
         return PolicyCreateResponse(
-            message="สร้าง Policy สำเร็จ",
+            message="Policy created successfully",
             policy=policy
         )
 
@@ -138,7 +113,7 @@ async def create_policy(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการสร้าง Policy: {str(e)}"
+            detail=f"Error creating policy: {str(e)}"
         )
 
 @router.put("/{policy_id}", response_model=PolicyUpdateResponse)
@@ -148,17 +123,11 @@ async def update_policy(
     current_user: Dict[str, Any] = Depends(get_current_user),
     policy_svc: PolicyService = Depends(get_policy_service)
 ):
-    """
-    อัปเดต Policy
-    
-    - ต้องเป็น ENGINEER, ADMIN หรือ OWNER
-    - สามารถเปลี่ยน Parent Policy ได้
-    """
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="ไม่มีสิทธิ์แก้ไข Policy ต้องเป็น ENGINEER, ADMIN หรือ OWNER"
+                detail="You do not have permission to update a policy"
             )
 
         policy = await policy_svc.update_policy(policy_id, update_data)
@@ -166,11 +135,11 @@ async def update_policy(
         if not policy:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถอัปเดต Policy ได้"
+                detail="Failed to update policy"
             )
 
         return PolicyUpdateResponse(
-            message="อัปเดต Policy สำเร็จ",
+            message="Policy updated successfully",
             policy=policy
         )
 
@@ -184,35 +153,28 @@ async def update_policy(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการอัปเดต Policy: {str(e)}"
+            detail=f"Error updating policy: {str(e)}"
         )
 
 @router.delete("/{policy_id}", response_model=PolicyDeleteResponse)
 async def delete_policy(
     policy_id: str,
-    force: bool = Query(False, description="บังคับลบแม้มีการใช้งาน"),
+    force: bool = Query(False, description="Force delete even if in use"),
     current_user: Dict[str, Any] = Depends(get_current_user),
     policy_svc: PolicyService = Depends(get_policy_service)
 ):
-    """
-    ลบ Policy
-    
-    - ต้องเป็น ADMIN หรือ OWNER
-    - ไม่สามารถลบถ้ามีการใช้งานอยู่ (ยกเว้น force=true)
-    - force=true ต้องเป็น OWNER เท่านั้น
-    """
     try:
         if force:
             if current_user["role"] != "OWNER":
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="การลบแบบบังคับต้องเป็น OWNER เท่านั้น"
+                    detail="You do not have permission to delete a policy"
                 )
         else:
             if current_user["role"] not in ["ADMIN", "OWNER"]:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="ไม่มีสิทธิ์ลบ Policy ต้องเป็น ADMIN หรือ OWNER"
+                    detail="You do not have permission to delete a policy"
                 )
 
         success = await policy_svc.delete_policy(policy_id, force=force)
@@ -220,11 +182,11 @@ async def delete_policy(
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถลบ Policy ได้"
+                detail="Failed to delete policy"
             )
 
         return PolicyDeleteResponse(
-            message="ลบ Policy สำเร็จ"
+            message="Policy deleted successfully"
         )
 
     except ValueError as e:
@@ -237,6 +199,6 @@ async def delete_policy(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการลบ Policy: {str(e)}"
+            detail=f"Error deleting policy: {str(e)}"
         )
 

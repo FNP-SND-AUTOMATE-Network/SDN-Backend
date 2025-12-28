@@ -10,20 +10,20 @@ class TotpService:
         self.issuer_name = "FNP SDN"  # ชื่อที่จะแสดงใน Authenticator App
 
     def generate_secret(self) -> str:
-        """สร้าง Random Base32 Secret"""
+        #สร้าง Random Base32 Secret
         return pyotp.random_base32()
 
     def get_provisioning_uri(self, secret: str, email: str) -> str:
-        """สร้าง otpauth URL สำหรับ QR Code"""
+        #สร้าง otpauth URL สำหรับ QR Code
         return pyotp.totp.TOTP(secret).provisioning_uri(name=email, issuer_name=self.issuer_name)
 
     def verify_totp(self, secret: str, code: str) -> bool:
-        """ตรวจสอบรหัส TOTP"""
+        #ตรวจสอบรหัส TOTP
         totp = pyotp.TOTP(secret)
         return totp.verify(code)
 
     async def enable_totp(self, user_id: str, secret: str) -> bool:
-        """บันทึก Secret และเปิดใช้งาน TOTP"""
+        #บันทึก Secret และเปิดใช้งาน TOTP
         try:
 
             secret_bytes = secret.encode('utf-8')
@@ -64,7 +64,7 @@ class TotpService:
             return False
 
     async def disable_totp(self, user_id: str) -> bool:
-        """ปิดการใช้งาน TOTP"""
+        #ปิดการใช้งาน TOTP
         try:
             existing_totp = await self.prisma.usertotp.find_unique(where={"userId": user_id})
             
@@ -84,7 +84,7 @@ class TotpService:
             return False
 
     async def get_user_totp_secret(self, user_id: str) -> Optional[str]:
-        """ดึง Secret ของ User (สำหรับตรวจสอบตอน Login)"""
+        #ดึง Secret ของ User (สำหรับตรวจสอบตอน Login)
         try:
             print(f"[DEBUG] Getting TOTP secret for user_id: {user_id}")
             totp_record = await self.prisma.usertotp.find_unique(where={"userId": user_id})

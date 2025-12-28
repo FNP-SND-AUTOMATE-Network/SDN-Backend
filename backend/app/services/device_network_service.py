@@ -12,13 +12,13 @@ from app.models.device_network import (
 )
 
 class DeviceNetworkService:
-    """Service สำหรับจัดการ Device Network"""
+    #Service สำหรับจัดการ Device Network
 
     def __init__(self, prisma_client):
         self.prisma = prisma_client
 
     async def _validate_foreign_keys(self, data: Dict[str, Any]) -> None:
-        """ตรวจสอบ foreign keys ว่ามีอยู่จริงในระบบ"""
+        #ตรวจสอบ foreign keys ว่ามีอยู่จริงในระบบ
         
         if data.get('os_id'):
             os = await self.prisma.operatingsystem.find_unique(where={"id": data['os_id']})
@@ -46,23 +46,23 @@ class DeviceNetworkService:
                 raise ValueError(f"ไม่พบ Configuration Template ID: {data['configuration_template_id']}")
 
     async def create_device(self, device_data: DeviceNetworkCreate) -> Optional[DeviceNetworkResponse]:
-        """สร้าง Device Network ใหม่"""
+        #สร้าง Device Network ใหม่
         try:
-            # ตรวจสอบว่า serial_number ซ้ำหรือไม่
+            #ตรวจสอบว่า serial_number ซ้ำหรือไม่
             existing_device = await self.prisma.devicenetwork.find_unique(
                 where={"serial_number": device_data.serial_number}
             )
             if existing_device:
                 raise ValueError(f"Serial Number '{device_data.serial_number}' มีอยู่ในระบบแล้ว")
 
-            # ตรวจสอบว่า mac_address ซ้ำหรือไม่
+            #ตรวจสอบว่า mac_address ซ้ำหรือไม่
             existing_mac = await self.prisma.devicenetwork.find_unique(
                 where={"mac_address": device_data.mac_address}
             )
             if existing_mac:
                 raise ValueError(f"MAC Address '{device_data.mac_address}' มีอยู่ในระบบแล้ว")
 
-            # ตรวจสอบ foreign keys
+            #ตรวจสอบ foreign keys
             await self._validate_foreign_keys({
                 'os_id': device_data.os_id,
                 'local_site_id': device_data.local_site_id,
@@ -71,7 +71,7 @@ class DeviceNetworkService:
                 'configuration_template_id': device_data.configuration_template_id
             })
 
-            # สร้าง Device
+            #สร้าง Device
             device = await self.prisma.devicenetwork.create(
                 data={
                     "serial_number": device_data.serial_number,
@@ -105,9 +105,9 @@ class DeviceNetworkService:
             raise e
 
     def _build_device_response(self, device) -> DeviceNetworkResponse:
-        """สร้าง DeviceNetworkResponse จาก Prisma object"""
+        #สร้าง DeviceNetworkResponse จาก Prisma object
         
-        # Tags info (many-to-many)
+        #Tags info (many-to-many)
         tags_info = []
         if hasattr(device, 'tags') and device.tags:
             for tag in device.tags:
@@ -118,7 +118,7 @@ class DeviceNetworkService:
                     type=tag.type
                 ))
 
-        # OS info
+        #OS info
         os_info = None
         if device.operatingSystem:
             os_info = RelatedOSInfo(
@@ -127,7 +127,7 @@ class DeviceNetworkService:
                 os_type=device.operatingSystem.os_type
             )
 
-        # Site info
+        #Site info
         site_info = None
         if device.localSite:
             site_info = RelatedSiteInfo(
@@ -136,7 +136,7 @@ class DeviceNetworkService:
                 site_name=device.localSite.site_name
             )
 
-        # Policy info
+        #Policy info
         policy_info = None
         if device.policy:
             policy_info = RelatedPolicyInfo(
@@ -144,7 +144,7 @@ class DeviceNetworkService:
                 policy_name=device.policy.policy_name
             )
 
-        # Backup info
+        #Backup info
         backup_info = None
         if device.backup:
             backup_info = RelatedBackupInfo(
@@ -153,7 +153,7 @@ class DeviceNetworkService:
                 status=device.backup.status
             )
 
-        # Template info
+        #Template info
         template_info = None
         if device.configuration_template:
             template_info = RelatedTemplateInfo(
@@ -198,7 +198,7 @@ class DeviceNetworkService:
         local_site_id: Optional[str] = None,
         policy_id: Optional[str] = None
     ) -> tuple[List[DeviceNetworkResponse], int]:
-        """ดึงรายการ Device Network ทั้งหมด"""
+        #ดึงรายการ Device Network ทั้งหมด
         try:
             where_conditions: Dict[str, Any] = {}
             
@@ -252,7 +252,7 @@ class DeviceNetworkService:
             return [], 0
 
     async def get_device_by_id(self, device_id: str) -> Optional[DeviceNetworkResponse]:
-        """ดึงข้อมูล Device Network ตาม ID"""
+        #ดึงข้อมูล Device Network ตาม ID
         try:
             device = await self.prisma.devicenetwork.find_unique(
                 where={"id": device_id},
@@ -276,7 +276,7 @@ class DeviceNetworkService:
             return None
 
     async def update_device(self, device_id: str, update_data: DeviceNetworkUpdate) -> Optional[DeviceNetworkResponse]:
-        """อัปเดต Device Network"""
+        #อัปเดต Device Network
         try:
             existing_device = await self.prisma.devicenetwork.find_unique(where={"id": device_id})
 
@@ -344,14 +344,14 @@ class DeviceNetworkService:
                 foreign_keys_to_validate['configuration_template_id'] = update_data.configuration_template_id
                 update_dict["configuration_template_id"] = update_data.configuration_template_id
 
-            # Validate foreign keys
+            #Validate foreign keys
             if foreign_keys_to_validate:
                 await self._validate_foreign_keys(foreign_keys_to_validate)
 
             if not update_dict:
                 raise ValueError("ไม่มีข้อมูลที่จะอัปเดต")
 
-            # อัปเดตข้อมูล
+            #อัปเดตข้อมูล
             updated_device = await self.prisma.devicenetwork.update(
                 where={"id": device_id},
                 data=update_dict,
@@ -372,7 +372,7 @@ class DeviceNetworkService:
             raise e
 
     async def delete_device(self, device_id: str) -> bool:
-        """ลบ Device Network"""
+        #ลบ Device Network
         try:
             existing_device = await self.prisma.devicenetwork.find_unique(
                 where={"id": device_id}
@@ -389,20 +389,20 @@ class DeviceNetworkService:
             raise e
 
     async def assign_tags(self, device_id: str, tag_ids: list[str]) -> Optional[DeviceNetworkResponse]:
-        """เพิ่ม tags ให้กับ Device"""
+        #เพิ่ม tags ให้กับ Device
         try:
-            # ตรวจสอบว่า device มีอยู่จริง
+            #ตรวจสอบว่า device มีอยู่จริง
             device = await self.prisma.devicenetwork.find_unique(where={"id": device_id})
             if not device:
                 raise ValueError("ไม่พบ Device Network")
 
-            # ตรวจสอบว่า tags มีอยู่จริงทั้งหมด
+            #ตรวจสอบว่า tags มีอยู่จริงทั้งหมด
             for tag_id in tag_ids:
                 tag = await self.prisma.tag.find_unique(where={"tag_id": tag_id})
                 if not tag:
                     raise ValueError(f"ไม่พบ Tag ID: {tag_id}")
 
-            # เชื่อมโยง tags กับ device
+            #เชื่อมโยง tags กับ device
             updated_device = await self.prisma.devicenetwork.update(
                 where={"id": device_id},
                 data={
@@ -427,14 +427,14 @@ class DeviceNetworkService:
             raise e
 
     async def remove_tags(self, device_id: str, tag_ids: list[str]) -> Optional[DeviceNetworkResponse]:
-        """ลบ tags ออกจาก Device"""
+        #ลบ tags ออกจาก Device
         try:
-            # ตรวจสอบว่า device มีอยู่จริง
+            #ตรวจสอบว่า device มีอยู่จริง
             device = await self.prisma.devicenetwork.find_unique(where={"id": device_id})
             if not device:
                 raise ValueError("ไม่พบ Device Network")
 
-            # ตัดการเชื่อมโยง tags
+            #ตัดการเชื่อมโยง tags
             updated_device = await self.prisma.devicenetwork.update(
                 where={"id": device_id},
                 data={

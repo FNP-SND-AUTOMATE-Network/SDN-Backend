@@ -18,7 +18,6 @@ from prisma import Prisma
 router = APIRouter(prefix="/configuration-templates", tags=["Configuration Templates"])
 
 def get_template_service(db: Prisma = Depends(get_db)) -> ConfigurationTemplateService:
-    """Get ConfigurationTemplateService instance"""
     return ConfigurationTemplateService(db)
 
 @router.get("/", response_model=ConfigurationTemplateListResponse)
@@ -32,13 +31,6 @@ async def get_templates(
     current_user: Dict[str, Any] = Depends(get_current_user),
     template_svc: ConfigurationTemplateService = Depends(get_template_service)
 ):
-    """
-    ดึงรายการ Configuration Template ทั้งหมด
-    
-    - รองรับ pagination และ filter
-    - แสดงข้อมูล Tag ที่เชื่อมโยง
-    - ต้องเป็น authenticated user
-    """
     try:
         templates, total = await template_svc.get_templates(
             page=page,
@@ -69,7 +61,6 @@ async def get_template(
     current_user: Dict[str, Any] = Depends(get_current_user),
     template_svc: ConfigurationTemplateService = Depends(get_template_service)
 ):
-    """ดึงข้อมูล Configuration Template ตาม ID"""
     try:
         template = await template_svc.get_template_by_id(template_id, include_usage=include_usage)
         
@@ -95,7 +86,6 @@ async def create_template(
     current_user: Dict[str, Any] = Depends(get_current_user),
     template_svc: ConfigurationTemplateService = Depends(get_template_service)
 ):
-    """สร้าง Configuration Template ใหม่ (ENGINEER+)"""
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
             raise HTTPException(
@@ -136,7 +126,6 @@ async def update_template(
     current_user: Dict[str, Any] = Depends(get_current_user),
     template_svc: ConfigurationTemplateService = Depends(get_template_service)
 ):
-    """อัปเดต Configuration Template (ENGINEER+)"""
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
             raise HTTPException(
@@ -177,7 +166,6 @@ async def delete_template(
     current_user: Dict[str, Any] = Depends(get_current_user),
     template_svc: ConfigurationTemplateService = Depends(get_template_service)
 ):
-    """ลบ Configuration Template (ADMIN+)"""
     try:
         if force:
             if current_user["role"] != "OWNER":

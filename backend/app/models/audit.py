@@ -29,12 +29,10 @@ class AuditLogBase(BaseModel):
 
 
 class AuditLogCreate(AuditLogBase):
-    """Model สำหรับสร้าง AuditLog ใหม่"""
     pass
 
 
 class AuditLogResponse(AuditLogBase):
-    """Model สำหรับการตอบกลับ AuditLog"""
     id: str
     created_at: datetime
     
@@ -43,7 +41,6 @@ class AuditLogResponse(AuditLogBase):
 
 
 class AuditLogFilter(BaseModel):
-    """Model สำหรับ filter AuditLog"""
     actor_user_id: Optional[str] = None
     target_user_id: Optional[str] = None
     action: Optional[AuditAction] = None
@@ -54,7 +51,6 @@ class AuditLogFilter(BaseModel):
 
 
 class AuditLogListResponse(BaseModel):
-    """Model สำหรับการตอบกลับรายการ AuditLog"""
     items: List[AuditLogResponse]
     total: int
     limit: int

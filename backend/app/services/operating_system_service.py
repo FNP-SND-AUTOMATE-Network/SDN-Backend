@@ -9,15 +9,15 @@ from app.models.operating_system import (
 )
 
 class OperatingSystemService:
-    """Service สำหรับจัดการ Operating System"""
+    #Service สำหรับจัดการ Operating System
 
     def __init__(self, prisma_client):
         self.prisma = prisma_client
 
     async def create_operating_system(self, os_data: OperatingSystemCreate) -> Optional[OperatingSystemResponse]:
-        """สร้าง Operating System ใหม่"""
+        #สร้าง Operating System ใหม่
         try:
-            # ตรวจสอบว่า os_name ซ้ำหรือไม่
+            #ตรวจสอบว่า os_name ซ้ำหรือไม่
             existing_os = await self.prisma.operatingsystem.find_unique(
                 where={"os_name": os_data.os_name}
             )
@@ -25,7 +25,7 @@ class OperatingSystemService:
                 raise ValueError(f"ชื่อ OS '{os_data.os_name}' มีอยู่ในระบบแล้ว")
 
 
-            # สร้าง Operating System ใหม่
+            #สร้าง Operating System ใหม่
             os = await self.prisma.operatingsystem.create(
                 data={
                     "os_name": os_data.os_name,
@@ -37,7 +37,7 @@ class OperatingSystemService:
                 }
             )
 
-            # แปลง tags info (many-to-many)
+            #แปลง tags info (many-to-many)
             tags_info = []
             if hasattr(os, 'tags') and os.tags:
                 for tag in os.tags:
@@ -75,9 +75,9 @@ class OperatingSystemService:
         search: Optional[str] = None,
         include_usage: bool = False
     ) -> tuple[List[OperatingSystemResponse], int]:
-        """ดึงรายการ Operating System ทั้งหมด พร้อม pagination และ filter"""
+        #ดึงรายการ Operating System ทั้งหมด พร้อม pagination และ filter
         try:
-            # สร้าง filter conditions
+            #สร้าง filter conditions
             where_conditions: Dict[str, Any] = {}
             
             if os_type:
@@ -89,10 +89,10 @@ class OperatingSystemService:
                     {"description": {"contains": search, "mode": "insensitive"}}
                 ]
 
-            # นับจำนวนทั้งหมด
+            #นับจำนวนทั้งหมด
             total = await self.prisma.operatingsystem.count(where=where_conditions)
 
-            # ดึงข้อมูลตาม pagination
+            #ดึงข้อมูลตาม pagination
             skip = (page - 1) * page_size
             
             # Include relations ถ้าต้องการนับการใช้งาน
@@ -109,10 +109,10 @@ class OperatingSystemService:
                 include=include_options
             )
 
-            # แปลงเป็น response model
+            #แปลงเป็น response model
             os_responses = []
             for os in operating_systems:
-                # แปลง tags info (many-to-many)
+                #แปลง tags info (many-to-many)
                 tags_info = []
                 if hasattr(os, 'tags') and os.tags:
                     for tag in os.tags:
@@ -146,7 +146,7 @@ class OperatingSystemService:
             return [], 0
 
     async def get_operating_system_by_id(self, os_id: str, include_usage: bool = False) -> Optional[OperatingSystemResponse]:
-        """ดึงข้อมูล Operating System ตาม ID"""
+        #ดึงข้อมูล Operating System ตาม ID
         try:
             include_options: Dict[str, Any] = {"tags": True}
             if include_usage:
@@ -161,7 +161,7 @@ class OperatingSystemService:
             if not os:
                 return None
 
-            # แปลง tags info (many-to-many)
+            #แปลง tags info (many-to-many)
             tags_info = []
             if hasattr(os, 'tags') and os.tags:
                 for tag in os.tags:
@@ -193,7 +193,7 @@ class OperatingSystemService:
             return None
 
     async def get_operating_system_usage(self, os_id: str) -> Optional[OperatingSystemUsageResponse]:
-        """ดึงข้อมูลการใช้งาน Operating System โดยละเอียด"""
+        #ดึงข้อมูลการใช้งาน Operating System โดยละเอียด
         try:
             os = await self.prisma.operatingsystem.find_unique(
                 where={"id": os_id},
@@ -224,7 +224,7 @@ class OperatingSystemService:
             if not os:
                 return None
 
-            # แปลง Prisma objects เป็น dict
+            #แปลง Prisma objects เป็น dict
             device_networks = [dict(d) for d in os.deviceNetworks] if os.deviceNetworks else []
             backups = [dict(b) for b in os.backups] if os.backups else []
 
@@ -246,9 +246,9 @@ class OperatingSystemService:
         os_id: str,
         update_data: OperatingSystemUpdate
     ) -> Optional[OperatingSystemResponse]:
-        """อัปเดต Operating System"""
+        #อัปเดต Operating System
         try:
-            # ตรวจสอบว่า OS มีอยู่หรือไม่
+            #ตรวจสอบว่า OS มีอยู่หรือไม่
             existing_os = await self.prisma.operatingsystem.find_unique(
                 where={"id": os_id}
             )
@@ -290,7 +290,7 @@ class OperatingSystemService:
                 }
             )
 
-            # แปลง tags info (many-to-many)
+            #แปลง tags info (many-to-many)
             tags_info = []
             if hasattr(updated_os, 'tags') and updated_os.tags:
                 for tag in updated_os.tags:
@@ -324,9 +324,9 @@ class OperatingSystemService:
             return None
 
     async def delete_operating_system(self, os_id: str, force: bool = False) -> bool:
-        """ลบ Operating System"""
+        #ลบ Operating System
         try:
-            # ตรวจสอบว่า OS มีอยู่หรือไม่
+            #ตรวจสอบว่า OS มีอยู่หรือไม่
             existing_os = await self.prisma.operatingsystem.find_unique(
                 where={"id": os_id},
                 include={
@@ -369,9 +369,9 @@ class OperatingSystemService:
             return False
 
     async def assign_tags(self, os_id: str, tag_ids: list[str]) -> Optional[OperatingSystemResponse]:
-        """เพิ่ม tags ให้กับ Operating System"""
+        #เพิ่ม tags ให้กับ Operating System
         try:
-            # ตรวจสอบว่า OS มีอยู่จริง
+            #ตรวจสอบว่า OS มีอยู่จริง
             os = await self.prisma.operatingsystem.find_unique(where={"id": os_id})
             if not os:
                 raise ValueError("ไม่พบ Operating System")
@@ -397,7 +397,7 @@ class OperatingSystemService:
                 }
             )
 
-            # แปลง tags info
+            #แปลง tags info
             tags_info = []
             if hasattr(updated_os, 'tags') and updated_os.tags:
                 for tag in updated_os.tags:
@@ -431,9 +431,9 @@ class OperatingSystemService:
             return None
 
     async def remove_tags(self, os_id: str, tag_ids: list[str]) -> Optional[OperatingSystemResponse]:
-        """ลบ tags ออกจาก Operating System"""
+        #ลบ tags ออกจาก Operating System
         try:
-            # ตรวจสอบว่า OS มีอยู่จริง
+            #ตรวจสอบว่า OS มีอยู่จริง
             os = await self.prisma.operatingsystem.find_unique(where={"id": os_id})
             if not os:
                 raise ValueError("ไม่พบ Operating System")
@@ -453,7 +453,7 @@ class OperatingSystemService:
                 }
             )
 
-            # แปลง tags info
+            #แปลง tags info
             tags_info = []
             if hasattr(updated_os, 'tags') and updated_os.tags:
                 for tag in updated_os.tags:

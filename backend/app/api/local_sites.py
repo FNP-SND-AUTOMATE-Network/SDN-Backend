@@ -18,26 +18,17 @@ from prisma import Prisma
 router = APIRouter(prefix="/local-sites", tags=["Local Sites"])
 
 def get_local_site_service(db: Prisma = Depends(get_db)) -> LocalSiteService:
-    """Get LocalSiteService instance"""
     return LocalSiteService(db)
 
 @router.get("/", response_model=LocalSiteListResponse)
 async def get_local_sites(
-    page: int = Query(1, ge=1, description="หน้าที่ต้องการ"),
-    page_size: int = Query(20, ge=1, le=100, description="จำนวนรายการต่อหน้า"),
-    site_type: Optional[str] = Query(None, description="กรองตามประเภทสถานที่"),
-    search: Optional[str] = Query(None, description="ค้นหาจาก site_code, site_name, address, city"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Number of items per page"),
+    site_type: Optional[str] = Query(None, description="Filter by site type"),
+    search: Optional[str] = Query(None, description="Search by site_code, site_name, address, city"),
     current_user: Dict[str, Any] = Depends(get_current_user),
     local_site_svc: LocalSiteService = Depends(get_local_site_service)
 ):
-    """
-    ดึงรายการ LocalSite ทั้งหมด
-    
-    - รองรับ pagination
-    - รองรับ filter ตามประเภทสถานที่
-    - รองรับการค้นหา
-    - ต้องเป็น authenticated user
-    """
     try:
         sites, total = await local_site_svc.get_local_sites(
             page=page,
@@ -56,7 +47,7 @@ async def get_local_sites(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการดึงรายการสถานที่: {str(e)}"
+            detail=f"Error fetching local sites: {str(e)}"
         )
 
 @router.get("/{site_id}", response_model=LocalSiteResponse)
@@ -65,18 +56,13 @@ async def get_local_site(
     current_user: Dict[str, Any] = Depends(get_current_user),
     local_site_svc: LocalSiteService = Depends(get_local_site_service)
 ):
-    """
-    ดึงข้อมูล LocalSite ตาม ID
-    
-    - ต้องเป็น authenticated user
-    """
     try:
         site = await local_site_svc.get_local_site_by_id(site_id)
         
         if not site:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="ไม่พบสถานที่ที่ต้องการ"
+                detail="Local site not found"
             )
         
         return site
@@ -86,7 +72,7 @@ async def get_local_site(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการดึงข้อมูลสถานที่: {str(e)}"
+            detail=f"Error fetching local site: {str(e)}"
         )
 
 @router.post("/", response_model=LocalSiteCreateResponse, status_code=status.HTTP_201_CREATED)
@@ -95,18 +81,12 @@ async def create_local_site(
     current_user: Dict[str, Any] = Depends(get_current_user),
     local_site_svc: LocalSiteService = Depends(get_local_site_service)
 ):
-    """
-    สร้าง LocalSite ใหม่
-    
-    - ต้องเป็น ENGINEER, ADMIN หรือ OWNER
-    - site_code ต้องไม่ซ้ำ
-    """
     try:
         # ตรวจสอบสิทธิ์ (ต้องเป็น ENGINEER ขึ้นไป)
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="ไม่มีสิทธิ์สร้างสถานที่ ต้องเป็น ENGINEER, ADMIN หรือ OWNER"
+                detail="You do not have permission to create local site"
             )
 
         site = await local_site_svc.create_local_site(site_data)
@@ -114,11 +94,11 @@ async def create_local_site(
         if not site:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถสร้างสถานที่ได้"
+                detail="Error creating local site"
             )
 
         return LocalSiteCreateResponse(
-            message="สร้างสถานที่สำเร็จ",
+            message="Local site created successfully",
             site=site
         )
 
@@ -132,7 +112,7 @@ async def create_local_site(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการสร้างสถานที่: {str(e)}"
+            detail=f"Error creating local site: {str(e)}"
         )
 
 @router.put("/{site_id}", response_model=LocalSiteUpdateResponse)
@@ -142,18 +122,12 @@ async def update_local_site(
     current_user: Dict[str, Any] = Depends(get_current_user),
     local_site_svc: LocalSiteService = Depends(get_local_site_service)
 ):
-    """
-    อัปเดต LocalSite
-    
-    - ต้องเป็น ENGINEER, ADMIN หรือ OWNER
-    - สามารถอัปเดตบางฟิลด์ได้
-    """
     try:
         # ตรวจสอบสิทธิ์ (ต้องเป็น ENGINEER ขึ้นไป)
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="ไม่มีสิทธิ์แก้ไขสถานที่ ต้องเป็น ENGINEER, ADMIN หรือ OWNER"
+                detail="You do not have permission to update local site"
             )
 
         site = await local_site_svc.update_local_site(site_id, update_data)
@@ -161,11 +135,11 @@ async def update_local_site(
         if not site:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถอัปเดตสถานที่ได้"
+                detail="Error updating local site"
             )
 
         return LocalSiteUpdateResponse(
-            message="อัปเดตสถานที่สำเร็จ",
+            message="Local site updated successfully",
             site=site
         )
 
@@ -179,7 +153,7 @@ async def update_local_site(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการอัปเดตสถานที่: {str(e)}"
+            detail=f"Error updating local site: {str(e)}"
         )
 
 @router.delete("/{site_id}", response_model=LocalSiteDeleteResponse)
@@ -188,18 +162,12 @@ async def delete_local_site(
     current_user: Dict[str, Any] = Depends(get_current_user),
     local_site_svc: LocalSiteService = Depends(get_local_site_service)
 ):
-    """
-    ลบ LocalSite
-    
-    - ต้องเป็น ADMIN หรือ OWNER
-    - ไม่สามารถลบถ้ามีอุปกรณ์เชื่อมโยงอยู่
-    """
     try:
         # ตรวจสอบสิทธิ์ (ต้องเป็น ADMIN หรือ OWNER)
         if current_user["role"] not in ["ADMIN", "OWNER"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="ไม่มีสิทธิ์ลบสถานที่ ต้องเป็น ADMIN หรือ OWNER"
+                detail="You do not have permission to delete local site"
             )
 
         success = await local_site_svc.delete_local_site(site_id)
@@ -207,11 +175,11 @@ async def delete_local_site(
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถลบสถานที่ได้"
+                detail="Error deleting local site"
             )
 
         return LocalSiteDeleteResponse(
-            message="ลบสถานที่สำเร็จ"
+            message="Local site deleted successfully"
         )
 
     except ValueError as e:
@@ -224,6 +192,6 @@ async def delete_local_site(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการลบสถานที่: {str(e)}"
+            detail=f"Error deleting local site: {str(e)}"
         )
 

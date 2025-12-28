@@ -7,15 +7,15 @@ from app.models.interface import (
 )
 
 class InterfaceService:
-    """Service สำหรับจัดการ Interface"""
+    #Service สำหรับจัดการ Interface
 
     def __init__(self, prisma_client):
         self.prisma = prisma_client
 
     async def create_interface(self, interface_data: InterfaceCreate) -> Optional[InterfaceResponse]:
-        """สร้าง Interface ใหม่"""
+        #สร้าง Interface ใหม่
         try:
-            # ตรวจสอบว่า device มีอยู่จริง
+            #ตรวจสอบว่า device มีอยู่จริง
             device = await self.prisma.devicenetwork.find_unique(
                 where={"id": interface_data.device_id}
             )
@@ -54,7 +54,7 @@ class InterfaceService:
             return None
 
     def _build_interface_response(self, interface) -> InterfaceResponse:
-        """สร้าง InterfaceResponse จาก Prisma object"""
+        #สร้าง InterfaceResponse จาก Prisma object
         
         device_info = None
         if interface.device:
@@ -88,7 +88,7 @@ class InterfaceService:
         interface_type: Optional[str] = None,
         search: Optional[str] = None
     ) -> tuple[List[InterfaceResponse], int]:
-        """ดึงรายการ Interface ทั้งหมด"""
+        #ดึงรายการ Interface ทั้งหมด
         try:
             where_conditions: Dict[str, Any] = {}
             
@@ -127,7 +127,7 @@ class InterfaceService:
             return [], 0
 
     async def get_interface_by_id(self, interface_id: str) -> Optional[InterfaceResponse]:
-        """ดึงข้อมูล Interface ตาม ID"""
+        #ดึงข้อมูล Interface ตาม ID
         try:
             interface = await self.prisma.interface.find_unique(
                 where={"id": interface_id},
@@ -144,7 +144,7 @@ class InterfaceService:
             return None
 
     async def update_interface(self, interface_id: str, update_data: InterfaceUpdate) -> Optional[InterfaceResponse]:
-        """อัปเดต Interface"""
+        #อัปเดต Interface
         try:
             existing_interface = await self.prisma.interface.find_unique(
                 where={"id": interface_id}
@@ -198,7 +198,7 @@ class InterfaceService:
             return None
 
     async def delete_interface(self, interface_id: str) -> bool:
-        """ลบ Interface"""
+        #ลบ Interface
         try:
             existing_interface = await self.prisma.interface.find_unique(
                 where={"id": interface_id}
@@ -217,9 +217,9 @@ class InterfaceService:
             return False
 
     async def get_interfaces_by_device(self, device_id: str) -> List[InterfaceResponse]:
-        """ดึงรายการ Interface ทั้งหมดของ Device"""
+        #ดึงรายการ Interface ทั้งหมดของ Device
         try:
-            # ตรวจสอบว่า device มีอยู่จริง
+            #ตรวจสอบว่า device มีอยู่จริง
             device = await self.prisma.devicenetwork.find_unique(
                 where={"id": device_id}
             )

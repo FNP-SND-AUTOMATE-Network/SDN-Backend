@@ -22,7 +22,6 @@ user_service = None
 audit_service = None
 
 def get_services():
-    """Get initialized services, creating them if needed"""
     global user_service, audit_service
     
     # Initialize services if not already done
@@ -40,7 +39,6 @@ def get_services():
     return user_service, audit_service
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """ตรวจสอบ JWT token และคืนค่าข้อมูล user ปัจจุบัน"""
     try:
         user_svc, audit_svc = get_services()
         token = credentials.credentials
@@ -73,19 +71,17 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         )
 
 def check_admin_permission(current_user: dict):
-    """ตรวจสอบสิทธิ์ admin"""
     if current_user["role"] not in ["ADMIN", "OWNER"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="ไม่มีสิทธิ์ในการเข้าถึง"
+            detail="You do not have permission to access this"
         )
 
 def check_admin_or_self_permission(current_user: dict, target_user_id: str):
-    """ตรวจสอบสิทธิ์ admin หรือเป็น user เดียวกัน"""
     if current_user["role"] not in ["ADMIN", "OWNER"] and current_user["id"] != target_user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="ไม่มีสิทธิ์ในการเข้าถึงข้อมูลนี้"
+            detail="You do not have permission to access this"
         )
 
 # ========= User CRUD Endpoints =========
@@ -96,9 +92,6 @@ async def create_user(
     current_user: dict = Depends(get_current_user),
     req: Request = None
 ):
-    """
-    สร้าง user ใหม่ (เฉพาะ Admin)
-    """
     try:
         # ตรวจสอบสิทธิ์ admin
         check_admin_permission(current_user)
@@ -183,9 +176,6 @@ async def get_users(
     search: Optional[str] = Query(None, description="ค้นหาใน email, name, surname"),
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    ดึงรายการ users พร้อม pagination และ filtering (เฉพาะ Admin)
-    """
     try:
         # ตรวจสอบสิทธิ์ admin
         check_admin_permission(current_user)
@@ -256,9 +246,6 @@ async def get_user_by_id(
     user_id: str,
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    ดึงข้อมูลรายละเอียด user ตาม ID (Admin หรือ user เดียวกัน)
-    """
     try:
         # ตรวจสอบสิทธิ์
         check_admin_or_self_permission(current_user, user_id)
@@ -271,7 +258,7 @@ async def get_user_by_id(
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="ไม่พบผู้ใช้งาน"
+                detail="User not found"
             )
         
         # Note: ไม่ทำ audit log สำหรับการดู user detail เพราะไม่จำเป็น
@@ -283,7 +270,7 @@ async def get_user_by_id(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการดึงข้อมูลผู้ใช้งาน: {str(e)}"
+            detail=f"Error fetching user details: {str(e)}"
         )
 
 @router.put("/{user_id}", response_model=UserUpdateResponse)
@@ -293,9 +280,6 @@ async def update_user(
     current_user: dict = Depends(get_current_user),
     req: Request = None
 ):
-    """
-    อัปเดตข้อมูล user (Admin หรือ user เดียวกัน แต่ role เปลี่ยนได้เฉพาะ Admin)
-    """
     try:
         # ตรวจสอบสิทธิ์พื้นฐาน
         check_admin_or_self_permission(current_user, user_id)
@@ -305,7 +289,7 @@ async def update_user(
             if current_user["role"] not in ["ADMIN", "OWNER"]:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="ไม่มีสิทธิ์ในการเปลี่ยน role"
+                    detail="You do not have permission to change role"
                 )
             
             # ตรวจสอบ role hierarchy
@@ -313,7 +297,7 @@ async def update_user(
                 allowed_roles = RoleHierarchy.get_allowed_promotion_roles(current_user["role"])
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"ไม่มีสิทธิ์เปลี่ยน role เป็น {request.role.value}. คุณสามารถ promote ได้เฉพาะ: {', '.join(allowed_roles)}"
+                    detail=f"You do not have permission to change role to {request.role.value}. You can only promote to: {', '.join(allowed_roles)}"
                 )
         
         user_svc, audit_svc = get_services()
@@ -324,7 +308,7 @@ async def update_user(
         if not updated_user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="ไม่พบผู้ใช้งาน"
+                detail="User not found"
             )
         
         # สร้าง audit log
@@ -363,7 +347,7 @@ async def update_user(
             print(f"Error creating audit log: {audit_error}")
         
         return UserUpdateResponse(
-            message="อัปเดตข้อมูลผู้ใช้งานเรียบร้อยแล้ว",
+            message="User updated successfully",
             user=UserResponse(**updated_user)
         )
         
@@ -377,7 +361,7 @@ async def update_user(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการอัปเดตผู้ใช้งาน: {str(e)}"
+            detail=f"Error updating user: {str(e)}"
         )
 
 @router.delete("/{user_id}", response_model=UserDeleteResponse)
@@ -386,9 +370,6 @@ async def delete_user(
     current_user: dict = Depends(get_current_user),
     req: Request = None
 ):
-    """
-    ลบ user (เฉพาะ Admin และไม่สามารถลบตัวเองได้)
-    """
     try:
         # ตรวจสอบสิทธิ์ admin
         check_admin_permission(current_user)
@@ -397,7 +378,7 @@ async def delete_user(
         if current_user["id"] == user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="ไม่สามารถลบบัญชีตัวเองได้"
+                detail="You cannot delete your own account"
             )
         
         user_svc, audit_svc = get_services()
@@ -407,7 +388,7 @@ async def delete_user(
         if not target_user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="ไม่พบผู้ใช้งาน"
+                detail="User not found"
             )
         
         # สร้าง audit log ก่อนลบ user
@@ -439,11 +420,11 @@ async def delete_user(
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถลบผู้ใช้งานได้"
+                detail="Error deleting user"
             )
         
         return UserDeleteResponse(
-            message="ลบผู้ใช้งานเรียบร้อยแล้ว",
+            message="User deleted successfully",
             user_id=user_id
         )
         
@@ -457,7 +438,7 @@ async def delete_user(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการลบผู้ใช้งาน: {str(e)}"
+            detail=f"Error deleting user: {str(e)}"
         )
 
 # ========= Password Management Endpoints =========
@@ -469,15 +450,12 @@ async def change_password(
     current_user: dict = Depends(get_current_user),
     req: Request = None
 ):
-    """
-    เปลี่ยนรหัสผ่าน (เฉพาะ user เดียวกัน)
-    """
     try:
         # ตรวจสอบว่าเป็น user เดียวกัน
         if current_user["id"] != user_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="ไม่สามารถเปลี่ยนรหัสผ่านของผู้อื่นได้"
+                detail="You cannot change password for another user"
             )
         
         user_svc, audit_svc = get_services()
@@ -492,7 +470,7 @@ async def change_password(
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถเปลี่ยนรหัสผ่านได้"
+                detail="Error changing password"
             )
         
         # สร้าง audit log
@@ -516,7 +494,7 @@ async def change_password(
             print(f"Error creating audit log: {audit_error}")
         
         return PasswordChangeResponse(
-            message="เปลี่ยนรหัสผ่านเรียบร้อยแล้ว",
+            message="Password changed successfully",
             user_id=user_id
         )
         
@@ -530,7 +508,7 @@ async def change_password(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการเปลี่ยนรหัสผ่าน: {str(e)}"
+            detail=f"Error changing password: {str(e)}"
         )
 
 @router.post("/{user_id}/reset-password", response_model=PasswordChangeResponse)
@@ -540,9 +518,6 @@ async def reset_password_by_admin(
     current_user: dict = Depends(get_current_user),
     req: Request = None
 ):
-    """
-    รีเซ็ตรหัสผ่าน user โดย admin
-    """
     try:
         # ตรวจสอบสิทธิ์ admin
         check_admin_permission(current_user)
@@ -553,7 +528,7 @@ async def reset_password_by_admin(
         if user_id != request.user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="User ID ไม่ตรงกัน"
+                detail="User ID does not match"
             )
         
         # ดึงข้อมูล target user
@@ -561,7 +536,7 @@ async def reset_password_by_admin(
         if not target_user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="ไม่พบผู้ใช้งาน"
+                detail="User not found"
             )
         
         # รีเซ็ตรหัสผ่าน
@@ -573,7 +548,7 @@ async def reset_password_by_admin(
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถรีเซ็ตรหัสผ่านได้"
+                detail="Error resetting password"
             )
         
         # สร้าง audit log
@@ -597,7 +572,7 @@ async def reset_password_by_admin(
             print(f"Error creating audit log: {audit_error}")
         
         return PasswordChangeResponse(
-            message="รีเซ็ตรหัสผ่านเรียบร้อยแล้ว",
+            message="Password reset successfully",
             user_id=user_id
         )
         
@@ -611,16 +586,13 @@ async def reset_password_by_admin(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการรีเซ็ตรหัสผ่าน: {str(e)}"
+            detail=f"Error resetting password: {str(e)}"
         )
 
 # ========= Profile Endpoints =========
 
 @router.get("/profile/me", response_model=UserDetailResponse)
 async def get_my_profile(current_user: dict = Depends(get_current_user)):
-    """
-    ดึงข้อมูล profile ของ user ปัจจุบัน
-    """
     try:
         user_svc, audit_svc = get_services()
         
@@ -630,7 +602,7 @@ async def get_my_profile(current_user: dict = Depends(get_current_user)):
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="ไม่พบข้อมูลผู้ใช้งาน"
+                detail="User not found"
             )
         
         # Note: ไม่ทำ audit log สำหรับการดู profile เพราะไม่จำเป็น
@@ -642,7 +614,7 @@ async def get_my_profile(current_user: dict = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการดึงข้อมูล profile: {str(e)}"
+            detail=f"Error getting profile: {str(e)}"
         )
 
 @router.post("/{user_id}/promote-role", response_model=UserUpdateResponse)
@@ -652,9 +624,6 @@ async def promote_user_role(
     current_user: dict = Depends(get_current_user),
     req: Request = None
 ):
-    """
-    เปลี่ยน role ของ user หลังจากยืนยัน OTP แล้ว (เฉพาะ Admin)
-    """
     try:
         # ตรวจสอบสิทธิ์ admin
         check_admin_permission(current_user)
@@ -664,7 +633,7 @@ async def promote_user_role(
             allowed_roles = RoleHierarchy.get_allowed_promotion_roles(current_user["role"])
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"ไม่มีสิทธิ์ promote เป็น role {target_role.value}. คุณสามารถ promote ได้เฉพาะ: {', '.join(allowed_roles)}"
+                detail=f"You do not have permission to promote to role {target_role.value}. You can only promote to: {', '.join(allowed_roles)}"
             )
         
         user_svc, audit_svc = get_services()
@@ -674,7 +643,7 @@ async def promote_user_role(
         if not old_user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="ไม่พบผู้ใช้งาน"
+                detail="User not found"
             )
         old_role = old_user["role"]
         
@@ -684,7 +653,7 @@ async def promote_user_role(
         if not updated_user:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถเปลี่ยน role ได้"
+                detail="Error promoting user role"
             )
         
         # สร้าง audit log
@@ -710,7 +679,7 @@ async def promote_user_role(
             print(f"Error creating audit log: {audit_error}")
         
         return UserUpdateResponse(
-            message=f"เปลี่ยน role เป็น {target_role.value} เรียบร้อยแล้ว",
+            message=f"Promote user role to {target_role.value} successfully",
             user=UserResponse(**updated_user)
         )
         
@@ -724,5 +693,5 @@ async def promote_user_role(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการเปลี่ยน role: {str(e)}"
+            detail=f"Error promoting user role: {str(e)}"
         )

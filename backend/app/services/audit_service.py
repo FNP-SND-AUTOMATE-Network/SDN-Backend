@@ -9,7 +9,7 @@ class AuditService:
         self.prisma = prisma_client
 
     async def create_audit_log(self, audit_data: AuditLogCreate) -> AuditLogResponse:
-        """สร้าง audit log ใหม่"""
+        #สร้าง audit log ใหม่
         try:
             # แปลง details เป็น JSON หากมี
             details_json = None
@@ -61,7 +61,7 @@ class AuditService:
             raise e
 
     async def get_audit_logs(self, filters: AuditLogFilter) -> tuple[List[AuditLogResponse], int]:
-        """ดึงรายการ audit logs ตาม filter"""
+        #ดึงรายการ audit logs ตาม filter
         try:
             # สร้าง where clause
             where_clause = {}
@@ -159,7 +159,7 @@ class AuditService:
             raise e
 
     async def get_audit_log_by_id(self, audit_id: str) -> Optional[AuditLogResponse]:
-        """ดึง audit log ตาม ID"""
+        #ดึง audit log ตาม ID
         try:
             audit_log = await self.prisma.auditlog.find_unique(
                 where={"id": audit_id}
@@ -228,7 +228,7 @@ class AuditService:
             raise e
 
     async def create_login_audit(self, user_id: str, ip_address: str = None, user_agent: str = None):
-        """สร้าง audit log สำหรับการ login"""
+        #สร้าง audit log สำหรับการ login
         details = {
             "event": "user_login",
             "timestamp": datetime.now().isoformat()
@@ -250,7 +250,7 @@ class AuditService:
         return await self.create_audit_log(audit_data)
 
     async def create_register_audit(self, user_id: str, ip_address: str = None, user_agent: str = None):
-        """สร้าง audit log สำหรับการ register"""
+        #สร้าง audit log สำหรับการ register
         details = {
             "event": "user_register",
             "timestamp": datetime.now().isoformat()
@@ -272,7 +272,7 @@ class AuditService:
         return await self.create_audit_log(audit_data)
 
     async def create_logout_audit(self, user_id: str, ip_address: str = None, user_agent: str = None):
-        """สร้าง audit log สำหรับการ logout"""
+        #สร้าง audit log สำหรับการ logout
         details = {
             "event": "user_logout",
             "timestamp": datetime.now().isoformat()
@@ -297,7 +297,7 @@ class AuditService:
     
     async def create_user_create_audit(self, actor_user_id: str, target_user_id: str, target_email: str, 
                                       target_role: str, ip_address: str = None, user_agent: str = None) -> Optional[dict]:
-        """สร้าง audit log สำหรับการสร้าง user ใหม่"""
+        #สร้าง audit log สำหรับการสร้าง user ใหม่
         details = {
             "event": "user_create",
             "target_email": target_email,
@@ -323,7 +323,7 @@ class AuditService:
     
     async def create_user_update_audit(self, actor_user_id: str, target_user_id: str, changes: dict,
                                       ip_address: str = None, user_agent: str = None) -> Optional[dict]:
-        """สร้าง audit log สำหรับการอัปเดต user"""
+        #สร้าง audit log สำหรับการอัปเดต user
         details = {
             "event": "user_update",
             "changes": changes,
@@ -348,7 +348,7 @@ class AuditService:
     async def create_user_delete_audit(self, actor_user_id: str, target_user_id: str, target_email: str,
                                       target_role: str, ip_address: str = None, user_agent: str = None, 
                                       actor_email: str = None, actor_name: str = None) -> Optional[dict]:
-        """สร้าง audit log สำหรับการลบ user"""
+        #สร้าง audit log สำหรับการลบ user
         details = {
             "event": "user_delete",
             "target_email": target_email,
@@ -376,7 +376,7 @@ class AuditService:
     
     async def create_password_change_audit(self, actor_user_id: str, target_user_id: str, change_type: str = "self",
                                             ip_address: str = None, user_agent: str = None) -> Optional[dict]:
-        """สร้าง audit log สำหรับการเปลี่ยนรหัสผ่าน"""
+        #สร้าง audit log สำหรับการเปลี่ยนรหัสผ่าน
         details = {
             "event": "password_change",
             "change_type": change_type,  # "self", "admin_reset"
@@ -401,7 +401,7 @@ class AuditService:
     async def create_role_promotion_audit(self, actor_user_id: str, target_user_id: str, old_role: str, 
                                          new_role: str, promotion_type: str = "manual",
                                          ip_address: str = None, user_agent: str = None) -> Optional[dict]:
-        """สร้าง audit log สำหรับการเปลี่ยน role"""
+        #สร้าง audit log สำหรับการเปลี่ยน role
         details = {
             "event": "role_promotion",
             "old_role": old_role,

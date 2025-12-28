@@ -3,12 +3,10 @@ from typing import Optional
 from datetime import datetime
 
 class OSFileBase(BaseModel):
-    """Base model สำหรับ OS File"""
     file_name: str = Field(..., description="ชื่อไฟล์ต้นฉบับ", max_length=500)
     version: Optional[str] = Field(None, description="Version ของ OS (เช่น 15.7, 17.3)", max_length=50)
 
 class OSFileCreate(OSFileBase):
-    """Model สำหรับสร้าง OS File (ไม่รวม file upload ที่นี่)"""
     os_id: str = Field(..., description="Operating System ID")
     file_path: str = Field(..., description="Path หรือ URL ของไฟล์")
     file_size: int = Field(..., description="ขนาดไฟล์ (bytes)", ge=0)
@@ -16,20 +14,17 @@ class OSFileCreate(OSFileBase):
     checksum: Optional[str] = Field(None, description="MD5 หรือ SHA256 checksum", max_length=100)
 
 class RelatedUserInfoFile(BaseModel):
-    """ข้อมูล User ผู้อัปโหลด"""
     id: str
     email: str
     name: Optional[str]
     surname: Optional[str]
 
 class RelatedOSInfoFile(BaseModel):
-    """ข้อมูล OS แบบย่อ"""
     id: str
     os_name: str
     os_type: str
 
 class OSFileResponse(BaseModel):
-    """Model สำหรับ response ของ OS File"""
     id: str
     os_id: str
     file_name: str
@@ -50,21 +45,17 @@ class OSFileResponse(BaseModel):
         from_attributes = True
 
 class OSFileListResponse(BaseModel):
-    """Model สำหรับ response ของรายการ OS File"""
     total: int
     files: list[OSFileResponse]
 
 class OSFileUploadResponse(BaseModel):
-    """Model สำหรับ response เมื่ออัปโหลดไฟล์สำเร็จ"""
     message: str
     file: OSFileResponse
 
 class OSFileDeleteResponse(BaseModel):
-    """Model สำหรับ response เมื่อลบไฟล์สำเร็จ"""
     message: str
 
 class OSFileDownloadInfo(BaseModel):
-    """Model สำหรับข้อมูลการดาวน์โหลด"""
     file_name: str
     file_size: int
     file_type: Optional[str]

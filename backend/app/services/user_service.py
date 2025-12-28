@@ -16,12 +16,12 @@ class UserService:
         self.access_token_expire_minutes = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
     
     def hash_password(self, password: str) -> str:
-        """เข้ารหัสรหัสผ่าน"""
+        #เข้ารหัสรหัสผ่าน
         salt = bcrypt.gensalt()
         return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
     
     async def create_user(self, register_data: RegisterRequest) -> dict:
-        """สร้าง user ใหม่หลังจากยืนยัน OTP แล้ว"""
+        #สร้าง user ใหม่หลังจากยืนยัน OTP แล้ว
         
         # หา temporary user ที่สร้างไว้ตอนส่ง OTP
         temp_user = await self.prisma.user.find_unique(where={"email": register_data.email})
@@ -62,12 +62,12 @@ class UserService:
         }
     
     async def check_email_exists(self, email: str) -> bool:
-        """ตรวจสอบว่า email มีอยู่ในระบบแล้วหรือไม่"""
+        #ตรวจสอบว่า email มีอยู่ในระบบแล้วหรือไม่
         user = await self.prisma.user.find_unique(where={"email": email})
         return user is not None
     
     async def get_user_by_email(self, email: str) -> Optional[dict]:
-        """ดึงข้อมูล user จาก email"""
+        #ดึงข้อมูล user จาก email
         user = await self.prisma.user.find_unique(where={"email": email})
         
         if user:
@@ -85,11 +85,11 @@ class UserService:
         return None
     
     def verify_password(self, plain_password: str, hashed_password: str) -> bool:
-        """ตรวจสอบรหัสผ่าน"""
+        #ตรวจสอบรหัสผ่าน
         return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
     
     def create_access_token(self, data: dict) -> str:
-        """สร้าง JWT access token"""
+        #สร้าง JWT access token
         to_encode = data.copy()
         expire = datetime.utcnow() + timedelta(minutes=self.access_token_expire_minutes)
         to_encode.update({"exp": expire})
@@ -97,7 +97,7 @@ class UserService:
         return encoded_jwt
     
     async def authenticate_user(self, email: str, password: str) -> Optional[dict]:
-        """ตรวจสอบ email และ password และคืนค่าข้อมูลผู้ใช้"""
+        #ตรวจสอบ email และ password และคืนค่าข้อมูลผู้ใช้
         user = await self.get_user_by_email(email)
         
         if not user:
@@ -114,7 +114,7 @@ class UserService:
         return user
     
     async def verify_access_token(self, token: str) -> str:
-        """ตรวจสอบ JWT token และคืนค่า user_id"""
+        #ตรวจสอบ JWT token และคืนค่า user_id
         try:
             payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
             user_id: str = payload.get("sub")
@@ -125,7 +125,7 @@ class UserService:
             raise ValueError(f"Invalid token: {str(e)}")
     
     def verify_token(self, token: str) -> dict:
-        """ตรวจสอบ JWT token และคืนค่า payload ทั้งหมด"""
+        #ตรวจสอบ JWT token และคืนค่า payload ทั้งหมด
         try:
             payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
             return payload
@@ -134,7 +134,7 @@ class UserService:
 
     
     async def get_user_by_id(self, user_id: str) -> Optional[dict]:
-        """ดึงข้อมูลผู้ใช้ตาม ID"""
+        #ดึงข้อมูลผู้ใช้ตาม ID
         try:
             user = await self.prisma.user.find_unique(
                 where={"id": user_id}
@@ -158,12 +158,12 @@ class UserService:
     # ========= CRUD Operations =========
     
     async def create_user_by_admin(self, user_data: UserCreateRequest, otp_service=None) -> dict:
-        """สร้าง user ใหม่โดย admin (ต้องยืนยัน OTP ก่อนเปลี่ยน role)"""
+        #สร้าง user ใหม่โดย admin (ต้องยืนยัน OTP ก่อนเปลี่ยน role)
         try:
             # ตรวจสอบว่า email มีอยู่แล้วหรือไม่
             existing_user = await self.check_email_exists(user_data.email)
             if existing_user:
-                raise ValueError("อีเมลนี้มีอยู่ในระบบแล้ว")
+                raise ValueError("email already exists")
             
             # เข้ารหัสรหัสผ่าน
             hashed_password = self.hash_password(user_data.password)
@@ -195,7 +195,7 @@ class UserService:
                     if not email_sent:
                         # หากส่งอีเมลไม่ได้ ลบ user ที่สร้างไว้
                         await self.prisma.user.delete(where={"id": new_user.id})
-                        raise ValueError("ไม่สามารถส่งอีเมลยืนยันได้ กรุณาลองใหม่อีกครั้ง")
+                        raise ValueError("confirmation email failed please try again")
                     
                     return {
                         "id": new_user.id,
@@ -223,7 +223,7 @@ class UserService:
             raise e
     
     async def get_users_list(self, page: int = 1, page_size: int = 10, filters: Optional[UserFilter] = None) -> dict:
-        """ดึงรายการ users พร้อม pagination และ filtering"""
+        #ดึงรายการ users พร้อม pagination และ filtering
         try:
             # สร้าง where clause สำหรับ filtering
             where_clause = {}
@@ -293,7 +293,7 @@ class UserService:
             raise e
     
     async def get_user_detail_by_id(self, user_id: str) -> Optional[dict]:
-        """ดึงข้อมูลรายละเอียด user รวมทั้ง MFA info"""
+        #ดึงข้อมูลรายละเอียด user รวมทั้ง MFA info
         try:
             user = await self.prisma.user.find_unique(
                 where={"id": user_id},
@@ -327,7 +327,7 @@ class UserService:
             return None
     
     async def update_user_by_id(self, user_id: str, update_data: UserUpdateRequest) -> Optional[dict]:
-        """อัปเดตข้อมูล user"""
+        #อัปเดตข้อมูล userx
         try:
             # ตรวจสอบว่า user มีอยู่จริง
             existing_user = await self.prisma.user.find_unique(where={"id": user_id})
@@ -338,7 +338,7 @@ class UserService:
             if update_data.email and update_data.email != existing_user.email:
                 email_exists = await self.check_email_exists(update_data.email)
                 if email_exists:
-                    raise ValueError("อีเมลนี้มีอยู่ในระบบแล้ว")
+                    raise ValueError("email already exists")
             
             # ตรวจสอบการเปลี่ยน role - ต้องยืนยัน email ก่อน
             if update_data.role and update_data.role != existing_user.role:
@@ -384,7 +384,7 @@ class UserService:
             raise e
     
     async def promote_user_role_after_verification(self, user_id: str, target_role: str) -> Optional[dict]:
-        """เปลี่ยน role ของ user หลังจากยืนยัน OTP แล้ว"""
+        #เปลี่ยน role ของ user หลังจากยืนยัน OTP แล้ว
         try:
             # ตรวจสอบว่า user มีอยู่จริงและยืนยัน email แล้ว
             existing_user = await self.prisma.user.find_unique(where={"id": user_id})
@@ -420,7 +420,7 @@ class UserService:
             raise e
     
     async def delete_user_by_id(self, user_id: str) -> bool:
-        """ลบ user (soft delete หรือ hard delete ตามความต้องการ)"""
+        #ลบ user (soft delete หรือ hard delete ตามความต้องการ)
         try:
             # ตรวจสอบว่า user มีอยู่จริง
             existing_user = await self.prisma.user.find_unique(where={"id": user_id})
@@ -445,7 +445,7 @@ class UserService:
             raise e
     
     async def change_user_password(self, user_id: str, current_password: str, new_password: str) -> bool:
-        """เปลี่ยนรหัสผ่าน user (ตรวจสอบรหัสผ่านเก่า)"""
+        #เปลี่ยนรหัสผ่าน user (ตรวจสอบรหัสผ่านเก่า)
         try:
             # ดึงข้อมูล user
             user = await self.prisma.user.find_unique(where={"id": user_id})
@@ -475,7 +475,7 @@ class UserService:
             raise e
     
     async def reset_user_password_by_admin(self, user_id: str, new_password: str) -> bool:
-        """รีเซ็ตรหัสผ่าน user โดย admin (ไม่ต้องตรวจสอบรหัสผ่านเก่า)"""
+        #รีเซ็ตรหัสผ่าน user โดย admin (ไม่ต้องตรวจสอบรหัสผ่านเก่า)
         try:
             # ตรวจสอบว่า user มีอยู่จริง
             user = await self.prisma.user.find_unique(where={"id": user_id})

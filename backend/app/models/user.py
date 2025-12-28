@@ -48,7 +48,6 @@ class UserResponse(BaseModel):
     updated_at: datetime
 
 class UserDetailResponse(UserResponse):
-    """รายละเอียดเพิ่มเติมสำหรับ admin"""
     totp_enabled: bool = False
     passkeys_count: int = 0
     recovery_codes_count: int = 0

@@ -22,14 +22,13 @@ router = APIRouter(prefix="/device-credentials", tags=["Device Network Credentia
 @router.get(
     "/",
     response_model=DeviceCredentialsResponse,
-    summary="ดึงข้อมูล Device Network Credentials",
-    description="ดึงข้อมูล Device Network Credentials ของผู้ใช้ปัจจุบัน (ไม่แสดงรหัสผ่าน แต่แสดงว่ามีหรือไม่)"
+    summary="Get Device Network Credentials",
+    description="Get Device Network Credentials of current user (does not show password, but shows if it exists)"
 )
 async def get_device_credentials(
     db=Depends(get_db),
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
-    """ดึงข้อมูล Device Network Credentials ของผู้ใช้ปัจจุบัน"""
     try:
         device_creds_svc = DeviceCredentialsService(db)
         
@@ -38,7 +37,7 @@ async def get_device_credentials(
         if not device_credentials:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="ไม่พบ Device Network Credentials กรุณาสร้างใหม่"
+                detail="Device Network Credentials not found"
             )
         
         return device_credentials
@@ -49,7 +48,7 @@ async def get_device_credentials(
         logger.error(f"Error in get_device_credentials: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="เกิดข้อผิดพลาดในการดึงข้อมูล Device Network Credentials"
+            detail="Error in get_device_credentials"
         )
 
 
@@ -57,15 +56,14 @@ async def get_device_credentials(
     "/",
     response_model=DeviceCredentialsCreateResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="สร้าง Device Network Credentials ใหม่",
-    description="สร้าง Device Network Credentials ใหม่สำหรับผู้ใช้ปัจจุบัน"
+    summary="Create new Device Network Credentials",
+    description="Create new Device Network Credentials for current user"
 )
 async def create_device_credentials(
     data: DeviceCredentialsCreate,
     db=Depends(get_db),
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
-    """สร้าง Device Network Credentials ใหม่"""
     try:
         device_creds_svc = DeviceCredentialsService(db)
         
@@ -77,11 +75,11 @@ async def create_device_credentials(
         if not device_credentials:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถสร้าง Device Network Credentials ได้"
+                detail="Failed to create Device Network Credentials"
             )
         
         return DeviceCredentialsCreateResponse(
-            message="สร้าง Device Network Credentials สำเร็จ",
+            message="Device Network Credentials created successfully",
             device_credentials=device_credentials
         )
         
@@ -96,22 +94,21 @@ async def create_device_credentials(
         logger.error(f"Error in create_device_credentials: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="เกิดข้อผิดพลาดในการสร้าง Device Network Credentials"
+            detail="Error in create_device_credentials"
         )
 
 
 @router.put(
     "/",
     response_model=DeviceCredentialsUpdateResponse,
-    summary="อัปเดต Device Network Credentials",
-    description="อัปเดต Device Network Credentials ของผู้ใช้ปัจจุบัน"
+    summary="Update Device Network Credentials",
+    description="Update Device Network Credentials of current user"
 )
 async def update_device_credentials(
     data: DeviceCredentialsUpdate,
     db=Depends(get_db),
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
-    """อัปเดต Device Network Credentials"""
     try:
         device_creds_svc = DeviceCredentialsService(db)
         
@@ -123,11 +120,11 @@ async def update_device_credentials(
         if not device_credentials:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถอัปเดต Device Network Credentials ได้"
+                detail="Failed to update Device Network Credentials"
             )
         
         return DeviceCredentialsUpdateResponse(
-            message="อัปเดต Device Network Credentials สำเร็จ",
+            message="Device Network Credentials updated successfully",
             device_credentials=device_credentials
         )
         
@@ -142,21 +139,20 @@ async def update_device_credentials(
         logger.error(f"Error in update_device_credentials: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="เกิดข้อผิดพลาดในการอัปเดต Device Network Credentials"
+            detail="Error in update_device_credentials"
         )
 
 
 @router.delete(
     "/",
     response_model=DeviceCredentialsDeleteResponse,
-    summary="ลบ Device Network Credentials",
-    description="ลบ Device Network Credentials ของผู้ใช้ปัจจุบัน"
+    summary="Delete Device Network Credentials",
+    description="Delete Device Network Credentials of current user"
 )
 async def delete_device_credentials(
     db=Depends(get_db),
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
-    """ลบ Device Network Credentials"""
     try:
         device_creds_svc = DeviceCredentialsService(db)
         
@@ -165,11 +161,11 @@ async def delete_device_credentials(
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถลบ Device Network Credentials ได้"
+                detail="Failed to delete Device Network Credentials"
             )
         
         return DeviceCredentialsDeleteResponse(
-            message="ลบ Device Network Credentials สำเร็จ"
+            message="Device Network Credentials deleted successfully"
         )
         
     except ValueError as e:
@@ -183,21 +179,20 @@ async def delete_device_credentials(
         logger.error(f"Error in delete_device_credentials: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="เกิดข้อผิดพลาดในการลบ Device Network Credentials"
+            detail="Error in delete_device_credentials"
         )
 
 
 @router.post(
     "/verify",
-    summary="ตรวจสอบ Device Network Credentials",
-    description="ตรวจสอบความถูกต้องของ Device Network Credentials สำหรับการเข้าใช้งานอุปกรณ์"
+    summary="Verify Device Network Credentials",
+    description="Verify Device Network Credentials for device access"
 )
 async def verify_device_credentials(
     credentials: DeviceCredentialsVerifyRequest,
     db=Depends(get_db),
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
-    """ตรวจสอบ Device Network Credentials"""
     try:
         device_creds_svc = DeviceCredentialsService(db)
         
@@ -210,11 +205,11 @@ async def verify_device_credentials(
         if not is_valid:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Device Network Credentials ไม่ถูกต้อง"
+                detail="Invalid Device Network Credentials"
             )
         
         return {
-            "message": "Device Network Credentials ถูกต้อง",
+            "message": "Device Network Credentials is valid",
             "valid": True
         }
         
@@ -224,5 +219,5 @@ async def verify_device_credentials(
         logger.error(f"Error in verify_device_credentials: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="เกิดข้อผิดพลาดในการตรวจสอบ Device Network Credentials"
+            detail="Error in verify_device_credentials"
         )

@@ -18,29 +18,21 @@ from prisma import Prisma
 router = APIRouter(prefix="/backups", tags=["Backups"])
 
 def get_backup_service(db: Prisma = Depends(get_db)) -> BackupService:
-    """Get BackupService instance"""
     return BackupService(db)
 
 @router.get("/", response_model=BackupListResponse)
 async def get_backups(
-    page: int = Query(1, ge=1, description="หน้าที่ต้องการ"),
-    page_size: int = Query(20, ge=1, le=100, description="จำนวนรายการต่อหน้า"),
-    status: Optional[str] = Query(None, description="กรองตามสถานะ"),
-    search: Optional[str] = Query(None, description="ค้นหาจาก backup_name, description"),
-    policy_id: Optional[str] = Query(None, description="กรองตาม Policy ID"),
-    os_id: Optional[str] = Query(None, description="กรองตาม OS ID"),
-    auto_backup: Optional[bool] = Query(None, description="กรองตาม auto_backup"),
-    include_usage: bool = Query(False, description="รวมจำนวนการใช้งาน"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Number of items per page"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    search: Optional[str] = Query(None, description="Search by backup_name, description"),
+    policy_id: Optional[str] = Query(None, description="Filter by Policy ID"),
+    os_id: Optional[str] = Query(None, description="Filter by OS ID"),
+    auto_backup: Optional[bool] = Query(None, description="Filter by auto_backup"),
+    include_usage: bool = Query(False, description="Include usage count"),
     current_user: Dict[str, Any] = Depends(get_current_user),
     backup_svc: BackupService = Depends(get_backup_service)
 ):
-    """
-    ดึงรายการ Backup ทั้งหมด
-    
-    - รองรับ pagination และ filter หลายแบบ
-    - แสดงข้อมูล Policy และ OS ที่เชื่อมโยง
-    - ต้องเป็น authenticated user
-    """
     try:
         backups, total = await backup_svc.get_backups(
             page=page,
@@ -63,24 +55,23 @@ async def get_backups(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการดึงรายการ Backup: {str(e)}"
+            detail=f"Error in get_backups: {str(e)}"
         )
 
 @router.get("/{backup_id}", response_model=BackupResponse)
 async def get_backup(
     backup_id: str,
-    include_usage: bool = Query(False, description="รวมจำนวนการใช้งาน"),
+    include_usage: bool = Query(False, description="Include usage count"),
     current_user: Dict[str, Any] = Depends(get_current_user),
     backup_svc: BackupService = Depends(get_backup_service)
 ):
-    """ดึงข้อมูล Backup ตาม ID"""
     try:
         backup = await backup_svc.get_backup_by_id(backup_id, include_usage=include_usage)
         
         if not backup:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="ไม่พบ Backup ที่ต้องการ"
+                detail="Backup not found"
             )
         
         return backup
@@ -90,7 +81,7 @@ async def get_backup(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการดึงข้อมูล Backup: {str(e)}"
+            detail=f"Error in get_backup: {str(e)}"
         )
 
 @router.post("/", response_model=BackupCreateResponse, status_code=status.HTTP_201_CREATED)
@@ -99,12 +90,11 @@ async def create_backup(
     current_user: Dict[str, Any] = Depends(get_current_user),
     backup_svc: BackupService = Depends(get_backup_service)
 ):
-    """สร้าง Backup ใหม่ (ENGINEER+)"""
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="ไม่มีสิทธิ์สร้าง Backup ต้องเป็น ENGINEER, ADMIN หรือ OWNER"
+                detail="You do not have permission to create a backup"
             )
 
         backup = await backup_svc.create_backup(backup_data)
@@ -112,11 +102,11 @@ async def create_backup(
         if not backup:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถสร้าง Backup ได้"
+                detail="Error in create_backup"
             )
 
         return BackupCreateResponse(
-            message="สร้าง Backup สำเร็จ",
+            message="Backup created successfully",
             backup=backup
         )
 
@@ -130,7 +120,7 @@ async def create_backup(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการสร้าง Backup: {str(e)}"
+            detail=f"Error in create_backup: {str(e)}"
         )
 
 @router.put("/{backup_id}", response_model=BackupUpdateResponse)
@@ -140,12 +130,11 @@ async def update_backup(
     current_user: Dict[str, Any] = Depends(get_current_user),
     backup_svc: BackupService = Depends(get_backup_service)
 ):
-    """อัปเดต Backup (ENGINEER+)"""
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="ไม่มีสิทธิ์แก้ไข Backup ต้องเป็น ENGINEER, ADMIN หรือ OWNER"
+                detail="You do not have permission to update a backup"
             )
 
         backup = await backup_svc.update_backup(backup_id, update_data)
@@ -153,11 +142,11 @@ async def update_backup(
         if not backup:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถอัปเดต Backup ได้"
+                detail="Error in update_backup"
             )
 
         return BackupUpdateResponse(
-            message="อัปเดต Backup สำเร็จ",
+            message="Backup updated successfully",
             backup=backup
         )
 
@@ -171,29 +160,28 @@ async def update_backup(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการอัปเดต Backup: {str(e)}"
+            detail=f"Error in update_backup: {str(e)}"
         )
 
 @router.delete("/{backup_id}", response_model=BackupDeleteResponse)
 async def delete_backup(
     backup_id: str,
-    force: bool = Query(False, description="บังคับลบแม้มีการใช้งาน"),
+    force: bool = Query(False, description="Force delete even if in use"),
     current_user: Dict[str, Any] = Depends(get_current_user),
     backup_svc: BackupService = Depends(get_backup_service)
 ):
-    """ลบ Backup (ADMIN+)"""
     try:
         if force:
             if current_user["role"] != "OWNER":
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="การลบแบบบังคับต้องเป็น OWNER เท่านั้น"
+                    detail="You do not have permission to delete a backup"
                 )
         else:
             if current_user["role"] not in ["ADMIN", "OWNER"]:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="ไม่มีสิทธิ์ลบ Backup ต้องเป็น ADMIN หรือ OWNER"
+                    detail="You do not have permission to delete a backup"
                 )
 
         success = await backup_svc.delete_backup(backup_id, force=force)
@@ -201,11 +189,11 @@ async def delete_backup(
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถลบ Backup ได้"
+                detail="Error in delete_backup"
             )
 
         return BackupDeleteResponse(
-            message="ลบ Backup สำเร็จ"
+            message="Backup deleted successfully"
         )
 
     except ValueError as e:
@@ -218,6 +206,6 @@ async def delete_backup(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการลบ Backup: {str(e)}"
+            detail=f"Error in delete_backup: {str(e)}"
         )
 

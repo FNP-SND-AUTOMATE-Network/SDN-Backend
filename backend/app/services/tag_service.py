@@ -89,7 +89,7 @@ class TagService:
         search: Optional[str] = None,
         include_usage: bool = False
     ) -> tuple[List[TagResponse], int]:
-        """ดึงรายการ Tag ทั้งหมด พร้อม pagination และ filter"""
+        #ดึงรายการ Tag ทั้งหมด พร้อม pagination และ filter
         try:
             # สร้าง filter conditions
             where_conditions: Dict[str, Any] = {}
@@ -151,7 +151,7 @@ class TagService:
             return [], 0
 
     async def get_tag_by_id(self, tag_id: str, include_usage: bool = False) -> Optional[TagResponse]:
-        """ดึงข้อมูล Tag ตาม ID"""
+        #ดึงข้อมูล Tag ตาม ID
         try:
             include_options = {}
             if include_usage:
@@ -192,7 +192,7 @@ class TagService:
             return None
 
     async def get_tag_usage(self, tag_id: str) -> Optional[TagUsageResponse]:
-        """ดึงข้อมูลการใช้งาน Tag โดยละเอียด"""
+        #ดึงข้อมูลการใช้งาน Tag โดยละเอียด
         try:
             tag = await self.prisma.tag.find_unique(
                 where={"tag_id": tag_id},
@@ -324,7 +324,7 @@ class TagService:
             return None
 
     async def delete_tag(self, tag_id: str, force: bool = False) -> bool:
-        """ลบ Tag"""
+        #ลบ Tag
         try:
             # ตรวจสอบว่า tag มีอยู่หรือไม่
             existing_tag = await self.prisma.tag.find_unique(

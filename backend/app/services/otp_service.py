@@ -13,17 +13,17 @@ class OtpService:
         self.resend_api_url = os.getenv("RESEND_URL")
     
     async def generate_otp(self) -> str:
-        """สร้าง OTP 6 หลัก"""
+        #สร้าง OTP 6 หลัก
         return str(secrets.randbelow(900000) + 100000)
     
     def hash_otp(self, otp: str) -> str:
-        """เข้ารหัส OTP"""
+        #เข้ารหัส OTP
         return hashlib.sha256(otp.encode()).hexdigest()
     
     async def create_otp_record(self, email: str, purpose: str = "VERIFY_EMAIL") -> tuple[str, datetime]:
-        """สร้าง OTP record ในฐานข้อมูล"""
+        #สร้าง OTP record ในฐานข้อมูล
         
-        # ลบ OTP เก่าที่หมดอายุแล้ว
+        #ลบ OTP เก่าที่หมดอายุแล้ว
         await self.prisma.emailotp.delete_many(
             where={
                 "expiresAt": {"lt": datetime.now()},
@@ -31,12 +31,12 @@ class OtpService:
             }
         )
         
-        # สร้าง OTP ใหม่
+        #สร้าง OTP ใหม่
         otp_code = await self.generate_otp()
         otp_hash = self.hash_otp(otp_code)
-        expires_at = datetime.now() + timedelta(minutes=10)  # หมดอายุใน 10 นาที
+        expires_at = datetime.now() + timedelta(minutes=10)  #หมดอายุใน 10 นาที
         
-        # หา user จาก email (ควรมีอยู่แล้วจากขั้นตอน register)
+        #หา user จาก email (ควรมีอยู่แล้วจากขั้นตอน register)
         user = await self.prisma.user.find_unique(where={"email": email})
         
         if not user:
@@ -55,9 +55,9 @@ class OtpService:
         return otp_code, expires_at
     
     async def verify_otp(self, email: str, otp_code: str, purpose: str = "VERIFY_EMAIL") -> Optional[str]:
-        """ตรวจสอบ OTP และคืนค่า user_id ถ้าถูกต้อง"""
+        #ตรวจสอบ OTP และคืนค่า user_id ถ้าถูกต้อง
         
-        # หา user จาก email
+        #หา user จาก email
         user = await self.prisma.user.find_unique(where={"email": email})
         if not user:
             return None
@@ -86,11 +86,11 @@ class OtpService:
         return user.id
     
     async def send_otp_email(self, email: str, otp_code: str, name: str, surname: str) -> bool:
-        """ส่ง OTP ผ่าน email"""
+        #ส่ง OTP ผ่าน email
         try:
             import requests
             
-            # ตรวจสอบ API key
+            #ตรวจสอบ API key
             if not self.resend_api_key:
                 print("ERROR: RESEND_API_KEY is not set!")
                 return False
@@ -155,7 +155,7 @@ class OtpService:
             return False
     
     async def cleanup_expired_otps(self):
-        """ลบ OTP ที่หมดอายุแล้ว"""
+        #ลบ OTP ที่หมดอายุแล้ว
         await self.prisma.emailotp.delete_many(
             where={"expiresAt": {"lt": datetime.now()}}
         )

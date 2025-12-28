@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/device-networks", tags=["Device Networks"])
 
 def get_device_service(db: Prisma = Depends(get_db)) -> DeviceNetworkService:
-    """Get DeviceNetworkService instance"""
     return DeviceNetworkService(db)
 
 @router.get("/", response_model=DeviceNetworkListResponse)
@@ -40,15 +39,6 @@ async def get_devices(
     current_user: Dict[str, Any] = Depends(get_current_user),
     device_svc: DeviceNetworkService = Depends(get_device_service)
 ):
-    """
-    ดึงรายการ Device Network ทั้งหมด
-    
-    - รองรับ pagination
-    - รองรับ filter หลายแบบ (type, status, os, tag, site, policy)
-    - รองรับการค้นหา
-    - แสดงข้อมูลที่เชื่อมโยงทั้งหมด
-    - ต้องเป็น authenticated user
-    """
     try:
         devices, total = await device_svc.get_devices(
             page=page,
@@ -71,7 +61,7 @@ async def get_devices(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการดึงรายการ Device Network: {str(e)}"
+            detail=f"Error getting device list: {str(e)}"
         )
 
 @router.get("/{device_id}", response_model=DeviceNetworkResponse)
@@ -80,19 +70,13 @@ async def get_device(
     current_user: Dict[str, Any] = Depends(get_current_user),
     device_svc: DeviceNetworkService = Depends(get_device_service)
 ):
-    """
-    ดึงข้อมูล Device Network ตาม ID
-    
-    - แสดงข้อมูลที่เชื่อมโยงทั้งหมด
-    - ต้องเป็น authenticated user
-    """
     try:
         device = await device_svc.get_device_by_id(device_id)
         
         if not device:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="ไม่พบ Device Network ที่ต้องการ"
+                detail="Device not found"
             )
         
         return device
@@ -102,7 +86,7 @@ async def get_device(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการดึงข้อมูล Device Network: {str(e)}"
+            detail=f"Error getting device: {str(e)}"
         )
 
 @router.post("/", response_model=DeviceNetworkCreateResponse, status_code=status.HTTP_201_CREATED)
@@ -111,18 +95,11 @@ async def create_device(
     current_user: Dict[str, Any] = Depends(get_current_user),
     device_svc: DeviceNetworkService = Depends(get_device_service)
 ):
-    """
-    สร้าง Device Network ใหม่
-    
-    - ต้องเป็น ENGINEER, ADMIN หรือ OWNER
-    - serial_number และ mac_address ต้องไม่ซ้ำ
-    - foreign keys ทั้งหมดเป็น optional
-    """
     try:
         if current_user["role"] not in ALLOWED_ROLES:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"ไม่มีสิทธิ์สร้าง Device Network ต้องเป็น {', '.join(ALLOWED_ROLES)}"
+                detail=f"User role {current_user['role']} is not allowed to create device"
             )
 
         device = await device_svc.create_device(device_data)
@@ -130,11 +107,11 @@ async def create_device(
         if not device:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถสร้าง Device Network ได้"
+                detail="Error creating device"
             )
 
         return DeviceNetworkCreateResponse(
-            message="สร้าง Device Network สำเร็จ",
+            message="Device created successfully",
             device=device
         )
 
@@ -148,7 +125,7 @@ async def create_device(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการสร้าง Device Network: {str(e)}"
+            detail=f"Error creating device: {str(e)}"
         )
 
 @router.put("/{device_id}", response_model=DeviceNetworkUpdateResponse)
@@ -158,18 +135,11 @@ async def update_device(
     current_user: Dict[str, Any] = Depends(get_current_user),
     device_svc: DeviceNetworkService = Depends(get_device_service)
 ):
-    """
-    อัปเดต Device Network
-    
-    - ต้องเป็น ENGINEER, ADMIN หรือ OWNER
-    - สามารถอัปเดตบางฟิลด์ได้
-    - สามารถเปลี่ยน foreign keys ได้
-    """
     try:
         if current_user["role"] not in ALLOWED_ROLES:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"ไม่มีสิทธิ์แก้ไข Device Network ต้องเป็น {', '.join(ALLOWED_ROLES)}"
+                detail=f"User role {current_user['role']} is not allowed to update device"
             )
 
         device = await device_svc.update_device(device_id, update_data)
@@ -177,11 +147,11 @@ async def update_device(
         if not device:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถอัปเดต Device Network ได้"
+                detail="Error updating device"
             )
 
         return DeviceNetworkUpdateResponse(
-            message="อัปเดต Device Network สำเร็จ",
+            message="Device updated successfully",
             device=device
         )
 
@@ -195,7 +165,7 @@ async def update_device(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการอัปเดต Device Network: {str(e)}"
+            detail=f"Error updating device: {str(e)}"
         )
 
 @router.delete("/{device_id}", response_model=DeviceNetworkDeleteResponse)
@@ -204,16 +174,11 @@ async def delete_device(
     current_user: Dict[str, Any] = Depends(get_current_user),
     device_svc: DeviceNetworkService = Depends(get_device_service)
 ):
-    """
-    ลบ Device Network
-    
-    - ต้องเป็น ADMIN หรือ OWNER
-    """
     try:
         if current_user["role"] not in ["ADMIN", "OWNER"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="ไม่มีสิทธิ์ลบ Device Network ต้องเป็น ADMIN หรือ OWNER"
+                detail="User role {current_user['role']} is not allowed to delete device"
             )
 
         success = await device_svc.delete_device(device_id)
@@ -221,11 +186,11 @@ async def delete_device(
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถลบ Device Network ได้"
+                detail="Error deleting device"
             )
 
         return DeviceNetworkDeleteResponse(
-            message="ลบ Device Network สำเร็จ"
+            message="Device deleted successfully"
         )
 
     except ValueError as e:
@@ -238,7 +203,7 @@ async def delete_device(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการลบ Device Network: {str(e)}"
+            detail=f"Error deleting device: {str(e)}"
         )
 
 # ========= Tag Management Endpoints =========
@@ -250,17 +215,11 @@ async def assign_tags_to_device(
     current_user: Dict[str, Any] = Depends(get_current_user),
     device_svc: DeviceNetworkService = Depends(get_device_service)
 ):
-    """
-    เพิ่ม Tags ให้กับ Device
-    
-    - ต้องเป็น ENGINEER, ADMIN หรือ OWNER
-    - สามารถเพิ่มหลาย tags พร้อมกันได้
-    """
     try:
         if current_user["role"] not in ALLOWED_ROLES:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"ไม่มีสิทธิ์จัดการ Tags ต้องเป็น {', '.join(ALLOWED_ROLES)}"
+                detail=f"User role {current_user['role']} is not allowed to assign tags to device"
             )
 
         device = await device_svc.assign_tags(device_id, tag_assignment.tag_ids)
@@ -268,11 +227,11 @@ async def assign_tags_to_device(
         if not device:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถเพิ่ม Tags ได้"
+                detail="Error assigning tags to device"
             )
 
         return DeviceNetworkUpdateResponse(
-            message=f"เพิ่ม {len(tag_assignment.tag_ids)} Tags สำเร็จ",
+            message=f"Assign {len(tag_assignment.tag_ids)} tags to device successfully",
             device=device
         )
 
@@ -286,7 +245,7 @@ async def assign_tags_to_device(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการเพิ่ม Tags: {str(e)}"
+            detail=f"Error assigning tags to device: {str(e)}"
         )
 
 @router.delete("/{device_id}/tags", response_model=DeviceNetworkUpdateResponse)
@@ -296,17 +255,11 @@ async def remove_tags_from_device(
     current_user: Dict[str, Any] = Depends(get_current_user),
     device_svc: DeviceNetworkService = Depends(get_device_service)
 ):
-    """
-    ลบ Tags ออกจาก Device
-    
-    - ต้องเป็น ENGINEER, ADMIN หรือ OWNER
-    - สามารถลบหลาย tags พร้อมกันได้
-    """
     try:
         if current_user["role"] not in ALLOWED_ROLES:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"ไม่มีสิทธิ์จัดการ Tags ต้องเป็น {', '.join(ALLOWED_ROLES)}"
+                detail=f"User role {current_user['role']} is not allowed to remove tags from device"
             )
 
         device = await device_svc.remove_tags(device_id, tag_assignment.tag_ids)
@@ -314,11 +267,11 @@ async def remove_tags_from_device(
         if not device:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถลบ Tags ได้"
+                detail="Error removing tags from device"
             )
 
         return DeviceNetworkUpdateResponse(
-            message=f"ลบ {len(tag_assignment.tag_ids)} Tags สำเร็จ",
+            message=f"Remove {len(tag_assignment.tag_ids)} tags from device successfully",
             device=device
         )
 
@@ -332,6 +285,6 @@ async def remove_tags_from_device(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการลบ Tags: {str(e)}"
+            detail=f"Error removing tags from device: {str(e)}"
         )
 

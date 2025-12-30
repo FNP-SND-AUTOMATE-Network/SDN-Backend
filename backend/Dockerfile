@@ -27,8 +27,8 @@ COPY prisma_client.py .
 COPY .env .
 COPY entrypoint.sh .
 
-# Make entrypoint script executable
-RUN chmod +x entrypoint.sh
+# Fix line endings (Windows CRLF to Unix LF) and make executable
+RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
 
 EXPOSE 8000
 CMD ["./entrypoint.sh"]

@@ -27,6 +27,7 @@ enum Role {
 enum OtpPurpose {
   VERIFY_EMAIL
   LOGIN
+  RESET_PASSWORD
 }
 
 enum AuditAction {
@@ -211,9 +212,9 @@ model DeviceNetwork {
   policy                 Policy?                @relation(fields: [policy_id], references: [id], onDelete: SetNull)
   backup                 Backup?                @relation(fields: [backup_id], references: [id], onDelete: SetNull)
   localSite              LocalSite?             @relation(fields: [local_site_id], references: [id], onDelete: SetNull)
-  
+
   // Many-to-Many relation with Tags
-  tags                   Tag[]
+  tags Tag[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -225,15 +226,15 @@ model DeviceNetwork {
 
 // ========= Interface (Network Interfaces) =========
 model Interface {
-  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name             String           // เช่น GigabitEthernet0/1, eth0, Vlan10
-  device_id        String           @db.Uuid
-  device           DeviceNetwork    @relation(fields: [device_id], references: [id], onDelete: Cascade)
-  label            String?          // ชื่อย่อหรือป้ายกำกับ
-  status           InterfaceStatus  @default(DOWN)
-  type             InterfaceType    @default(PHYSICAL)
-  description      String?
-  
+  id          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String // เช่น GigabitEthernet0/1, eth0, Vlan10
+  device_id   String          @db.Uuid
+  device      DeviceNetwork   @relation(fields: [device_id], references: [id], onDelete: Cascade)
+  label       String? // ชื่อย่อหรือป้ายกำกับ
+  status      InterfaceStatus @default(DOWN)
+  type        InterfaceType   @default(PHYSICAL)
+  description String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -283,34 +284,34 @@ model OperatingSystem {
   deviceNetworks DeviceNetwork[]
   backups        Backup[]
   files          OSFile[]
-  
+
   // Many-to-Many relation with Tags
-  tags           Tag[]
-  
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  tags Tag[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([os_name])
 }
 
 // ========= OS File (สำหรับเก็บไฟล์ OS images) =========
 model OSFile {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  os_id        String   @db.Uuid
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  os_id           String          @db.Uuid
   operatingSystem OperatingSystem @relation(fields: [os_id], references: [id], onDelete: Cascade)
-  
-  file_name    String   // ชื่อไฟล์ต้นฉบับ
-  file_path    String   // Path ในระบบ (สำหรับ local storage) หรือ URL (สำหรับ cloud)
-  file_size    BigInt   // ขนาดไฟล์ (bytes)
-  file_type    String?  // MIME type (เช่น application/octet-stream)
-  version      String?  // Version ของ OS (15.7, 17.3)
-  checksum     String?  // MD5 หรือ SHA256 checksum สำหรับตรวจสอบความถูกต้อง
-  
-  uploaded_by  String?  @db.Uuid
-  uploadedByUser User?  @relation(fields: [uploaded_by], references: [id], onDelete: SetNull)
-  
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+
+  file_name String // ชื่อไฟล์ต้นฉบับ
+  file_path String // Path ในระบบ (สำหรับ local storage) หรือ URL (สำหรับ cloud)
+  file_size BigInt // ขนาดไฟล์ (bytes)
+  file_type String? // MIME type (เช่น application/octet-stream)
+  version   String? // Version ของ OS (15.7, 17.3)
+  checksum  String? // MD5 หรือ SHA256 checksum สำหรับตรวจสอบความถูกต้อง
+
+  uploaded_by    String? @db.Uuid
+  uploadedByUser User?   @relation(fields: [uploaded_by], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([os_id])
   @@index([version])
@@ -442,12 +443,12 @@ model ConfigurationTemplate {
   template_type TemplateType @default(OTHER)
 
   deviceNetworks DeviceNetwork[]
-  
+
   // Many-to-Many relation with Tags
-  tags           Tag[]
-  
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  tags Tag[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([template_name])
 }

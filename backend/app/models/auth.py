@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, validator
+from pydantic import BaseModel, EmailStr, validator, Field
 from typing import Optional
 from datetime import datetime
 
@@ -148,4 +148,34 @@ class TotpVerifyOtpRequest(BaseModel):
 # TOTP Disable Request
 class TotpDisableRequest(BaseModel):
     password: str
+
+
+# Forgot Password Request
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+# Forgot Password Response
+class ForgotPasswordResponse(BaseModel):
+    message: str
+    email: str
+    expires_at: datetime
+
+
+# Reset Password Request
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    otp_code: str
+    new_password: str = Field(..., min_length=8, description="รหัสผ่านใหม่ขั้นต่ำ 8 ตัวอักษร")
+    
+    @validator('otp_code')
+    def validate_otp_code(cls, v):
+        if not v.isdigit() or len(v) != 6:
+            raise ValueError('OTP ต้องเป็นตัวเลข 6 หลัก')
+        return v
+
+
+# Reset Password Response
+class ResetPasswordResponse(BaseModel):
+    message: str
 

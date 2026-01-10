@@ -2,7 +2,8 @@ from fastapi import APIRouter, HTTPException, status, Request
 from app.models.auth import (
     RegisterRequest, RegisterResponse, VerifyOtpRequest, VerifyOtpResponse, 
     ResendOtpRequest, ResendOtpResponse, LoginRequest, LoginResponse, ErrorResponse,
-    TotpSetupResponse, TotpVerifyRequest, TotpDisableRequest, VerifyTotpLoginRequest
+    TotpSetupResponse, TotpVerifyRequest, TotpDisableRequest, VerifyTotpLoginRequest,
+    ForgotPasswordRequest, ForgotPasswordResponse, ResetPasswordRequest, ResetPasswordResponse
 )
 from app.services.otp_service import OtpService
 from app.services.user_service import UserService
@@ -422,7 +423,7 @@ async def verify_totp_login(request: VerifyTotpLoginRequest):
                 print(f"[DEBUG] No user_id in token")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="ไม่พบข้อมูลผู้ใช้ใน Token"
+                    detail="Invalid Token"
                 )
             
             print(f"[DEBUG] Getting user by id: {user_id}")
@@ -432,7 +433,7 @@ async def verify_totp_login(request: VerifyTotpLoginRequest):
                 print(f"[DEBUG] User not found")
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="ไม่พบข้อมูลผู้ใช้"
+                    detail="User not found"
                 )
             
             print(f"[DEBUG] Getting TOTP secret for user")
@@ -442,7 +443,7 @@ async def verify_totp_login(request: VerifyTotpLoginRequest):
                 print(f"[DEBUG] No TOTP secret found")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="ไม่พบการตั้งค่า TOTP สำหรับผู้ใช้นี้"
+                    detail="TOTP not found"
                 )
             
             print(f"[DEBUG] Verifying TOTP code")
@@ -453,7 +454,7 @@ async def verify_totp_login(request: VerifyTotpLoginRequest):
             if not is_valid:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="รหัส TOTP ไม่ถูกต้องหรือหมดอายุแล้ว กรุณาลองใหม่อีกครั้ง"
+                    detail=" 2FA 6-digit code expired or incorrect please try again "
                 )
             
             print(f"[DEBUG] Creating access token")
@@ -477,7 +478,7 @@ async def verify_totp_login(request: VerifyTotpLoginRequest):
             
             print(f"[DEBUG] Login successful")
             return LoginResponse(
-                message="เข้าสู่ระบบสำเร็จ",
+                message="Login successful",
                 access_token=access_token,
                 token_type="bearer",
                 user_id=user["id"],
@@ -495,7 +496,7 @@ async def verify_totp_login(request: VerifyTotpLoginRequest):
             print(f"[ERROR] {error_detail}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token ไม่ถูกต้องหรือหมดอายุแล้ว"
+                detail="Token expired or invalid"
             )
 
             
@@ -505,7 +506,7 @@ async def verify_totp_login(request: VerifyTotpLoginRequest):
         print(f"Error in verify_totp_login: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการยืนยัน TOTP: {str(e)}"
+            detail=f"Error in verify_totp_login: {str(e)}"
         )
 
 
@@ -523,7 +524,7 @@ async def disable_totp(
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="รหัสผ่านไม่ถูกต้อง"
+                detail="Invalid password"
             )
         
         # ปิดการใช้งาน
@@ -532,7 +533,7 @@ async def disable_totp(
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ไม่สามารถปิดใช้งาน TOTP ได้"
+                detail="Error in disable_totp"
             )
             
         # Audit Log (ไม่ให้ audit error หยุดการทำงานหลัก)
@@ -546,7 +547,7 @@ async def disable_totp(
             print(f"Error creating audit log: {audit_error}")
             # ไม่ให้ audit error หยุดการทำงานหลัก
         
-        return {"message": "ปิดใช้งาน TOTP เรียบร้อยแล้ว"}
+        return {"message": "2FA disabled successfully"}
         
     except HTTPException:
         raise
@@ -556,5 +557,136 @@ async def disable_totp(
         print(error_detail)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการปิดใช้งาน TOTP: {str(e)}"
+            detail=f"Error in disable_totp: {str(e)}"
+        )
+
+
+# ========= Forgot Password Endpoints =========
+
+@router.post("/forgot-password", response_model=ForgotPasswordResponse)
+async def forgot_password(request: ForgotPasswordRequest):
+    try:
+        otp_svc, user_svc, audit_svc, _ = get_services()
+        
+        # ตรวจสอบว่า email มีอยู่ในระบบหรือไม่
+        user = await user_svc.get_user_by_email(request.email)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        
+        # สร้าง OTP สำหรับรีเซ็ตรหัสผ่าน
+        otp_code, expires_at = await otp_svc.create_otp_record(
+            request.email, 
+            purpose="RESET_PASSWORD"
+        )
+        
+        # ส่ง OTP ผ่านอีเมล
+        email_sent = await otp_svc.send_otp_email(
+            request.email, 
+            otp_code, 
+            user.get("name", ""), 
+            user.get("surname", ""),
+            purpose="RESET_PASSWORD"
+        )
+        
+        if not email_sent:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Error in forgot_password: Email not sent"
+            )
+        
+        # Audit Log
+        try:
+            await audit_svc.create_audit_log(
+                actor_user_id=user["id"],
+                action="PASSWORD_RESET",
+                details={"step": "request", "email": request.email}
+            )
+        except Exception as audit_error:
+            print(f"Error creating audit log: {audit_error}")
+        
+        return ForgotPasswordResponse(
+            message="Email sent successfully",
+            email=request.email,
+            expires_at=expires_at
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error in forgot_password: {str(e)}"
+        )
+
+
+@router.post("/reset-password", response_model=ResetPasswordResponse)
+async def reset_password(request: ResetPasswordRequest):
+    try:
+        otp_svc, user_svc, audit_svc, _ = get_services()
+        
+        # ตรวจสอบ OTP
+        user_id = await otp_svc.verify_otp(
+            request.email, 
+            request.otp_code, 
+            purpose="RESET_PASSWORD"
+        )
+        
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid OTP code"
+            )
+        
+        # ดึงข้อมูล user
+        user = await user_svc.get_user_by_id(user_id)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        
+        # เข้ารหัสรหัสผ่านใหม่
+        new_hashed_password = user_svc.hash_password(request.new_password)
+        
+        # อัปเดตรหัสผ่าน
+        prisma_client = get_prisma_client()
+        await prisma_client.user.update(
+            where={"id": user_id},
+            data={
+                "password": new_hashed_password,
+                "updatedAt": datetime.now()
+            }
+        )
+        
+        # ลบ OTP ที่เกี่ยวข้องทั้งหมด (ป้องกันการใช้ซ้ำ)
+        await prisma_client.emailotp.delete_many(
+            where={
+                "userId": user_id,
+                "purpose": "RESET_PASSWORD"
+            }
+        )
+        
+        # Audit Log
+        try:
+            await audit_svc.create_audit_log(
+                actor_user_id=user_id,
+                action="PASSWORD_RESET",
+                details={"step": "completed", "email": request.email}
+            )
+        except Exception as audit_error:
+            print(f"Error creating audit log: {audit_error}")
+        
+        return ResetPasswordResponse(
+            message="Password reset successfully"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error in reset_password: {str(e)}"
         )

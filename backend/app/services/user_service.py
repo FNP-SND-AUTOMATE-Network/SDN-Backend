@@ -473,29 +473,3 @@ class UserService:
         except Exception as e:
             print(f"Error changing password: {e}")
             raise e
-    
-    async def reset_user_password_by_admin(self, user_id: str, new_password: str) -> bool:
-        #รีเซ็ตรหัสผ่าน user โดย admin (ไม่ต้องตรวจสอบรหัสผ่านเก่า)
-        try:
-            # ตรวจสอบว่า user มีอยู่จริง
-            user = await self.prisma.user.find_unique(where={"id": user_id})
-            if not user:
-                raise ValueError("ไม่พบผู้ใช้งาน")
-            
-            # เข้ารหัสรหัสผ่านใหม่
-            new_hashed_password = self.hash_password(new_password)
-            
-            # อัปเดตรหัสผ่าน
-            await self.prisma.user.update(
-                where={"id": user_id},
-                data={
-                    "password": new_hashed_password,
-                    "updatedAt": datetime.now()
-                }
-            )
-            
-            return True
-            
-        except Exception as e:
-            print(f"Error resetting password by admin: {e}")
-            raise e

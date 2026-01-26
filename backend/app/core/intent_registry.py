@@ -15,6 +15,7 @@ class IntentCategory(str, Enum):
     SHOW = "show"
     VLAN = "vlan"
     ACL = "acl"
+    DEVICE = "device"  # Device management (mount/unmount)
 
 
 @dataclass
@@ -279,6 +280,38 @@ class IntentRegistry:
         required_params=[],
     )
     
+    # ===== DEVICE MANAGEMENT INTENTS =====
+    DEVICE_MOUNT = IntentDefinition(
+        name="device.mount",
+        category=IntentCategory.DEVICE,
+        description="Mount NETCONF device to ODL",
+        required_params=["host", "username", "password"],
+        optional_params=["port", "tcp_only", "keepalive_delay", "connection_timeout", "default_request_timeout"],
+    )
+    
+    DEVICE_UNMOUNT = IntentDefinition(
+        name="device.unmount",
+        category=IntentCategory.DEVICE,
+        description="Unmount NETCONF device from ODL",
+        required_params=[],
+    )
+    
+    DEVICE_STATUS = IntentDefinition(
+        name="device.status",
+        category=IntentCategory.DEVICE,
+        description="Get NETCONF device connection status",
+        required_params=[],
+        is_read_only=True,
+    )
+    
+    DEVICE_LIST = IntentDefinition(
+        name="device.list",
+        category=IntentCategory.DEVICE,
+        description="List all mounted NETCONF devices",
+        required_params=[],
+        is_read_only=True,
+    )
+    
     # ===== VLAN INTENTS (Future) =====
     VLAN_CREATE = IntentDefinition(
         name="vlan.create",
@@ -412,6 +445,12 @@ class Intents:
         SET_NTP = "system.set_ntp"
         SET_DNS = "system.set_dns"
         SAVE_CONFIG = "system.save_config"
+    
+    class DEVICE:
+        MOUNT = "device.mount"
+        UNMOUNT = "device.unmount"
+        STATUS = "device.status"
+        LIST = "device.list"
     
     class VLAN:
         CREATE = "vlan.create"

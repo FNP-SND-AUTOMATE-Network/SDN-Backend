@@ -27,6 +27,13 @@ from app.drivers.cisco.system import CiscoSystemDriver
 from app.drivers.openconfig.routing import OpenConfigRoutingDriver
 from app.drivers.cisco.routing import CiscoRoutingDriver
 
+# VLAN Drivers
+from app.drivers.openconfig.vlan import OpenConfigVlanDriver
+from app.drivers.cisco.vlan import CiscoVlanDriver
+
+# Device Driver (mount/unmount)
+from app.drivers.device import DeviceDriver
+
 
 class IntentService:
     """
@@ -69,6 +76,16 @@ class IntentService:
             "cisco": CiscoRoutingDriver(),
             # "huawei": HuaweiRoutingDriver(),  # TODO: add later
         }
+        
+        # VLAN drivers
+        self.vlan_drivers = {
+            "openconfig": OpenConfigVlanDriver(),
+            "cisco": CiscoVlanDriver(),
+            # "huawei": HuaweiVlanDriver(),  # TODO: add later
+        }
+        
+        # Device driver (mount/unmount)
+        self.device_driver = DeviceDriver()
     
     def _get_driver(self, intent: str, driver_name: str):
         """Get appropriate driver based on intent category"""
@@ -85,6 +102,9 @@ class IntentService:
         
         elif intent_def.category == IntentCategory.SYSTEM:
             return self.system_drivers.get(driver_name)
+        
+        elif intent_def.category == IntentCategory.VLAN:
+            return self.vlan_drivers.get(driver_name)
         
         elif intent_def.category == IntentCategory.SHOW:
             # Show intents - route to correct driver based on intent
@@ -114,6 +134,10 @@ class IntentService:
         if missing:
             raise UnsupportedIntent(f"Missing params: {', '.join(missing)}")
         
+        # Special handling for DEVICE category (no device profile needed for some operations)
+        if intent_def.category == IntentCategory.DEVICE:
+            return await self._handle_device_intent(req)
+        
         # Step 3: Get device profile
         device = self.device_profiles.get(req.deviceId)
         
@@ -140,6 +164,71 @@ class IntentService:
                 return await self._execute(req, device, decision.strategy_used, decision.fallback_driver)
 
             raise
+
+    async def _handle_device_intent(self, req: IntentRequest) -> IntentResponse:
+        """
+        Handle device management intents (mount/unmount/status/list)
+        These don't require device profile lookup
+        """
+        node_id = req.deviceId  # deviceId is used as node_id for ODL
+        
+        if req.intent == Intents.DEVICE.MOUNT:
+            spec = self.device_driver.build_mount(node_id, req.params)
+        elif req.intent == Intents.DEVICE.UNMOUNT:
+            spec = self.device_driver.build_unmount(node_id)
+        elif req.intent == Intents.DEVICE.STATUS:
+            spec = self.device_driver.build_get_status(node_id)
+        elif req.intent == Intents.DEVICE.LIST:
+            spec = self.device_driver.build_list_devices()
+        else:
+            raise UnsupportedIntent(f"Unknown device intent: {req.intent}")
+        
+        logger.info(f"Device Intent: {req.intent}, Node: {node_id}")
+        logger.debug(f"RequestSpec: {spec.method} {spec.path}")
+        
+        # Send to ODL
+        raw = await self.client.send(spec)
+        
+        # Normalize device status response
+        result = self._normalize_device_response(req.intent, raw)
+        
+        return IntentResponse(
+            success=True,
+            intent=req.intent,
+            deviceId=req.deviceId,
+            strategy_used="direct",
+            driver_used="device",
+            result=result
+        )
+    
+    def _normalize_device_response(self, intent: str, raw: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize device management responses"""
+        if intent == Intents.DEVICE.STATUS:
+            # Extract connection status from response
+            node = raw.get("node", [{}])[0] if "node" in raw else raw
+            return {
+                "node_id": node.get("node-id", ""),
+                "connection_status": node.get("netconf-node-topology:connection-status", "unknown"),
+                "host": node.get("netconf-node-topology:host", ""),
+                "port": node.get("netconf-node-topology:port", 830),
+                "available_capabilities": node.get("netconf-node-topology:available-capabilities", {}).get("available-capability", [])
+            }
+        
+        if intent == Intents.DEVICE.LIST:
+            # Extract list of devices
+            topology = raw.get("network-topology:topology", [{}])[0] if "network-topology:topology" in raw else raw
+            nodes = topology.get("node", [])
+            devices = []
+            for n in nodes:
+                devices.append({
+                    "node_id": n.get("node-id", ""),
+                    "connection_status": n.get("netconf-node-topology:connection-status", "unknown"),
+                    "host": n.get("netconf-node-topology:host", ""),
+                    "port": n.get("netconf-node-topology:port", 830),
+                })
+            return {"devices": devices, "total": len(devices)}
+        
+        return raw
 
     async def _execute(self, req: IntentRequest, device, strategy_used: str, driver_name: str) -> IntentResponse:
         """Execute intent with specific driver"""

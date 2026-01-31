@@ -209,19 +209,19 @@ model DeviceNetwork {
   configuration_template_id String?      @db.Uuid
 
   // ========= NBI/ODL Fields =========
-  node_id                   String?      @unique  // ODL node-id ใน topology-netconf (ใช้สำหรับ Intent API)
-  vendor                    DeviceVendor @default(OTHER)  // Vendor สำหรับเลือก driver
-  default_strategy          IntentStrategy @default(OC_FIRST)  // Strategy สำหรับ Intent execution
-  odl_mounted               Boolean      @default(false)  // Mount status ใน ODL
-  odl_connection_status     String?      // ODL connection status (connected, connecting, unable-to-connect)
-  oc_supported_intents      Json?        // JSON map ของ intent -> boolean (รองรับ OpenConfig หรือไม่)
-  last_synced_at            DateTime?    // เวลาที่ sync ล่าสุดจาก ODL
+  node_id               String?             @unique // ODL node-id ใน topology-netconf (ใช้สำหรับ Intent API)
+  vendor                DeviceVendor        @default(OTHER) // Vendor สำหรับเลือก driver
+  default_strategy      IntentStrategy      @default(OC_FIRST) // Strategy สำหรับ Intent execution
+  odl_mounted           Boolean             @default(false) // Mount status ใน ODL
+  odl_connection_status OdlConnectionStatus @default(UNABLE_TO_CONNECT)
+  oc_supported_intents  Json? // JSON map ของ intent -> boolean (รองรับ OpenConfig หรือไม่)
+  last_synced_at        DateTime? // เวลาที่ sync ล่าสุดจาก ODL
 
   // ========= NETCONF Connection Fields (สำหรับ Mount) =========
-  netconf_host              String?      // IP/Hostname สำหรับ NETCONF connection
-  netconf_port              Int          @default(830)  // NETCONF port (default: 830, SSH)
-  netconf_username          String?      // Username สำหรับ NETCONF
-  netconf_password          String?      // Password สำหรับ NETCONF (encrypted)
+  netconf_host     String? // IP/Hostname สำหรับ NETCONF connection
+  netconf_port     Int     @default(830) // NETCONF port (default: 830, SSH)
+  netconf_username String? // Username สำหรับ NETCONF
+  netconf_password String? // Password สำหรับ NETCONF (encrypted)
 
   configuration_template ConfigurationTemplate? @relation(fields: [configuration_template_id], references: [id], onDelete: SetNull)
   operatingSystem        OperatingSystem?       @relation(fields: [os_id], references: [id], onDelete: SetNull)
@@ -262,10 +262,6 @@ enum OdlConnectionStatus {
   CONNECTED
   CONNECTING
   UNABLE_TO_CONNECT
-  OC_FIRST      // ลอง OpenConfig ก่อน fallback เป็น vendor-specific
-  VENDOR_FIRST  // ลอง vendor-specific ก่อน fallback เป็น OpenConfig
-  OC_ONLY       // ใช้ OpenConfig อย่างเดียว
-  VENDOR_ONLY   // ใช้ vendor-specific อย่างเดียว
 }
 
 // ========= Interface (Network Interfaces) =========

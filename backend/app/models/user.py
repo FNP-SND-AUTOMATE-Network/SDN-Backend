@@ -30,10 +30,6 @@ class UserChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str = Field(..., min_length=8, description="รหัสผ่านใหม่ขั้นต่ำ 8 ตัวอักษร")
 
-class UserResetPasswordRequest(BaseModel):
-    user_id: str
-    new_password: str = Field(..., min_length=8, description="รหัสผ่านใหม่ขั้นต่ำ 8 ตัวอักษร")
-
 # ========= User Response Models =========
 
 class UserResponse(BaseModel):

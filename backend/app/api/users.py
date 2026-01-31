@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, status, Depends, Query, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional, List
 from app.models.user import (
-    UserCreateRequest, UserUpdateRequest, UserChangePasswordRequest, UserResetPasswordRequest,
+    UserCreateRequest, UserUpdateRequest, UserChangePasswordRequest,
     UserResponse, UserDetailResponse, UserListResponse, 
     UserCreateResponse, UserUpdateResponse, UserDeleteResponse, PasswordChangeResponse,
     UserFilter, UserRole, ErrorResponse
@@ -511,83 +511,6 @@ async def change_password(
             detail=f"Error changing password: {str(e)}"
         )
 
-@router.post("/{user_id}/reset-password", response_model=PasswordChangeResponse)
-async def reset_password_by_admin(
-    user_id: str,
-    request: UserResetPasswordRequest,
-    current_user: dict = Depends(get_current_user),
-    req: Request = None
-):
-    try:
-        # ตรวจสอบสิทธิ์ admin
-        check_admin_permission(current_user)
-        
-        user_svc, audit_svc = get_services()
-        
-        # ตรวจสอบว่า user_id ใน path และ body ตรงกัน
-        if user_id != request.user_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="User ID does not match"
-            )
-        
-        # ดึงข้อมูล target user
-        target_user = await user_svc.get_user_by_id(user_id)
-        if not target_user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
-        # รีเซ็ตรหัสผ่าน
-        success = await user_svc.reset_user_password_by_admin(
-            user_id, 
-            request.new_password
-        )
-        
-        if not success:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Error resetting password"
-            )
-        
-        # สร้าง audit log
-        try:
-            client_ip = req.client.host if req else "unknown"
-            if req and "x-forwarded-for" in req.headers:
-                client_ip = req.headers["x-forwarded-for"].split(",")[0].strip()
-            elif req and "x-real-ip" in req.headers:
-                client_ip = req.headers["x-real-ip"]
-            
-            user_agent = req.headers.get("user-agent") if req else "unknown"
-            
-            await audit_svc.create_password_change_audit(
-                actor_user_id=current_user["id"],
-                target_user_id=user_id,
-                change_type="admin_reset",
-                ip_address=client_ip,
-                user_agent=user_agent
-            )
-        except Exception as audit_error:
-            print(f"Error creating audit log: {audit_error}")
-        
-        return PasswordChangeResponse(
-            message="Password reset successfully",
-            user_id=user_id
-        )
-        
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error resetting password: {str(e)}"
-        )
 
 # ========= Profile Endpoints =========
 

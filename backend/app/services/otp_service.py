@@ -85,28 +85,42 @@ class OtpService:
         
         return user.id
     
-    async def send_otp_email(self, email: str, otp_code: str, name: str, surname: str) -> bool:
-        #ส่ง OTP ผ่าน email
+    async def send_otp_email(self, email: str, otp_code: str, name: str, surname: str, purpose: str = "VERIFY_EMAIL") -> bool:
+        """ส่ง OTP ผ่าน email"""
         try:
             import requests
             
-            #ตรวจสอบ API key
+            # ตรวจสอบ API key
             if not self.resend_api_key:
                 print("ERROR: RESEND_API_KEY is not set!")
                 return False
+
+            # กำหนด subject และ content ตาม purpose
+            if purpose == "RESET_PASSWORD":
+                subject = "รีเซ็ตรหัสผ่าน - รหัส OTP"
+                title = "รีเซ็ตรหัสผ่าน"
+                greeting = f"สวัสดีครับ คุณ {name} {surname}"
+                message = "คุณได้ขอรีเซ็ตรหัสผ่าน กรุณาใช้รหัสยืนยันด้านล่างเพื่อตั้งรหัสผ่านใหม่:"
+                note_action = "หากคุณไม่ได้ขอรีเซ็ตรหัสผ่าน กรุณาเพิกเฉยต่ออีเมลนี้และเปลี่ยนรหัสผ่านของคุณทันที"
+            else:  # VERIFY_EMAIL
+                subject = "ยืนยันการสมัครสมาชิก - รหัส OTP"
+                title = "ยืนยันการสมัครสมาชิก"
+                greeting = f"สวัสดีครับ คุณ {name} {surname}"
+                message = "ขอบคุณที่สมัครสมาชิกกับเรา กรุณาใช้รหัสยืนยันด้านล่างเพื่อยืนยันการสมัครสมาชิก:"
+                note_action = "หากคุณไม่ได้สมัครสมาชิก กรุณาเพิกเฉยต่ออีเมลนี้"
 
             html_content = f"""
             <!DOCTYPE html>
             <html>
             <head>
                 <meta charset="UTF-8">
-                <title>ยืนยันการสมัครสมาชิก</title>
+                <title>{title}</title>
             </head>
             <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
                 <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-                    <h2 style="color: #2c3e50;">ยืนยันการสมัครสมาชิก</h2>
-                    <p>สวัสดีครับ คุณ {name} {surname}</p>
-                    <p>ขอบคุณที่สมัครสมาชิกกับเรา กรุณาใช้รหัสยืนยันด้านล่างเพื่อยืนยันการสมัครสมาชิก:</p>
+                    <h2 style="color: #2c3e50;">{title}</h2>
+                    <p>{greeting}</p>
+                    <p>{message}</p>
                     
                     <div style="background-color: #f8f9fa; border: 2px solid #dee2e6; border-radius: 8px; padding: 20px; text-align: center; margin: 20px 0;">
                         <h1 style="color: #007bff; font-size: 32px; margin: 0; letter-spacing: 5px;">{otp_code}</h1>
@@ -116,7 +130,7 @@ class OtpService:
                     <ul>
                         <li>รหัสนี้จะหมดอายุใน 10 นาที</li>
                         <li>ห้ามแชร์รหัสนี้กับผู้อื่น</li>
-                        <li>หากคุณไม่ได้สมัครสมาชิก กรุณาเพิกเฉยต่ออีเมลนี้</li>
+                        <li>{note_action}</li>
                     </ul>
                     
                     <p>หากมีข้อสงสัย กรุณาติดต่อทีม noppadol.p.promtas@gmail.com</p>
@@ -127,7 +141,6 @@ class OtpService:
             </html>
             """
             
-            # ใช้ Resend API โดยตรง
             url = self.resend_api_url  # fallback หาก env ไม่มี
             headers = {
                 "Authorization": f"Bearer {self.resend_api_key}",
@@ -136,7 +149,7 @@ class OtpService:
             data = {
                 "from": "support@notify.au-nongtota.com",  # ใช้ Resend test domain
                 "to": [email],
-                "subject": "ยืนยันการสมัครสมาชิก - รหัส OTP",
+                "subject": subject,
                 "html": html_content,
                 "reply_to": "support@notify.au-nongtota.com"
             }

@@ -17,6 +17,11 @@ services:
       - SECRET_KEY=${SECRET_KEY}
       - ALGORITHM=${ALGORITHM:-HS256}
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+      - PHPIPAM_BASE_URL=${PHPIPAM_BASE_URL}
+      - PHPIPAM_APP_ID=${PHPIPAM_APP_ID}
+      - PHPIPAM_USERNAME=${PHPIPAM_USERNAME}
+      - PHPIPAM_PASSWORD=${PHPIPAM_PASSWORD}
+      - PHPIPAM_ENABLED=${PHPIPAM_ENABLED:-true}
     env_file:
       - .env
     restart: unless-stopped
@@ -26,3 +31,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    networks:
+      - default
+      - phpipam
+
+networks:
+  phpipam:
+    external: true
+    name: phpipam-docker_default

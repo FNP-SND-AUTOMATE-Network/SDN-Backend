@@ -3,6 +3,7 @@ from app.models.configuration_template import (
     ConfigurationTemplateCreate,
     ConfigurationTemplateUpdate,
     ConfigurationTemplateResponse,
+    ConfigurationTemplateDetailResponse,
     RelatedTagInfoTemplate
 )
 
@@ -12,7 +13,13 @@ class ConfigurationTemplateService:
     def __init__(self, prisma_client):
         self.prisma = prisma_client
 
-    async def create_template(self, template_data: ConfigurationTemplateCreate) -> Optional[ConfigurationTemplateResponse]:
+    async def create_template(
+        self, 
+        template_data: ConfigurationTemplateCreate,
+        detail_content: Optional[str] = None,
+        detail_filename: Optional[str] = None,
+        detail_size: Optional[int] = None
+    ) -> Optional[ConfigurationTemplateResponse]:
         #สร้าง Configuration Template ใหม่
         try:
             # ตรวจสอบว่า template_name ซ้ำหรือไม่
@@ -22,32 +29,73 @@ class ConfigurationTemplateService:
             if existing_template:
                 raise ValueError(f"ชื่อ Template '{template_data.template_name}' มีอยู่ในระบบแล้ว")
 
-            # ถ้ามี tag_name ให้ตรวจสอบว่ามีอยู่จริง
-            if template_data.tag_name:
-                tag = await self.prisma.tag.find_unique(
-                    where={"tag_name": template_data.tag_name}
-                )
-                if not tag:
-                    raise ValueError(f"ไม่พบ Tag name: {template_data.tag_name}")
+            # Prepare creation data
+            create_data = {
+                "template_name": template_data.template_name,
+                "description": template_data.description,
+                "template_type": template_data.template_type.value
+            }
+
+            # Check and connect tags if provided (supports multiple tags)
+            if template_data.tag_names:
+                # Validate all tags exist
+                tag_connects = []
+                not_found_tags = []
+                for tag_name in template_data.tag_names:
+                    tag = await self.prisma.tag.find_unique(
+                        where={"tag_name": tag_name}
+                    )
+                    if not tag:
+                        not_found_tags.append(tag_name)
+                    else:
+                        tag_connects.append({"tag_name": tag_name})
+                
+                if not_found_tags:
+                    raise ValueError(f"ไม่พบ Tag names: {', '.join(not_found_tags)}")
+                
+                # Connect all existing tags
+                create_data["tags"] = {
+                    "connect": tag_connects
+                }
 
             # สร้าง Template
             template = await self.prisma.configurationtemplate.create(
-                data={
-                    "template_name": template_data.template_name,
-                    "description": template_data.description,
-                    "template_type": template_data.template_type.value,
-                    "tag_name": template_data.tag_name
-                },
-                include={"tag": True}
+                data=create_data,
+                include={"tags": True, "deviceNetworks": True, "detail": True}
             )
+            
+            # ถ้ามี detail content หรือ file ให้สร้าง detail
+            created_detail = None
+            if detail_content or detail_filename:
+                created_detail = await self.prisma.configurationtemplatedetail.create(
+                    data={
+                        "configuration_template_id": template.id,
+                        "config_content": detail_content,
+                        "file_name": detail_filename,
+                        "file_size": detail_size if detail_size else 0
+                    }
+                )
 
-            tag_info = None
-            if template.tag:
-                tag_info = RelatedTagInfoTemplate(
-                    tag_id=template.tag.tag_id,
-                    tag_name=template.tag.tag_name,
-                    color=template.tag.color,
-                    type=template.tag.type
+            # แปลง tags เป็น list
+            tags_info = []
+            if template.tags:
+                for tag in template.tags:
+                    tags_info.append(RelatedTagInfoTemplate(
+                        tag_id=tag.tag_id,
+                        tag_name=tag.tag_name,
+                        color=tag.color,
+                        type=tag.type
+                    ))
+            
+            # Prepare detail response
+            detail_resp = None
+            if created_detail:
+                 detail_resp = ConfigurationTemplateDetailResponse(
+                    id=created_detail.id,
+                    config_content=created_detail.config_content,
+                    file_name=created_detail.file_name,
+                    file_size=created_detail.file_size,
+                    updated_at=created_detail.updatedAt
                 )
 
             return ConfigurationTemplateResponse(
@@ -55,23 +103,23 @@ class ConfigurationTemplateService:
                 template_name=template.template_name,
                 description=template.description,
                 template_type=template.template_type,
-                tag_name=template.tag_name,
                 created_at=template.createdAt,
                 updated_at=template.updatedAt,
-                tag=tag_info,
-                device_count=0
+                tags=tags_info,
+                device_count=0,
+                detail=detail_resp
             )
 
         except Exception as e:
             print(f"Error creating template: {e}")
-            if "มีอยู่ในระบบแล้ว" in str(e) or "ไม่พบ Tag" in str(e):
+            if "มีอยู่ในระบบแล้ว" in str(e):
                 raise e
             return None
 
     async def get_templates(
         self,
         page: int = 1,
-        page_size: int = 20,
+        page_size: int = 8,
         template_type: Optional[str] = None,
         search: Optional[str] = None,
         tag_name: Optional[str] = None,
@@ -85,7 +133,9 @@ class ConfigurationTemplateService:
                 where_conditions["template_type"] = template_type
             
             if tag_name:
-                where_conditions["tag_name"] = tag_name
+                where_conditions["tags"] = {
+                    "some": {"tag_name": tag_name}
+                }
             
             if search:
                 where_conditions["OR"] = [
@@ -96,7 +146,7 @@ class ConfigurationTemplateService:
             total = await self.prisma.configurationtemplate.count(where=where_conditions)
             skip = (page - 1) * page_size
             
-            include_options: Dict[str, Any] = {"tag": True}
+            include_options: Dict[str, Any] = {"tags": True, "detail": True}
             if include_usage:
                 include_options["deviceNetworks"] = True
 
@@ -110,27 +160,38 @@ class ConfigurationTemplateService:
 
             template_responses = []
             for template in templates:
-                tag_info = None
-                if template.tag:
-                    tag_info = RelatedTagInfoTemplate(
-                        tag_id=template.tag.tag_id,
-                        tag_name=template.tag.tag_name,
-                        color=template.tag.color,
-                        type=template.tag.type
-                    )
+                tags_info = []
+                if template.tags:
+                    for tag in template.tags:
+                        tags_info.append(RelatedTagInfoTemplate(
+                            tag_id=tag.tag_id,
+                            tag_name=tag.tag_name,
+                            color=tag.color,
+                            type=tag.type
+                        ))
 
                 device_count = len(template.deviceNetworks) if hasattr(template, 'deviceNetworks') and template.deviceNetworks else 0
                 
+                detail_resp = None
+                if template.detail:
+                    detail_resp = ConfigurationTemplateDetailResponse(
+                        id=template.detail.id,
+                        config_content=template.detail.config_content,
+                        file_name=template.detail.file_name,
+                        file_size=template.detail.file_size,
+                        updated_at=template.detail.updatedAt
+                    )
+
                 template_responses.append(ConfigurationTemplateResponse(
                     id=template.id,
                     template_name=template.template_name,
                     description=template.description,
                     template_type=template.template_type,
-                    tag_name=template.tag_name,
                     created_at=template.createdAt,
                     updated_at=template.updatedAt,
-                    tag=tag_info,
-                    device_count=device_count
+                    tags=tags_info,
+                    device_count=device_count,
+                    detail=detail_resp
                 ))
 
             return template_responses, total
@@ -142,7 +203,7 @@ class ConfigurationTemplateService:
     async def get_template_by_id(self, template_id: str, include_usage: bool = False) -> Optional[ConfigurationTemplateResponse]:
         #ดึงข้อมูล Configuration Template ตาม ID
         try:
-            include_options: Dict[str, Any] = {"tag": True}
+            include_options: Dict[str, Any] = {"tags": True, "detail": True}
             if include_usage:
                 include_options["deviceNetworks"] = True
 
@@ -154,27 +215,38 @@ class ConfigurationTemplateService:
             if not template:
                 return None
 
-            tag_info = None
-            if template.tag:
-                tag_info = RelatedTagInfoTemplate(
-                    tag_id=template.tag.tag_id,
-                    tag_name=template.tag.tag_name,
-                    color=template.tag.color,
-                    type=template.tag.type
-                )
+            tags_info = []
+            if template.tags:
+                for tag in template.tags:
+                    tags_info.append(RelatedTagInfoTemplate(
+                        tag_id=tag.tag_id,
+                        tag_name=tag.tag_name,
+                        color=tag.color,
+                        type=tag.type
+                    ))
 
             device_count = len(template.deviceNetworks) if hasattr(template, 'deviceNetworks') and template.deviceNetworks else 0
+
+            detail_resp = None
+            if template.detail:
+                detail_resp = ConfigurationTemplateDetailResponse(
+                    id=template.detail.id,
+                    config_content=template.detail.config_content,
+                    file_name=template.detail.file_name,
+                    file_size=template.detail.file_size,
+                    updated_at=template.detail.updatedAt
+                )
 
             return ConfigurationTemplateResponse(
                 id=template.id,
                 template_name=template.template_name,
                 description=template.description,
                 template_type=template.template_type,
-                tag_name=template.tag_name,
                 created_at=template.createdAt,
                 updated_at=template.updatedAt,
-                tag=tag_info,
-                device_count=device_count
+                tags=tags_info,
+                device_count=device_count,
+                detail=detail_resp
             )
 
         except Exception as e:
@@ -207,15 +279,30 @@ class ConfigurationTemplateService:
             
             if update_data.template_type is not None:
                 update_dict["template_type"] = update_data.template_type.value
-            
-            if update_data.tag_name is not None:
-                if update_data.tag_name:
-                    tag = await self.prisma.tag.find_unique(
-                        where={"tag_name": update_data.tag_name}
-                    )
-                    if not tag:
-                        raise ValueError(f"ไม่พบ Tag name: {update_data.tag_name}")
-                update_dict["tag_name"] = update_data.tag_name
+
+            # Handle Tag update (supports multiple tags)
+            if update_data.tag_names is not None:
+                # If tag_names is empty list -> disconnect all tags
+                if len(update_data.tag_names) == 0:
+                    update_dict["tags"] = {"set": []}
+                # If tag_names provided -> validate and set all tags
+                else:
+                    tag_sets = []
+                    not_found_tags = []
+                    for tag_name in update_data.tag_names:
+                        tag = await self.prisma.tag.find_unique(
+                            where={"tag_name": tag_name}
+                        )
+                        if not tag:
+                            not_found_tags.append(tag_name)
+                        else:
+                            tag_sets.append({"tag_name": tag_name})
+                    
+                    if not_found_tags:
+                        raise ValueError(f"ไม่พบ Tag names: {', '.join(not_found_tags)}")
+                    
+                    # Use "set" to replace all existing tags with new ones
+                    update_dict["tags"] = {"set": tag_sets}
 
             if not update_dict:
                 raise ValueError("ไม่มีข้อมูลที่จะอัปเดต")
@@ -224,32 +311,44 @@ class ConfigurationTemplateService:
                 where={"id": template_id},
                 data=update_dict,
                 include={
-                    "tag": True,
-                    "deviceNetworks": True
+                    "tags": True,
+                    "deviceNetworks": True,
+                    "detail": True
                 }
             )
 
-            tag_info = None
-            if updated_template.tag:
-                tag_info = RelatedTagInfoTemplate(
-                    tag_id=updated_template.tag.tag_id,
-                    tag_name=updated_template.tag.tag_name,
-                    color=updated_template.tag.color,
-                    type=updated_template.tag.type
-                )
+            tags_info = []
+            if updated_template.tags:
+                for tag in updated_template.tags:
+                    tags_info.append(RelatedTagInfoTemplate(
+                        tag_id=tag.tag_id,
+                        tag_name=tag.tag_name,
+                        color=tag.color,
+                        type=tag.type
+                    ))
 
             device_count = len(updated_template.deviceNetworks) if updated_template.deviceNetworks else 0
+
+            detail_resp = None
+            if updated_template.detail:
+                detail_resp = ConfigurationTemplateDetailResponse(
+                    id=updated_template.detail.id,
+                    config_content=updated_template.detail.config_content,
+                    file_name=updated_template.detail.file_name,
+                    file_size=updated_template.detail.file_size,
+                    updated_at=updated_template.detail.updatedAt
+                )
 
             return ConfigurationTemplateResponse(
                 id=updated_template.id,
                 template_name=updated_template.template_name,
                 description=updated_template.description,
                 template_type=updated_template.template_type,
-                tag_name=updated_template.tag_name,
                 created_at=updated_template.createdAt,
                 updated_at=updated_template.updatedAt,
-                tag=tag_info,
-                device_count=device_count
+                tags=tags_info,
+                device_count=device_count,
+                detail=detail_resp
             )
 
         except Exception as e:
@@ -285,3 +384,42 @@ class ConfigurationTemplateService:
                 raise e
             return False
 
+    async def upload_config(self, template_id: str, content: str, filename: str, file_size: int) -> Optional[ConfigurationTemplateResponse]:
+        #อัปโหลด Configuration content
+        try:
+            # Check if template exists
+            template = await self.prisma.configurationtemplate.find_unique(
+                where={"id": template_id},
+                include={"detail": True}
+            )
+
+            if not template:
+                raise ValueError("ไม่พบ Configuration Template")
+
+            # Upsert detail
+            if template.detail:
+                # Update existing
+                await self.prisma.configurationtemplatedetail.update(
+                    where={"id": template.detail.id},
+                    data={
+                        "config_content": content,
+                        "file_name": filename,
+                        "file_size": file_size
+                    }
+                )
+            else:
+                # Create new
+                await self.prisma.configurationtemplatedetail.create(
+                    data={
+                        "configuration_template_id": template_id,
+                        "config_content": content,
+                        "file_name": filename,
+                        "file_size": file_size
+                    }
+                )
+
+            return await self.get_template_by_id(template_id)
+
+        except Exception as e:
+            print(f"Error uploading config: {e}")
+            raise e

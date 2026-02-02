@@ -108,11 +108,16 @@ async def create_template(
                 detail=f"Invalid template_type: {template_type}"
             )
 
+        # Convert comma-separated tag_name to list of tag_names
+        tag_names_list = None
+        if tag_name:
+            tag_names_list = [t.strip() for t in tag_name.split(",") if t.strip()]
+
         template_data = ConfigurationTemplateCreate(
             template_name=template_name,
             description=description,
             template_type=template_enum,
-            tag_name=tag_name
+            tag_names=tag_names_list if tag_names_list else None
         )
         
         # Determine detail content

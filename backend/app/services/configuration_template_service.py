@@ -143,20 +143,26 @@ class ConfigurationTemplateService:
                     {"description": {"contains": search, "mode": "insensitive"}}
                 ]
 
-            total = await self.prisma.configurationtemplate.count(where=where_conditions)
             skip = (page - 1) * page_size
             
-            include_options: Dict[str, Any] = {"tags": True, "detail": True}
-            if include_usage:
-                include_options["deviceNetworks"] = True
+            # Optimize: Only include tags for list view
+            # Don't include 'detail' in list - it's not needed and adds latency
+            # device_count will be 0 for list view (get full count in detail view)
+            include_options: Dict[str, Any] = {
+                "tags": True
+            }
 
-            templates = await self.prisma.configurationtemplate.find_many(
+            # Run count and find_many concurrently for better performance
+            import asyncio
+            total_task = self.prisma.configurationtemplate.count(where=where_conditions)
+            templates_task = self.prisma.configurationtemplate.find_many(
                 where=where_conditions,
                 skip=skip,
                 take=page_size,
                 order={"createdAt": "desc"},
                 include=include_options
             )
+            total, templates = await asyncio.gather(total_task, templates_task)
 
             template_responses = []
             for template in templates:
@@ -170,17 +176,8 @@ class ConfigurationTemplateService:
                             type=tag.type
                         ))
 
-                device_count = len(template.deviceNetworks) if hasattr(template, 'deviceNetworks') and template.deviceNetworks else 0
-                
-                detail_resp = None
-                if template.detail:
-                    detail_resp = ConfigurationTemplateDetailResponse(
-                        id=template.detail.id,
-                        config_content=template.detail.config_content,
-                        file_name=template.detail.file_name,
-                        file_size=template.detail.file_size,
-                        updated_at=template.detail.updatedAt
-                    )
+                # device_count is 0 for list view (get full count in detail view only)
+                device_count = 0
 
                 template_responses.append(ConfigurationTemplateResponse(
                     id=template.id,
@@ -191,7 +188,7 @@ class ConfigurationTemplateService:
                     updated_at=template.updatedAt,
                     tags=tags_info,
                     device_count=device_count,
-                    detail=detail_resp
+                    detail=None  # Don't include detail in list view for performance
                 ))
 
             return template_responses, total

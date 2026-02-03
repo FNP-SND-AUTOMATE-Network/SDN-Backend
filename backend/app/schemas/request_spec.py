@@ -10,5 +10,5 @@ class RequestSpec(BaseModel):
     path: str  # MUST start with "/network-topology:..."
     payload: Optional[Dict[str, Any]] = None
     headers: Dict[str, str] = {}
-    intent: str
-    driver: str
+    intent: Optional[str] = None  # Optional - for tracking/logging purposes
+    driver: Optional[str] = None  # Optional - for tracking/logging purposes

@@ -71,6 +71,14 @@ class DeviceNetworkService:
                 'configuration_template_id': device_data.configuration_template_id
             })
 
+            # ตรวจสอบว่า node_id ซ้ำหรือไม่
+            if device_data.node_id:
+                existing_node = await self.prisma.devicenetwork.find_unique(
+                    where={"node_id": device_data.node_id}
+                )
+                if existing_node:
+                    raise ValueError(f"node_id '{device_data.node_id}' มีอยู่ในระบบแล้ว")
+
             #สร้าง Device
             device = await self.prisma.devicenetwork.create(
                 data={
@@ -86,7 +94,19 @@ class DeviceNetworkService:
                     "os_id": device_data.os_id,
                     "backup_id": device_data.backup_id,
                     "local_site_id": device_data.local_site_id,
-                    "configuration_template_id": device_data.configuration_template_id
+                    "configuration_template_id": device_data.configuration_template_id,
+                    # NBI/ODL Fields
+                    "node_id": device_data.node_id,
+                    "vendor": device_data.vendor.value if device_data.vendor else "OTHER",
+                    "default_strategy": device_data.default_strategy.value if device_data.default_strategy else "OC_FIRST",
+                    # NETCONF Connection Fields
+                    "netconf_host": device_data.netconf_host or device_data.ip_address,
+                    "netconf_port": device_data.netconf_port or 830,
+                    "netconf_username": device_data.netconf_username,
+                    "netconf_password": device_data.netconf_password,
+                    # Default ODL status
+                    "odl_mounted": False,
+                    "odl_connection_status": "UNABLE_TO_CONNECT"
                 },
                 include={
                     "tags": True,
@@ -106,6 +126,11 @@ class DeviceNetworkService:
 
     def _build_device_response(self, device) -> DeviceNetworkResponse:
         #สร้าง DeviceNetworkResponse จาก Prisma object
+        
+        # คำนวณ ready_for_intent จาก odl_mounted และ odl_connection_status
+        is_mounted = getattr(device, 'odl_mounted', False) or False
+        connection_status = getattr(device, 'odl_connection_status', 'UNABLE_TO_CONNECT')
+        ready_for_intent = is_mounted and connection_status == 'CONNECTED'
         
         #Tags info (many-to-many)
         tags_info = []
@@ -179,6 +204,21 @@ class DeviceNetworkService:
             configuration_template_id=device.configuration_template_id,
             created_at=device.createdAt,
             updated_at=device.updatedAt,
+            # NBI/ODL Fields
+            node_id=getattr(device, 'node_id', None) or '',
+            vendor=getattr(device, 'vendor', 'OTHER'),
+            default_strategy=getattr(device, 'default_strategy', 'OC_FIRST'),
+            netconf_host=getattr(device, 'netconf_host', None),
+            netconf_port=getattr(device, 'netconf_port', 830) or 830,
+            netconf_username=getattr(device, 'netconf_username', None),
+            netconf_password=None,  # ไม่ส่ง password กลับไป frontend
+            # ODL Status Fields
+            odl_mounted=is_mounted,
+            odl_connection_status=connection_status,
+            oc_supported_intents=getattr(device, 'oc_supported_intents', None),
+            last_synced_at=getattr(device, 'last_synced_at', None),
+            ready_for_intent=ready_for_intent,
+            # Relations
             tags=tags_info,
             operatingSystem=os_info,
             localSite=site_info,
@@ -343,6 +383,36 @@ class DeviceNetworkService:
             if update_data.configuration_template_id is not None:
                 foreign_keys_to_validate['configuration_template_id'] = update_data.configuration_template_id
                 update_dict["configuration_template_id"] = update_data.configuration_template_id
+
+            # NBI/ODL Fields
+            if update_data.node_id is not None:
+                # ตรวจสอบว่า node_id ไม่ซ้ำกับ device อื่น
+                if update_data.node_id != existing_device.node_id:
+                    duplicate = await self.prisma.devicenetwork.find_unique(
+                        where={"node_id": update_data.node_id}
+                    )
+                    if duplicate:
+                        raise ValueError(f"node_id '{update_data.node_id}' มีอยู่ในระบบแล้ว")
+                update_dict["node_id"] = update_data.node_id
+
+            if update_data.vendor is not None:
+                update_dict["vendor"] = update_data.vendor.value
+
+            if update_data.default_strategy is not None:
+                update_dict["default_strategy"] = update_data.default_strategy.value
+
+            # NETCONF Connection Fields
+            if update_data.netconf_host is not None:
+                update_dict["netconf_host"] = update_data.netconf_host
+
+            if update_data.netconf_port is not None:
+                update_dict["netconf_port"] = update_data.netconf_port
+
+            if update_data.netconf_username is not None:
+                update_dict["netconf_username"] = update_data.netconf_username
+
+            if update_data.netconf_password is not None:
+                update_dict["netconf_password"] = update_data.netconf_password
 
             #Validate foreign keys
             if foreign_keys_to_validate:

@@ -1,7 +1,34 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
+import re 
+
+# node_id validation pattern (URL-safe: a-z, A-Z, 0-9, -, _)
+NODE_ID_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$')
+
+
+def validate_node_id(value: str) -> str:
+    """
+    Validate node_id format:
+    - ต้องขึ้นต้นด้วยตัวอักษรหรือตัวเลข
+    - ประกอบด้วย a-z, A-Z, 0-9, -, _ เท่านั้น
+    - ความยาว 1-63 ตัวอักษร
+    - ไม่มี space หรือ special characters
+    """
+    if not value:
+        raise ValueError('node_id is required')
+    
+    value = value.strip()
+    
+    if not NODE_ID_PATTERN.match(value):
+        raise ValueError(
+            'node_id must be 1-63 characters, start with alphanumeric, '
+            'and contain only letters, numbers, hyphens (-), or underscores (_). '
+            'No spaces or special characters allowed. Example: CSR1, router-core-01, SW_FLOOR3'
+        )
+    
+    return value
 
 class TypeDevice(str, Enum):
     SWITCH = "SWITCH"
@@ -49,8 +76,13 @@ class DeviceNetworkBase(BaseModel):
     local_site_id: Optional[str] = Field(None, description="Local Site ID")
     configuration_template_id: Optional[str] = Field(None, description="Configuration Template ID")
     
-    # NBI/ODL Fields
-    node_id: Optional[str] = Field(None, description="ODL node-id สำหรับ topology-netconf (ใช้กับ Intent API)")
+    # NBI/ODL Fields - node_id is REQUIRED
+    node_id: str = Field(
+        ..., 
+        description="ODL node-id (unique, URL-safe). ใช้เป็น path parameter ใน API. ตัวอย่าง: CSR1, router-core-01",
+        min_length=1,
+        max_length=63
+    )
     vendor: DeviceVendor = Field(default=DeviceVendor.OTHER, description="Vendor สำหรับเลือก driver")
     default_strategy: IntentStrategy = Field(default=IntentStrategy.OC_FIRST, description="Strategy สำหรับ Intent")
     
@@ -59,6 +91,11 @@ class DeviceNetworkBase(BaseModel):
     netconf_port: int = Field(default=830, description="NETCONF port (default: 830, SSH)")
     netconf_username: Optional[str] = Field(None, description="Username สำหรับ NETCONF")
     netconf_password: Optional[str] = Field(None, description="Password สำหรับ NETCONF")
+    
+    @field_validator('node_id')
+    @classmethod
+    def validate_node_id_format(cls, v):
+        return validate_node_id(v)
 
 class DeviceNetworkCreate(DeviceNetworkBase):
     pass
@@ -82,7 +119,7 @@ class DeviceNetworkUpdate(BaseModel):
     configuration_template_id: Optional[str] = Field(None, description="Configuration Template ID")
     
     # NBI/ODL Fields
-    node_id: Optional[str] = Field(None, description="ODL node-id สำหรับ topology-netconf")
+    node_id: Optional[str] = Field(None, description="ODL node-id สำหรับ topology-netconf", max_length=63)
     vendor: Optional[DeviceVendor] = Field(None, description="Vendor สำหรับเลือก driver")
     default_strategy: Optional[IntentStrategy] = Field(None, description="Strategy สำหรับ Intent")
     
@@ -91,6 +128,14 @@ class DeviceNetworkUpdate(BaseModel):
     netconf_port: Optional[int] = Field(None, description="NETCONF port")
     netconf_username: Optional[str] = Field(None, description="Username สำหรับ NETCONF")
     netconf_password: Optional[str] = Field(None, description="Password สำหรับ NETCONF")
+    
+    @field_validator('node_id')
+    @classmethod
+    def validate_node_id_format_update(cls, v):
+        """Validate node_id format for update (allow None)"""
+        if v is None:
+            return v
+        return validate_node_id(v)
 
 # Related Info Models
 class RelatedTagInfo(BaseModel):
@@ -123,8 +168,36 @@ class RelatedTemplateInfo(BaseModel):
     template_name: str
     template_type: str
 
-class DeviceNetworkResponse(DeviceNetworkBase):
+class DeviceNetworkResponse(BaseModel):
+    """Response model สำหรับ Device Network (ไม่ inherit จาก Base เพื่อให้ node_id optional)"""
     id: str = Field(..., description="ID ของอุปกรณ์")
+    serial_number: str
+    device_name: str
+    device_model: str
+    type: str
+    status: str
+    ip_address: Optional[str] = None
+    mac_address: str
+    description: Optional[str] = None
+    
+    # Foreign Keys
+    policy_id: Optional[str] = None
+    os_id: Optional[str] = None
+    backup_id: Optional[str] = None
+    local_site_id: Optional[str] = None
+    configuration_template_id: Optional[str] = None
+    
+    # NBI/ODL Fields - node_id is OPTIONAL in response (for backward compatibility)
+    node_id: Optional[str] = Field(None, description="ODL node-id (unique, URL-safe)")
+    vendor: Optional[str] = Field(None, description="Vendor สำหรับเลือก driver")
+    default_strategy: Optional[str] = Field(None, description="Strategy สำหรับ Intent")
+    
+    # NETCONF Connection Fields
+    netconf_host: Optional[str] = Field(None, description="IP/Hostname สำหรับ NETCONF")
+    netconf_port: int = Field(default=830, description="NETCONF port")
+    netconf_username: Optional[str] = Field(None, description="Username สำหรับ NETCONF")
+    netconf_password: Optional[str] = Field(None, description="Password - will be null for security")
+    
     created_at: datetime
     updated_at: datetime
     

@@ -4,7 +4,7 @@ Device Profile Service (Database Version)
 
 สำหรับใช้กับ NBI (Intent-Based API)
 """
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from app.schemas.device_profile import DeviceProfile
 from app.core.errors import DeviceNotFound
 from app.core.intent_registry import Intents
@@ -247,6 +247,87 @@ class DeviceProfileService:
         """Check if device supports specific intent via OpenConfig"""
         profile = await self.get(device_id)
         return profile.oc_supported_intents.get(intent, False)
+    
+    async def check_mount_status(self, device_id: str) -> Dict[str, Any]:
+        """
+        Check if device is mounted and connected in ODL
+        
+        Args:
+            device_id: Can be node_id, database ID, or device_name
+            
+        Returns:
+            {
+                "mounted": True/False,
+                "connection_status": "CONNECTED/CONNECTING/UNABLE_TO_CONNECT",
+                "ready_for_intent": True/False,
+                "node_id": "...",
+                "message": "..."
+            }
+        """
+        prisma = get_prisma_client()
+        
+        # Find device by node_id first
+        device = await prisma.devicenetwork.find_first(
+            where={"node_id": device_id}
+        )
+        
+        # Try by database ID
+        if not device:
+            try:
+                device = await prisma.devicenetwork.find_unique(
+                    where={"id": device_id}
+                )
+            except Exception:
+                pass
+        
+        # Try by device_name
+        if not device:
+            device = await prisma.devicenetwork.find_first(
+                where={"device_name": device_id}
+            )
+        
+        if not device:
+            return {
+                "mounted": False,
+                "connection_status": "UNKNOWN",
+                "ready_for_intent": False,
+                "node_id": None,
+                "message": f"Device '{device_id}' not found in database"
+            }
+        
+        # Check status
+        is_mounted = device.odl_mounted or False
+        connection_status = device.odl_connection_status or "UNABLE_TO_CONNECT"
+        ready_for_intent = is_mounted and connection_status == "CONNECTED"
+        
+        if not device.node_id:
+            return {
+                "mounted": False,
+                "connection_status": "NOT_CONFIGURED",
+                "ready_for_intent": False,
+                "node_id": None,
+                "device_id": device.id,
+                "message": "Device does not have node_id configured"
+            }
+        
+        if not is_mounted:
+            message = f"Device '{device.node_id}' is not mounted in ODL"
+        elif connection_status == "CONNECTING":
+            message = f"Device '{device.node_id}' is still connecting to ODL"
+        elif connection_status == "CONNECTED":
+            message = f"Device '{device.node_id}' is ready for intent operations"
+        else:
+            message = f"Device '{device.node_id}' connection failed: {connection_status}"
+        
+        return {
+            "mounted": is_mounted,
+            "connection_status": connection_status,
+            "ready_for_intent": ready_for_intent,
+            "node_id": device.node_id,
+            "device_id": device.id,
+            "device_name": device.device_name,
+            "message": message
+        }
 
 
 # ============================================================

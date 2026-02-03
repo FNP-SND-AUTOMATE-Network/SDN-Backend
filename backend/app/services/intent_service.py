@@ -4,13 +4,13 @@ Intent Service - Core service สำหรับ handle Intent requests
 """
 from typing import Dict, Any
 from app.schemas.intent import IntentRequest, IntentResponse
-from app.services.device_profile_service import DeviceProfileService
+from app.services.device_profile_service_db import DeviceProfileService
 from app.services.strategy_resolver import StrategyResolver
 from app.clients.odl_restconf_client import OdlRestconfClient
 from app.normalizers.interface import InterfaceNormalizer
 from app.normalizers.system import SystemNormalizer
 from app.normalizers.routing import RoutingNormalizer, InterfaceBriefNormalizer, OspfNormalizer
-from app.core.errors import OdlRequestError, UnsupportedIntent
+from app.core.errors import OdlRequestError, UnsupportedIntent, DeviceNotMounted
 from app.core.intent_registry import IntentRegistry, Intents, IntentCategory
 from app.core.logging import logger
 
@@ -138,8 +138,30 @@ class IntentService:
         if intent_def.category == IntentCategory.DEVICE:
             return await self._handle_device_intent(req)
         
-        # Step 3: Get device profile
-        device = self.device_profiles.get(req.deviceId)
+        # Step 3: Get device profile และ check mount status
+        device = await self.device_profiles.get(req.deviceId)
+        
+        # Step 3.1: Check if device is mounted and connected
+        mount_status = await self.device_profiles.check_mount_status(req.deviceId)
+        if not mount_status.get("ready_for_intent"):
+            connection_status = mount_status.get("connection_status", "unknown")
+            is_mounted = mount_status.get("mounted", False)
+            
+            if not is_mounted:
+                raise DeviceNotMounted(
+                    f"Device '{req.deviceId}' is not mounted in ODL. "
+                    f"Please mount the device first using POST /api/v1/nbi/devices/{req.deviceId}/mount"
+                )
+            elif connection_status == "connecting":
+                raise DeviceNotMounted(
+                    f"Device '{req.deviceId}' is still connecting. "
+                    f"Current status: {connection_status}. Please wait and try again."
+                )
+            else:
+                raise DeviceNotMounted(
+                    f"Device '{req.deviceId}' is not connected. "
+                    f"Current status: {connection_status}. Please check device connectivity."
+                )
         
         # Step 4: Decide strategy
         decision = self.strategy.decide(device, req.intent)

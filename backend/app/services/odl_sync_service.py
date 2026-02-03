@@ -15,6 +15,23 @@ from app.core.logging import logger
 from app.database import get_prisma_client
 
 
+# Map ODL connection status string to DB enum value
+def map_odl_status_to_enum(odl_status: str) -> str:
+    """
+    Map ODL connection-status string to Prisma enum
+    ODL returns: 'connected', 'connecting', 'unable-to-connect'
+    DB enum: CONNECTED, CONNECTING, UNABLE_TO_CONNECT
+    """
+    mapping = {
+        "connected": "CONNECTED",
+        "connecting": "CONNECTING",
+        "unable-to-connect": "UNABLE_TO_CONNECT",
+        "not-mounted": "UNABLE_TO_CONNECT",
+        "unknown": "UNABLE_TO_CONNECT",
+    }
+    return mapping.get(odl_status.lower() if odl_status else "unknown", "UNABLE_TO_CONNECT")
+
+
 class OdlSyncService:
     """
     Service สำหรับ Sync ข้อมูลระหว่าง ODL และ Database
@@ -149,12 +166,13 @@ class OdlSyncService:
                         
                         # Determine status based on connection
                         new_status = "ONLINE" if odl_node["connection_status"] == "connected" else "OFFLINE"
+                        db_connection_status = map_odl_status_to_enum(odl_node["connection_status"])
                         
                         await prisma.devicenetwork.update(
                             where={"id": device.id},
                             data={
                                 "odl_mounted": True,
-                                "odl_connection_status": odl_node["connection_status"],
+                                "odl_connection_status": db_connection_status,
                                 "status": new_status,
                                 "last_synced_at": datetime.utcnow(),
                                 # Update IP if available from ODL
@@ -193,7 +211,7 @@ class OdlSyncService:
                             where={"id": device.id},
                             data={
                                 "odl_mounted": False,
-                                "odl_connection_status": "not-mounted",
+                                "odl_connection_status": "UNABLE_TO_CONNECT",
                                 "status": "OFFLINE",
                                 "last_synced_at": datetime.utcnow()
                             }
@@ -256,6 +274,7 @@ class OdlSyncService:
             strategy = "OC_FIRST" if vendor.lower() == "cisco" else "VENDOR_FIRST"
             
             # Create device
+            db_connection_status = map_odl_status_to_enum(odl_node["connection_status"])
             device = await prisma.devicenetwork.create(
                 data={
                     "serial_number": f"ODL-{node_id}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
@@ -270,7 +289,7 @@ class OdlSyncService:
                     "vendor": vendor_enum,
                     "default_strategy": strategy,
                     "odl_mounted": True,
-                    "odl_connection_status": odl_node["connection_status"],
+                    "odl_connection_status": db_connection_status,
                     "last_synced_at": datetime.utcnow()
                 }
             )

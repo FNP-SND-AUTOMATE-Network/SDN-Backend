@@ -162,6 +162,13 @@ class DeviceNetworkService:
                 template_type=device.configuration_template.template_type
             )
 
+        # Determine ready_for_intent status
+        ready_for_intent = (
+            getattr(device, 'odl_mounted', False) and 
+            getattr(device, 'odl_connection_status', 'UNABLE_TO_CONNECT') == 'CONNECTED' and
+            getattr(device, 'node_id', None) is not None
+        )
+
         return DeviceNetworkResponse(
             id=device.id,
             serial_number=device.serial_number,
@@ -177,6 +184,21 @@ class DeviceNetworkService:
             backup_id=device.backup_id,
             local_site_id=device.local_site_id,
             configuration_template_id=device.configuration_template_id,
+            # NBI/ODL Fields
+            node_id=getattr(device, 'node_id', None),
+            vendor=getattr(device, 'vendor', 'OTHER'),
+            default_strategy=getattr(device, 'default_strategy', 'OC_FIRST'),
+            odl_mounted=getattr(device, 'odl_mounted', False),
+            odl_connection_status=getattr(device, 'odl_connection_status', 'UNABLE_TO_CONNECT'),
+            oc_supported_intents=getattr(device, 'oc_supported_intents', None),
+            last_synced_at=getattr(device, 'last_synced_at', None),
+            ready_for_intent=ready_for_intent,
+            # NETCONF Connection Fields
+            netconf_host=getattr(device, 'netconf_host', None),
+            netconf_port=getattr(device, 'netconf_port', 830),
+            netconf_username=getattr(device, 'netconf_username', None),
+            netconf_password=None,  # Don't return password for security
+            # Timestamps and Relations
             created_at=device.createdAt,
             updated_at=device.updatedAt,
             tags=tags_info,

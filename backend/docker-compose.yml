@@ -33,9 +33,9 @@ services:
       start_period: 40s
     networks:
       - default
-      - phpipam
+      - php-ipam
 
 networks:
-  phpipam:
+  php-ipam:
     external: true
-    name: phpipam-docker_default
+    name: php-ipam_default

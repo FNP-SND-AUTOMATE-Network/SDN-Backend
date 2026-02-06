@@ -281,20 +281,9 @@ class IntentRegistry:
     )
     
     # ===== DEVICE MANAGEMENT INTENTS =====
-    DEVICE_MOUNT = IntentDefinition(
-        name="device.mount",
-        category=IntentCategory.DEVICE,
-        description="Mount NETCONF device to ODL",
-        required_params=["host", "username", "password"],
-        optional_params=["port", "tcp_only", "keepalive_delay", "connection_timeout", "default_request_timeout"],
-    )
-    
-    DEVICE_UNMOUNT = IntentDefinition(
-        name="device.unmount",
-        category=IntentCategory.DEVICE,
-        description="Unmount NETCONF device from ODL",
-        required_params=[],
-    )
+    # Note: device.mount and device.unmount removed - use dedicated REST endpoints:
+    #   POST /api/v1/nbi/devices/{node_id}/mount
+    #   POST /api/v1/nbi/devices/{node_id}/unmount
     
     DEVICE_STATUS = IntentDefinition(
         name="device.status",
@@ -447,8 +436,7 @@ class Intents:
         SAVE_CONFIG = "system.save_config"
     
     class DEVICE:
-        MOUNT = "device.mount"
-        UNMOUNT = "device.unmount"
+        # Note: MOUNT and UNMOUNT removed - use dedicated REST endpoints
         STATUS = "device.status"
         LIST = "device.list"
     

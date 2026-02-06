@@ -189,16 +189,16 @@ class IntentService:
 
     async def _handle_device_intent(self, req: IntentRequest) -> IntentResponse:
         """
-        Handle device management intents (mount/unmount/status/list)
+        Handle device management intents (status/list)
         These don't require device profile lookup
+        
+        Note: mount/unmount removed - use dedicated REST endpoints:
+            POST /api/v1/nbi/devices/{node_id}/mount
+            POST /api/v1/nbi/devices/{node_id}/unmount
         """
         node_id = req.deviceId  # deviceId is used as node_id for ODL
         
-        if req.intent == Intents.DEVICE.MOUNT:
-            spec = self.device_driver.build_mount(node_id, req.params)
-        elif req.intent == Intents.DEVICE.UNMOUNT:
-            spec = self.device_driver.build_unmount(node_id)
-        elif req.intent == Intents.DEVICE.STATUS:
+        if req.intent == Intents.DEVICE.STATUS:
             spec = self.device_driver.build_get_status(node_id)
         elif req.intent == Intents.DEVICE.LIST:
             spec = self.device_driver.build_list_devices()

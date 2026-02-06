@@ -1,5 +1,11 @@
 """
 Device Driver - สำหรับ Mount/Unmount NETCONF devices ใน ODL
+
+Note: mount/unmount ไม่ผ่าน intent system แล้ว ใช้ dedicated REST endpoints แทน:
+    POST /api/v1/nbi/devices/{node_id}/mount
+    POST /api/v1/nbi/devices/{node_id}/unmount
+
+build_mount/build_unmount methods ยังคงใช้งานได้โดย OdlMountService
 """
 from typing import Any, Dict
 from app.schemas.request_spec import RequestSpec
@@ -10,6 +16,9 @@ class DeviceDriver:
     Driver สำหรับจัดการ NETCONF device mounting ใน OpenDaylight
     
     ไม่ต้องใช้ DeviceProfile เพราะเป็นการสร้าง/ลบ device เอง
+    
+    Note: build_mount และ build_unmount ยังคงใช้งานได้โดย OdlMountService
+          แต่ไม่ผ่าน intent system แล้ว (ใช้ dedicated REST endpoints แทน)
     """
     name = "device"
     

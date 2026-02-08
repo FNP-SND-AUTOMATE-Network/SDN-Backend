@@ -1,50 +1,65 @@
 """
-Cisco Intent Test Script
-ทดสอบทุก Cisco intents กับ OpenDaylight
+Huawei NE40E (VRP8) Intent Test Suite
+=====================================
+
+Test script for verifying Huawei-specific intents against ODL.
+Uses huawei-ifm, huawei-ip, huawei-ospfv2 native YANG models.
 
 Usage:
-    python test_cisco_intents.py --device CSR1000v --base-url http://localhost:8000
+    python test_huawei_intents.py
+    python test_huawei_intents.py --device NE40E-R1 --read-only
+    python test_huawei_intents.py --category ospf
 """
-import httpx
 import asyncio
 import argparse
-from typing import Dict, Any, List
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Dict, List, Optional
+import httpx
+
 
 # ==============================================================================
 # Configuration
 # ==============================================================================
 DEFAULT_BASE_URL = "http://localhost:8000"
-DEFAULT_DEVICE_ID = "CSR1000v"
+DEFAULT_DEVICE_ID = "NE40E-R1"  # Huawei NE40E node_id
 API_ENDPOINT = "/api/v1/nbi/intent"
 
-# ==============================================================================
-# Test Cases - ทุก Intent ที่ Cisco Driver รองรับ
-# ==============================================================================
 
-class TestCategory(str, Enum):
-    INTERFACE = "Interface"
-    ROUTING = "Routing"
-    OSPF = "OSPF"
-    SYSTEM = "System"
-    VLAN = "VLAN"
+# ==============================================================================
+# Test Categories
+# ==============================================================================
+class TestCategory(Enum):
+    INTERFACE = "interface"
+    OSPF = "ospf"
+    ROUTING = "routing"
+    SYSTEM = "system"
+
 
 @dataclass
 class TestCase:
+    """Test case definition"""
     name: str
     intent: str
     params: Dict[str, Any]
     category: TestCategory
     is_read_only: bool = False
-    cleanup_intent: str = None  # Intent to cleanup after test
-    cleanup_params: Dict[str, Any] = None
+    cleanup_intent: Optional[str] = None
+    cleanup_params: Optional[Dict[str, Any]] = None
+
 
 # ==============================================================================
-# Interface Tests (8 intents)
+# Interface Tests (huawei-ifm + huawei-ip)
 # ==============================================================================
 INTERFACE_TESTS = [
-    # GET Operations
+    # GET Interface (Read-Only)
+    TestCase(
+        name="Show Single Interface",
+        intent="show.interface",
+        params={"interface": "Ethernet1/0/0"},
+        category=TestCategory.INTERFACE,
+        is_read_only=True
+    ),
     TestCase(
         name="Show All Interfaces",
         intent="show.interfaces",
@@ -52,57 +67,160 @@ INTERFACE_TESTS = [
         category=TestCategory.INTERFACE,
         is_read_only=True
     ),
-    TestCase(
-        name="Show Single Interface",
-        intent="show.interface",
-        params={"interface": "GigabitEthernet2"},
-        category=TestCategory.INTERFACE,
-        is_read_only=True
-    ),
-    # Config Operations
+    
+    # SET Interface IPv4 (VRP8 huawei-ip:ipv4Config)
     TestCase(
         name="Set Interface IPv4",
         intent="interface.set_ipv4",
-        params={"interface": "GigabitEthernet3", "ip": "192.168.100.1", "prefix": 24},
+        params={
+            "interface": "Ethernet1/0/3",
+            "ip": "200.168.100.1",
+            "prefix": 24
+        },
         category=TestCategory.INTERFACE,
+        is_read_only=False
     ),
-    TestCase(
-        name="Set Interface IPv6",
-        intent="interface.set_ipv6",
-        params={"interface": "GigabitEthernet3", "ip": "2001:db8::1", "prefix": 64},
-        category=TestCategory.INTERFACE,
-    ),
+    
+    # Enable/Disable Interface
     TestCase(
         name="Enable Interface",
         intent="interface.enable",
-        params={"interface": "GigabitEthernet3"},
+        params={"interface": "Ethernet1/0/0"},
         category=TestCategory.INTERFACE,
+        is_read_only=False
     ),
     TestCase(
         name="Disable Interface",
         intent="interface.disable",
-        params={"interface": "GigabitEthernet3"},
+        params={"interface": "Ethernet1/0/0"},
         category=TestCategory.INTERFACE,
+        is_read_only=False,
+        cleanup_intent="interface.enable",
+        cleanup_params={"interface": "Ethernet1/0/0"}
     ),
+    
+    # Set Description
     TestCase(
         name="Set Interface Description",
         intent="interface.set_description",
-        params={"interface": "GigabitEthernet3", "description": "Test Interface"},
+        params={
+            "interface": "Ethernet1/0/0",
+            "description": "Link_to_Core_Router"
+        },
         category=TestCategory.INTERFACE,
+        is_read_only=False
     ),
+    
+    # Set MTU
     TestCase(
         name="Set Interface MTU",
         intent="interface.set_mtu",
-        params={"interface": "GigabitEthernet3", "mtu": 1400},
+        params={
+            "interface": "Ethernet1/0/0",
+            "mtu": 1500
+        },
         category=TestCategory.INTERFACE,
+        is_read_only=False
     ),
 ]
 
+
 # ==============================================================================
-# Routing Tests (4 intents)
+# OSPF Tests (huawei-ospfv2)
+# ==============================================================================
+OSPF_TESTS = [
+    # Create OSPF Process
+    TestCase(
+        name="Enable OSPF Process",
+        intent="routing.ospf_enable",
+        params={
+            "process_id": 1,
+            "router_id": "192.168.1.1",
+            "description": "OSPF_Process_1"
+        },
+        category=TestCategory.OSPF,
+        is_read_only=False
+    ),
+    
+    # Set Router ID
+    TestCase(
+        name="Set OSPF Router ID",
+        intent="routing.ospf_set_router_id",
+        params={
+            "process_id": 1,
+            "router_id": "10.0.0.1"
+        },
+        category=TestCategory.OSPF,
+        is_read_only=False
+    ),
+    
+    # Add Network to Area
+    TestCase(
+        name="Add OSPF Network",
+        intent="routing.ospf_add_network",
+        params={
+            "process_id": 1,
+            "area": "0.0.0.0",
+            "network": "192.168.1.0",
+            "wildcard": "0.0.0.255"
+        },
+        category=TestCategory.OSPF,
+        is_read_only=False,
+        cleanup_intent="routing.ospf_remove_network",
+        cleanup_params={
+            "process_id": 1,
+            "area": "0.0.0.0",
+            "network": "192.168.1.0"
+        }
+    ),
+    
+    # Show OSPF (Read-Only)
+    TestCase(
+        name="Show OSPF Neighbors",
+        intent="show.ospf_neighbors",
+        params={"process_id": 1},
+        category=TestCategory.OSPF,
+        is_read_only=True
+    ),
+    TestCase(
+        name="Show OSPF Database",
+        intent="show.ospf_database",
+        params={"process_id": 1},
+        category=TestCategory.OSPF,
+        is_read_only=True
+    ),
+    
+    # Disable OSPF (cleanup)
+    TestCase(
+        name="Disable OSPF Process",
+        intent="routing.ospf_disable",
+        params={"process_id": 1},
+        category=TestCategory.OSPF,
+        is_read_only=False
+    ),
+]
+
+
+# ==============================================================================
+# Static Routing Tests (huawei-staticrt)
 # ==============================================================================
 ROUTING_TESTS = [
-    # GET Operations
+    TestCase(
+        name="Add Static Route",
+        intent="routing.static_add",
+        params={
+            "prefix": "10.0.0.0/24",
+            "next_hop": "192.168.1.254"
+        },
+        category=TestCategory.ROUTING,
+        is_read_only=False,
+        cleanup_intent="routing.static_delete",
+        cleanup_params={
+            "prefix": "10.0.0.0/24",
+            "next_hop": "192.168.1.254"
+        }
+    ),
+    
     TestCase(
         name="Show IP Route",
         intent="show.ip_route",
@@ -110,103 +228,13 @@ ROUTING_TESTS = [
         category=TestCategory.ROUTING,
         is_read_only=True
     ),
-    TestCase(
-        name="Show IP Interface Brief",
-        intent="show.ip_interface_brief",
-        params={},
-        category=TestCategory.ROUTING,
-        is_read_only=True
-    ),
-    # Config Operations
-    TestCase(
-        name="Add Static Route",
-        intent="routing.static.add",
-        params={"prefix": "10.99.99.0/24", "next_hop": "192.168.1.1"},
-        category=TestCategory.ROUTING,
-        cleanup_intent="routing.static.delete",
-        cleanup_params={"prefix": "10.99.99.0/24"}
-    ),
-    TestCase(
-        name="Add Default Route",
-        intent="routing.default.add",
-        params={"next_hop": "192.168.1.254"},
-        category=TestCategory.ROUTING,
-        cleanup_intent="routing.default.delete",
-        cleanup_params={}
-    ),
 ]
 
-# ==============================================================================
-# OSPF Tests (9 intents)
-# ==============================================================================
-OSPF_TESTS = [
-    # GET Operations
-    TestCase(
-        name="Show OSPF Neighbors",
-        intent="show.ospf.neighbors",
-        params={"process_id": "1"},
-        category=TestCategory.OSPF,
-        is_read_only=True
-    ),
-    TestCase(
-        name="Show OSPF Database",
-        intent="show.ospf.database",
-        params={"process_id": "1"},
-        category=TestCategory.OSPF,
-        is_read_only=True
-    ),
-    # Config Operations
-    TestCase(
-        name="Enable OSPF Process",
-        intent="routing.ospf.enable",
-        params={"process_id": "99", "router_id": "9.9.9.9"},
-        category=TestCategory.OSPF,
-        cleanup_intent="routing.ospf.disable",
-        cleanup_params={"process_id": "99"}
-    ),
-    TestCase(
-        name="Set OSPF Router ID",
-        intent="routing.ospf.set_router_id",
-        params={"process_id": "99", "router_id": "1.1.1.1"},
-        category=TestCategory.OSPF,
-    ),
-    TestCase(
-        name="Add OSPF Network",
-        intent="routing.ospf.add_network",
-        params={"process_id": "99", "network": "10.0.0.0", "wildcard": "0.0.0.255", "area": "0"},
-        category=TestCategory.OSPF,
-        cleanup_intent="routing.ospf.remove_network",
-        cleanup_params={"process_id": "99", "network": "10.0.0.0", "wildcard": "0.0.0.255", "area": "0"}
-    ),
-    TestCase(
-        name="Set OSPF Passive Interface",
-        intent="routing.ospf.set_passive_interface",
-        params={"process_id": "99", "interface": "Loopback0"},
-        category=TestCategory.OSPF,
-        cleanup_intent="routing.ospf.remove_passive_interface",
-        cleanup_params={"process_id": "99", "interface": "Loopback0"}
-    ),
-]
 
 # ==============================================================================
-# System Tests (5 intents)
+# System Tests (huawei-system)
 # ==============================================================================
 SYSTEM_TESTS = [
-    # GET Operations
-    TestCase(
-        name="Show Running Config",
-        intent="show.running_config",
-        params={},
-        category=TestCategory.SYSTEM,
-        is_read_only=True
-    ),
-    TestCase(
-        name="Show Running Config - Interfaces Section",
-        intent="show.running_config",
-        params={"section": "interfaces"},
-        category=TestCategory.SYSTEM,
-        is_read_only=True
-    ),
     TestCase(
         name="Show Version",
         intent="show.version",
@@ -214,52 +242,27 @@ SYSTEM_TESTS = [
         category=TestCategory.SYSTEM,
         is_read_only=True
     ),
-    # Config Operations
+    
     TestCase(
         name="Set Hostname",
         intent="system.set_hostname",
-        params={"hostname": "TestRouter"},
+        params={"hostname": "NE40E-Test"},
         category=TestCategory.SYSTEM,
-    ),
-    TestCase(
-        name="Set NTP Server",
-        intent="system.set_ntp",
-        params={"server": "1.1.1.1"},
-        category=TestCategory.SYSTEM,
+        is_read_only=False
     ),
 ]
 
-# ==============================================================================
-# VLAN Tests (3 intents)
-# ==============================================================================
-VLAN_TESTS = [
-    TestCase(
-        name="Create VLAN",
-        intent="vlan.create",
-        params={"vlan_id": "999", "name": "TestVLAN"},
-        category=TestCategory.VLAN,
-        cleanup_intent="vlan.delete",
-        cleanup_params={"vlan_id": "999"}
-    ),
-    TestCase(
-        name="Assign Port to VLAN (Access)",
-        intent="vlan.assign_port",
-        params={"interface": "GigabitEthernet0/1", "vlan_id": "999", "mode": "access"},
-        category=TestCategory.VLAN,
-    ),
-    # Delete is tested via cleanup
-]
 
 # ==============================================================================
 # Test Runner
 # ==============================================================================
-ALL_TESTS = INTERFACE_TESTS + ROUTING_TESTS + OSPF_TESTS + SYSTEM_TESTS + VLAN_TESTS
+ALL_TESTS = INTERFACE_TESTS + OSPF_TESTS + ROUTING_TESTS + SYSTEM_TESTS
 
 
-async def run_test(client: httpx.AsyncClient, device_id: str, test: TestCase) -> Dict[str, Any]:
+async def run_test(client: httpx.AsyncClient, node_id: str, test: TestCase) -> Dict[str, Any]:
     """Run a single test case"""
     payload = {
-        "node_id": device_id,
+        "node_id": node_id,
         "intent": test.intent,
         "params": test.params
     }
@@ -290,13 +293,13 @@ async def run_test(client: httpx.AsyncClient, device_id: str, test: TestCase) ->
         }
 
 
-async def run_cleanup(client: httpx.AsyncClient, device_id: str, test: TestCase):
+async def run_cleanup(client: httpx.AsyncClient, node_id: str, test: TestCase):
     """Run cleanup for a test case"""
     if not test.cleanup_intent:
         return
     
     payload = {
-        "node_id": device_id,
+        "node_id": node_id,
         "intent": test.cleanup_intent,
         "params": test.cleanup_params or {}
     }
@@ -307,7 +310,7 @@ async def run_cleanup(client: httpx.AsyncClient, device_id: str, test: TestCase)
         pass  # Ignore cleanup errors
 
 
-async def run_all_tests(base_url: str, device_id: str, categories: List[str] = None, read_only: bool = False):
+async def run_all_tests(base_url: str, node_id: str, categories: List[str] = None, read_only: bool = False):
     """Run all test cases"""
     async with httpx.AsyncClient(base_url=base_url) as client:
         results = []
@@ -326,14 +329,14 @@ async def run_all_tests(base_url: str, device_id: str, categories: List[str] = N
             tests_to_run = [t for t in tests_to_run if t.is_read_only]
         
         print(f"\n{'='*60}")
-        print(f"Cisco Intent Test Suite")
-        print(f"Device: {device_id}")
+        print(f"Huawei NE40E (VRP8) Intent Test Suite")
+        print(f"Device: {node_id}")
         print(f"Base URL: {base_url}")
         print(f"Tests to run: {len(tests_to_run)}")
         print(f"{'='*60}\n")
         
         for test in tests_to_run:
-            result = await run_test(client, device_id, test)
+            result = await run_test(client, node_id, test)
             results.append(result)
             
             # Print result
@@ -351,7 +354,7 @@ async def run_all_tests(base_url: str, device_id: str, categories: List[str] = N
                 print(f"   Error: {result.get('error', 'Unknown error')}")
             
             # Run cleanup
-            await run_cleanup(client, device_id, test)
+            await run_cleanup(client, node_id, test)
             
             # Small delay between tests
             await asyncio.sleep(0.5)
@@ -370,17 +373,17 @@ async def run_all_tests(base_url: str, device_id: str, categories: List[str] = N
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Test Cisco Intents")
-    parser.add_argument("--device", "-d", default=DEFAULT_DEVICE_ID, help="Device ID")
+    parser = argparse.ArgumentParser(description="Test Huawei VRP8 Intents")
+    parser.add_argument("--device", "-d", default=DEFAULT_DEVICE_ID, help="Device node_id")
     parser.add_argument("--base-url", "-u", default=DEFAULT_BASE_URL, help="Backend base URL")
-    parser.add_argument("--category", "-c", action="append", help="Filter by category (interface, routing, ospf, system, vlan)")
+    parser.add_argument("--category", "-c", action="append", help="Filter by category (interface, ospf, routing, system)")
     parser.add_argument("--read-only", "-r", action="store_true", help="Only run read-only (GET) tests")
     
     args = parser.parse_args()
     
     asyncio.run(run_all_tests(
         base_url=args.base_url,
-        device_id=args.device,
+        node_id=args.device,
         categories=args.category,
         read_only=args.read_only
     ))

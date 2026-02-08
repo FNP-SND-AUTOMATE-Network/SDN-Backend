@@ -54,6 +54,7 @@ class DeviceVendor(str, Enum):
 
 class IntentStrategy(str, Enum):
     """Strategy สำหรับ Intent execution"""
+    OPERATION_BASED = "OPERATION_BASED"  # GET→OpenConfig, PUT/POST→Vendor (NEW DEFAULT)
     OC_FIRST = "OC_FIRST"          # ลอง OpenConfig ก่อน fallback เป็น vendor-specific
     VENDOR_FIRST = "VENDOR_FIRST"  # ลอง vendor-specific ก่อน fallback เป็น OpenConfig
     OC_ONLY = "OC_ONLY"            # ใช้ OpenConfig อย่างเดียว
@@ -84,7 +85,7 @@ class DeviceNetworkBase(BaseModel):
         max_length=63
     )
     vendor: DeviceVendor = Field(default=DeviceVendor.OTHER, description="Vendor สำหรับเลือก driver")
-    default_strategy: IntentStrategy = Field(default=IntentStrategy.OC_FIRST, description="Strategy สำหรับ Intent")
+    default_strategy: IntentStrategy = Field(default=IntentStrategy.OPERATION_BASED, description="Strategy สำหรับ Intent")
     
     # NETCONF Connection Fields (สำหรับ Mount)
     netconf_host: Optional[str] = Field(None, description="IP/Hostname สำหรับ NETCONF connection")

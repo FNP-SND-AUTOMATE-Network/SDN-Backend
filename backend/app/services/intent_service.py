@@ -1,6 +1,19 @@
 """
-Intent Service - Core service สำหรับ handle Intent requests
-รองรับ multi-vendor, strategy pattern และ fallback mechanism
+Intent Service - Core service for handling Intent requests
+
+Supports multi-vendor, strategy pattern, and fallback mechanism.
+
+Terminology:
+-----------
+- node_id: ODL topology-netconf identifier (URL-safe)
+           Used in both API requests and database
+- device_id: Database UUID (internal, not in API)
+
+Flow:
+-----
+1. API receives: { "intent": "show.interface", "node_id": "CSR1" }
+2. Query DeviceNetwork WHERE node_id = 'CSR1'
+3. Use node_id for ODL RESTCONF mount path
 """
 from typing import Dict, Any
 from app.schemas.intent import IntentRequest, IntentResponse
@@ -22,10 +35,12 @@ from app.drivers.huawei.interface import HuaweiInterfaceDriver
 # System Drivers
 from app.drivers.openconfig.system import OpenConfigSystemDriver
 from app.drivers.cisco.system import CiscoSystemDriver
+from app.drivers.huawei.system import HuaweiSystemDriver
 
 # Routing Drivers
 from app.drivers.openconfig.routing import OpenConfigRoutingDriver
 from app.drivers.cisco.routing import CiscoRoutingDriver
+from app.drivers.huawei.routing import HuaweiRoutingDriver
 
 # VLAN Drivers
 from app.drivers.openconfig.vlan import OpenConfigVlanDriver
@@ -39,15 +54,20 @@ class IntentService:
     """
     Main service for handling Intent-based requests
     
+    Terminology Note:
+        - req.node_id = database 'node_id' = ODL node identifier
+        - Used directly in ODL RESTCONF paths
+    
     Flow:
     1. Validate intent exists in registry
-    2. Get device profile
+    2. Get device profile (lookup by node_id)
     3. Strategy resolver decides which driver to use
-    4. Driver builds RESTCONF request
+    4. Driver builds RESTCONF request (uses node_id for mount path)
     5. Send to ODL via client
     6. Normalize response if needed
     7. Return unified response
     """
+
     
     def __init__(self):
         self.device_profiles = DeviceProfileService()
@@ -68,13 +88,13 @@ class IntentService:
         self.system_drivers = {
             "openconfig": OpenConfigSystemDriver(),
             "cisco": CiscoSystemDriver(),
-            # "huawei": HuaweiSystemDriver(),  # TODO: add later
+            "huawei": HuaweiSystemDriver(),
         }
         
         self.routing_drivers = {
             "openconfig": OpenConfigRoutingDriver(),
             "cisco": CiscoRoutingDriver(),
-            # "huawei": HuaweiRoutingDriver(),  # TODO: add later
+            "huawei": HuaweiRoutingDriver(),
         }
         
         # VLAN drivers
@@ -139,34 +159,34 @@ class IntentService:
             return await self._handle_device_intent(req)
         
         # Step 3: Get device profile และ check mount status
-        device = await self.device_profiles.get(req.deviceId)
+        device = await self.device_profiles.get(req.node_id)
         
         # Step 3.1: Check if device is mounted and connected
-        mount_status = await self.device_profiles.check_mount_status(req.deviceId)
+        mount_status = await self.device_profiles.check_mount_status(req.node_id)
         if not mount_status.get("ready_for_intent"):
             connection_status = mount_status.get("connection_status", "unknown")
             is_mounted = mount_status.get("mounted", False)
             
             if not is_mounted:
                 raise DeviceNotMounted(
-                    f"Device '{req.deviceId}' is not mounted in ODL. "
-                    f"Please mount the device first using POST /api/v1/nbi/devices/{req.deviceId}/mount"
+                    f"Device '{req.node_id}' is not mounted in ODL. "
+                    f"Please mount the device first using POST /api/v1/nbi/devices/{req.node_id}/mount"
                 )
             elif connection_status == "connecting":
                 raise DeviceNotMounted(
-                    f"Device '{req.deviceId}' is still connecting. "
+                    f"Device '{req.node_id}' is still connecting. "
                     f"Current status: {connection_status}. Please wait and try again."
                 )
             else:
                 raise DeviceNotMounted(
-                    f"Device '{req.deviceId}' is not connected. "
+                    f"Device '{req.node_id}' is not connected. "
                     f"Current status: {connection_status}. Please check device connectivity."
                 )
         
         # Step 4: Decide strategy
         decision = self.strategy.decide(device, req.intent)
         
-        logger.info(f"Intent: {req.intent}, Device: {req.deviceId}, "
+        logger.info(f"Intent: {req.intent}, Device: {req.node_id}, "
                    f"Strategy: {decision.strategy_used}, Primary: {decision.primary_driver}")
 
         # Step 5: Try primary driver
@@ -196,7 +216,7 @@ class IntentService:
             POST /api/v1/nbi/devices/{node_id}/mount
             POST /api/v1/nbi/devices/{node_id}/unmount
         """
-        node_id = req.deviceId  # deviceId is used as node_id for ODL
+        node_id = req.node_id  # Use node_id directly for ODL
         
         if req.intent == Intents.DEVICE.STATUS:
             spec = self.device_driver.build_get_status(node_id)
@@ -217,7 +237,7 @@ class IntentService:
         return IntentResponse(
             success=True,
             intent=req.intent,
-            deviceId=req.deviceId,
+            node_id=req.node_id,
             strategy_used="direct",
             driver_used="device",
             result=result
@@ -266,13 +286,13 @@ class IntentService:
         # Send to ODL
         raw = await self.client.send(spec)
 
-        # Normalize response if needed (pass device_id for routing normalizers)
-        result = self._normalize_response(req.intent, driver_name, raw, req.deviceId)
+        # Normalize response if needed (pass node_id for routing normalizers)
+        result = self._normalize_response(req.intent, driver_name, raw, req.node_id)
 
         return IntentResponse(
             success=True,
             intent=req.intent,
-            deviceId=req.deviceId,
+            node_id=req.node_id,
             strategy_used=strategy_used,
             driver_used=driver_name,
             result=result

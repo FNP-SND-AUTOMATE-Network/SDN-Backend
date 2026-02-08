@@ -72,6 +72,7 @@ class DeviceProfileService:
     
     # Strategy mapping
     STRATEGY_MAP = {
+        "OPERATION_BASED": "operation-based",  # NEW DEFAULT: GET→OC, PUT→Vendor
         "OC_FIRST": "oc-first",
         "VENDOR_FIRST": "vendor-first",
         "OC_ONLY": "oc-only",
@@ -95,10 +96,10 @@ class DeviceProfileService:
             vendor = db_device.vendor if db_device.vendor else "OTHER"
             oc_support = self.DEFAULT_OC_SUPPORT.get(vendor, {})
         
-        # Map strategy
+        # Map strategy - default to operation-based
         strategy = self.STRATEGY_MAP.get(
-            db_device.default_strategy if db_device.default_strategy else "OC_FIRST",
-            "oc-first"
+            db_device.default_strategy if db_device.default_strategy else "OPERATION_BASED",
+            "operation-based"  # Fallback to operation-based
         )
         
         # Map type to role

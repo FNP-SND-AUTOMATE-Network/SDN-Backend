@@ -32,7 +32,7 @@ async def handle_intent(req: IntentRequest):
     ```json
     {
         "intent": "show.interface",
-        "deviceId": "CSR1",
+        "node_id": "CSR1000vT",
         "params": {
             "interface": "GigabitEthernet1"
         }
@@ -63,7 +63,7 @@ async def handle_intent(req: IntentRequest):
             detail={
                 "code": ErrorCode.DEVICE_NOT_MOUNTED.value,
                 "message": detail.get("message", "Device is not mounted"),
-                "suggestion": detail.get("suggestion", f"Use POST /api/v1/nbi/devices/{req.deviceId}/mount to mount the device first")
+                "suggestion": detail.get("suggestion", f"Use POST /api/v1/nbi/devices/{req.node_id}/mount to mount the device first")
             }
         )
         

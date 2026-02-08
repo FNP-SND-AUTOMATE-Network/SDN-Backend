@@ -76,22 +76,28 @@ class OdlMountService:
     
     def _build_mount_payload(self, device) -> Dict[str, Any]:
         """
-        สร้าง payload สำหรับ mount NETCONF node
+        สร้าง payload สำหรับ mount NETCONF node (ODL Potassium compatible)
         
         Args:
             device: DeviceNetwork object จาก DB
         
         Returns:
-            ODL mount payload
+            ODL mount payload with RFC-8040 compliant structure
         """
         return {
-            "node": [
+            "network-topology:node": [
                 {
                     "node-id": device.node_id,
                     "netconf-node-topology:host": device.netconf_host or device.ip_address,
                     "netconf-node-topology:port": device.netconf_port or 830,
                     "netconf-node-topology:username": device.netconf_username,
                     "netconf-node-topology:password": device.netconf_password,
+                    # Stability parameters for ODL Potassium
+                    "netconf-node-topology:tcp-only": False,
+                    "netconf-node-topology:keepalive-delay": 0,
+                    "netconf-node-topology:connection-timeout-millis": 20000,
+                    "netconf-node-topology:default-request-timeout-millis": 60000,
+                    "netconf-node-topology:max-connection-attempts": 0,
                 }
             ]
         }

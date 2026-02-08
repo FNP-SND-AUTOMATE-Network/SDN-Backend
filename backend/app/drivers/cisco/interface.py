@@ -90,7 +90,7 @@ class CiscoInterfaceDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.INTERFACE.SET_IPV4,
             driver=self.name
         )
@@ -119,7 +119,7 @@ class CiscoInterfaceDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.INTERFACE.SET_IPV6,
             driver=self.name
         )
@@ -142,7 +142,7 @@ class CiscoInterfaceDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.INTERFACE.ENABLE if enabled else Intents.INTERFACE.DISABLE,
             driver=self.name
         )
@@ -166,7 +166,7 @@ class CiscoInterfaceDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.INTERFACE.SET_DESCRIPTION,
             driver=self.name
         )
@@ -190,7 +190,7 @@ class CiscoInterfaceDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.INTERFACE.SET_MTU,
             driver=self.name
         )

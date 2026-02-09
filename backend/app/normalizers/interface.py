@@ -1,9 +1,14 @@
 """
 Interface Normalizer
-แปลง vendor-specific response เป็น Unified format
+Convert vendor-specific response to Unified format
+
+Enhanced mappings for Driver Factory Pattern:
+- Huawei: ipv4Config/am4CfgAddrs/ifIpAddr -> Unified ip
+- Cisco: ietf-ip:ipv4/address[0]/ip -> Unified ip
+- Status: shutdown/adminStatus -> enabled: boolean
 """
-from typing import Any, Dict, List
-from app.schemas.unified import UnifiedInterfaceStatus, UnifiedInterfaceList
+from typing import Any, Dict, List, Optional
+from app.schemas.unified import UnifiedInterfaceStatus, UnifiedInterfaceList, InterfaceConfig
 
 
 class InterfaceNormalizer:
@@ -282,3 +287,119 @@ class InterfaceNormalizer:
             down_count=down_count
         )
         return out.model_dump()
+    
+    # ===== New Static Methods for Driver Factory Pattern =====
+    
+    @staticmethod
+    def to_interface_config(vendor: str, raw: Dict[str, Any]) -> InterfaceConfig:
+        """
+        Convert vendor-specific JSON response to Unified InterfaceConfig
+        
+        Mappings:
+        - Huawei: ipv4Config/am4CfgAddrs/am4CfgAddr[0]/ifIpAddr -> ip
+        - Cisco: ietf-ip:ipv4/address[0]/ip -> ip
+        - Status: shutdown(Cisco)/adminStatus(Huawei) -> enabled: boolean
+        
+        Args:
+            vendor: Vendor name ("cisco", "huawei")
+            raw: Raw JSON response from ODL
+            
+        Returns:
+            InterfaceConfig with normalized values
+        """
+        vendor_lower = vendor.lower()
+        
+        if vendor_lower == "cisco":
+            return InterfaceNormalizer._parse_cisco_to_config(raw)
+        elif vendor_lower == "huawei":
+            return InterfaceNormalizer._parse_huawei_to_config(raw)
+        else:
+            # Generic fallback - try to extract basic info
+            return InterfaceConfig(
+                name=raw.get("name", "unknown"),
+                enabled=True
+            )
+    
+    @staticmethod
+    def _parse_cisco_to_config(raw: Dict[str, Any]) -> InterfaceConfig:
+        """
+        Parse Cisco IETF response to InterfaceConfig
+        
+        IETF structure:
+        - name: interface name
+        - enabled: boolean (no shutdown = True)
+        - ietf-ip:ipv4/address[0]/ip: IP address
+        - ietf-ip:ipv4/address[0]/netmask: subnet mask
+        """
+        iface = raw.get("ietf-interfaces:interface") or raw
+        if isinstance(iface, list):
+            iface = iface[0] if iface else {}
+        
+        name = iface.get("name", "")
+        enabled = iface.get("enabled", True)
+        description = iface.get("description")
+        mtu = iface.get("mtu")
+        
+        # Extract IP from ietf-ip:ipv4
+        ip: Optional[str] = None
+        mask: Optional[str] = None
+        ip_block = iface.get("ietf-ip:ipv4", {})
+        addresses = ip_block.get("address", [])
+        if addresses:
+            first_addr = addresses[0]
+            ip = first_addr.get("ip")
+            # Try netmask first, then prefix-length
+            mask = first_addr.get("netmask")
+            if not mask and first_addr.get("prefix-length"):
+                mask = str(first_addr.get("prefix-length"))
+        
+        return InterfaceConfig(
+            name=name,
+            ip=ip,
+            mask=mask,
+            enabled=enabled,
+            description=description,
+            mtu=mtu
+        )
+    
+    @staticmethod
+    def _parse_huawei_to_config(raw: Dict[str, Any]) -> InterfaceConfig:
+        """
+        Parse Huawei huawei-ifm response to InterfaceConfig
+        
+        VRP8 structure:
+        - ifName: interface name
+        - adminStatus: "up" | "down" -> enabled boolean
+        - huawei-ip:ipv4Config/am4CfgAddrs/am4CfgAddr[0]/ifIpAddr: IP address
+        - huawei-ip:ipv4Config/am4CfgAddrs/am4CfgAddr[0]/subnetMask: mask
+        """
+        iface = raw.get("huawei-ifm:interface") or raw
+        if isinstance(iface, list):
+            iface = iface[0] if iface else {}
+        
+        name = iface.get("ifName", "")
+        admin_status = iface.get("adminStatus", "up")
+        enabled = admin_status.lower() == "up"
+        description = iface.get("description")
+        mtu = iface.get("mtu")
+        
+        # Extract IP from huawei-ip:ipv4Config (VRP8 structure)
+        ip: Optional[str] = None
+        mask: Optional[str] = None
+        ipv4_config = iface.get("huawei-ip:ipv4Config", {})
+        am4_cfg_addrs = ipv4_config.get("am4CfgAddrs", {})
+        am4_cfg_addr = am4_cfg_addrs.get("am4CfgAddr", [])
+        if am4_cfg_addr:
+            first_addr = am4_cfg_addr[0]
+            ip = first_addr.get("ifIpAddr")
+            mask = first_addr.get("subnetMask")
+        
+        return InterfaceConfig(
+            name=name,
+            ip=ip,
+            mask=mask,
+            enabled=enabled,
+            description=description,
+            mtu=mtu
+        )
+

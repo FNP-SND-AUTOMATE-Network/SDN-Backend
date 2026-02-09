@@ -30,3 +30,15 @@ class OdlRequestError(HTTPException):
             "message": message,
             "details": details
         })
+
+
+class UnsupportedVendor(HTTPException):
+    """Error when vendor is not supported by DriverFactory"""
+    def __init__(self, message: str):
+        super().__init__(
+            status_code=400,
+            detail={
+                "code": "UNSUPPORTED_VENDOR",
+                "message": message
+            }
+        )

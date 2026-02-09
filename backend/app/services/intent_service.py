@@ -1,7 +1,10 @@
 """
 Intent Service - Core service for handling Intent requests
 
-Supports multi-vendor, strategy pattern, and fallback mechanism.
+Refactored from Strategy Resolver to Deterministic Driver Factory Pattern:
+- No fallback mechanism (reduces latency)
+- Direct driver selection based on vendor
+- All write operations use PATCH method
 
 Terminology:
 -----------
@@ -13,12 +16,16 @@ Flow:
 -----
 1. API receives: { "intent": "show.interface", "node_id": "CSR1" }
 2. Query DeviceNetwork WHERE node_id = 'CSR1'
-3. Use node_id for ODL RESTCONF mount path
+3. DriverFactory selects native driver based on vendor (no fallback)
+4. Driver builds RESTCONF request
+5. Send to ODL via client
+6. Normalize response if needed
+7. Return unified response
 """
 from typing import Dict, Any
 from app.schemas.intent import IntentRequest, IntentResponse
 from app.services.device_profile_service_db import DeviceProfileService
-from app.services.strategy_resolver import StrategyResolver
+from app.services.driver_factory import DriverFactory
 from app.clients.odl_restconf_client import OdlRestconfClient
 from app.normalizers.interface import InterfaceNormalizer
 from app.normalizers.system import SystemNormalizer
@@ -58,6 +65,10 @@ class IntentService:
     """
     Main service for handling Intent-based requests
     
+    Architecture: Deterministic Driver Factory Pattern
+    - No fallback mechanism for lower latency
+    - Driver selected directly based on device vendor
+    
     Terminology Note:
         - req.node_id = database 'node_id' = ODL node identifier
         - Used directly in ODL RESTCONF paths
@@ -65,8 +76,8 @@ class IntentService:
     Flow:
     1. Validate intent exists in registry
     2. Get device profile (lookup by node_id)
-    3. Strategy resolver decides which driver to use
-    4. Driver builds RESTCONF request (uses node_id for mount path)
+    3. DriverFactory selects native driver (deterministic, no fallback)
+    4. Driver builds RESTCONF request
     5. Send to ODL via client
     6. Normalize response if needed
     7. Return unified response
@@ -75,7 +86,6 @@ class IntentService:
     
     def __init__(self):
         self.device_profiles = DeviceProfileService()
-        self.strategy = StrategyResolver()
         self.client = OdlRestconfClient()
         
         # Normalizers
@@ -199,29 +209,15 @@ class IntentService:
                     f"Current status: {connection_status}. Please check device connectivity."
                 )
         
-        # Step 4: Decide strategy
-        decision = self.strategy.decide(device, req.intent)
+        # Step 4: Get driver directly from factory (deterministic - no fallback)
+        intent_def = IntentRegistry.get(req.intent)
+        driver_name = device.vendor  # Use vendor directly, no strategy decision
         
         logger.info(f"Intent: {req.intent}, Device: {req.node_id}, "
-                   f"Strategy: {decision.strategy_used}, Primary: {decision.primary_driver}")
-
-        # Step 5: Try primary driver
-        try:
-            return await self._execute(req, device, decision.strategy_used, decision.primary_driver)
-
-        except OdlRequestError as e:
-            # Step 6: Check fallback condition
-            details = e.detail if isinstance(e.detail, dict) else {"details": str(e.detail)}
-            status = details.get("details", {}).get("status", e.status_code)
-            body = details.get("details", {}).get("body", "")
-
-            fallback_driver = self._get_driver(req.intent, decision.fallback_driver)
-            if (fallback_driver and 
-                self.strategy.should_fallback(int(status), str(body))):
-                logger.info(f"Fallback to {decision.fallback_driver}")
-                return await self._execute(req, device, decision.strategy_used, decision.fallback_driver)
-
-            raise
+                   f"Driver: {driver_name} (deterministic, no fallback)")
+        
+        # Step 5: Execute with native driver (no fallback mechanism)
+        return await self._execute(req, device, "deterministic", driver_name)
 
     async def _handle_device_intent(self, req: IntentRequest) -> IntentResponse:
         """

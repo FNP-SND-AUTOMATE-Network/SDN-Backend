@@ -36,6 +36,28 @@ class UnifiedInterfaceList(BaseModel):
     down_count: int = 0
 
 
+# ===== INTERFACE CONFIG (Write Operations) =====
+class InterfaceConfig(BaseModel):
+    """
+    Unified Interface Configuration Model
+    ใช้เป็น input สำหรับ configure_interface()
+    
+    Attributes:
+        name: Interface name (e.g., "GigabitEthernet1", "Ethernet1/0/3")
+        ip: IPv4 address (e.g., "10.0.0.1")
+        mask: Subnet mask in CIDR format (e.g., "24") or dotted decimal
+        enabled: Administrative status (True = no shutdown)
+        description: Interface description
+        mtu: MTU size
+    """
+    name: str
+    ip: Optional[str] = None
+    mask: Optional[str] = None
+    enabled: bool = True
+    description: Optional[str] = None
+    mtu: Optional[int] = None
+
+
 # ===== ROUTING SCHEMAS =====
 class UnifiedRoute(BaseModel):
     """Single route entry"""

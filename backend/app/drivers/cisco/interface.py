@@ -1,11 +1,17 @@
 """
 Cisco Interface Driver
 รองรับ IETF + Cisco YANG models สำหรับ Interface operations
+
+Refactored to support:
+- configure_interface(): Unified InterfaceConfig -> Cisco-IOS-XE-native payload
+- get_interface(): Read interface for Normalizer
+- PATCH method for safe config merge (RFC-8040)
 """
 from typing import Any, Dict
 from app.drivers.base import BaseDriver
 from app.schemas.device_profile import DeviceProfile
 from app.schemas.request_spec import RequestSpec
+from app.schemas.unified import InterfaceConfig
 from app.builders.odl_paths import odl_mount_base
 from app.core.errors import UnsupportedIntent, DriverBuildError
 from app.core.intent_registry import Intents
@@ -86,7 +92,7 @@ class CiscoInterfaceDriver(BaseDriver):
         }
 
         return RequestSpec(
-            method="PUT",
+            method="PATCH",  # Use PATCH for safe merge
             datastore="config",
             path=path,
             payload=payload,
@@ -115,7 +121,7 @@ class CiscoInterfaceDriver(BaseDriver):
         }
 
         return RequestSpec(
-            method="PUT",
+            method="PATCH",  # Use PATCH for safe merge
             datastore="config",
             path=path,
             payload=payload,
@@ -220,6 +226,86 @@ class CiscoInterfaceDriver(BaseDriver):
             payload=None,
             headers={"accept": "application/yang-data+json"},
             intent=Intents.SHOW.INTERFACES,
+            driver=self.name
+        )
+
+
+    # ===== New Unified Methods (Driver Factory Pattern) =====
+    
+    def configure_interface(self, device: DeviceProfile, config: InterfaceConfig) -> RequestSpec:
+        """
+        Configure interface from Unified InterfaceConfig -> Cisco-IOS-XE-native payload
+        Uses PATCH method for safe config merge (RFC-8040 compliant)
+        
+        Args:
+            device: Device profile
+            config: Unified interface configuration
+            
+        Returns:
+            RequestSpec with Cisco-native payload
+        """
+        mount = odl_mount_base(device.node_id)
+        path = f"{mount}/ietf-interfaces:interfaces/interface={config.name}"
+        
+        # Build base payload
+        interface_payload = {
+            "name": config.name,
+            "enabled": config.enabled,
+        }
+        
+        # Add IPv4 if specified
+        if config.ip and config.mask:
+            # แปลง mask: ถ้าเป็นตัวเลข (CIDR) ให้แปลงเป็น dotted decimal
+            if config.mask.isdigit():
+                netmask = _prefix_to_netmask(int(config.mask))
+            else:
+                netmask = config.mask
+            
+            interface_payload["ietf-ip:ipv4"] = {
+                "address": [{"ip": config.ip, "netmask": netmask}]
+            }
+        
+        # Add description if specified
+        if config.description:
+            interface_payload["description"] = config.description
+        
+        # Add MTU if specified
+        if config.mtu:
+            interface_payload["mtu"] = config.mtu
+        
+        payload = {"ietf-interfaces:interface": interface_payload}
+        
+        return RequestSpec(
+            method="PATCH",  # Use PATCH for safe merge
+            datastore="config",
+            path=path,
+            payload=payload,
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
+            intent="interface.configure",
+            driver=self.name
+        )
+    
+    def get_interface(self, device: DeviceProfile, name: str) -> RequestSpec:
+        """
+        Get interface configuration for Normalizer to process
+        
+        Args:
+            device: Device profile
+            name: Interface name
+            
+        Returns:
+            RequestSpec for GET operation
+        """
+        mount = odl_mount_base(device.node_id)
+        path = f"{mount}/ietf-interfaces:interfaces/interface={name}"
+        
+        return RequestSpec(
+            method="GET",
+            datastore="operational",
+            path=path,
+            payload=None,
+            headers={"Accept": "application/yang-data+json"},
+            intent="show.interface",
             driver=self.name
         )
 

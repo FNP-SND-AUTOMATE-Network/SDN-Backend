@@ -389,15 +389,20 @@ class CiscoRoutingDriver(BaseDriver):
         
         path = (
             f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf"
-            f"/ospf/process-id={process_id}/passive-interface/interface={interface}"
+            f"/ospf/process-id={process_id}"
         )
         
         payload = {
-            "Cisco-IOS-XE-ospf:interface": interface
+            "Cisco-IOS-XE-ospf:process-id": {
+                "id": int(process_id),
+                "passive-interface": {
+                    "interface": [interface]
+                }
+            }
         }
 
         return RequestSpec(
-            method="PUT",
+            method="PATCH",
             datastore="config",
             path=path,
             payload=payload,

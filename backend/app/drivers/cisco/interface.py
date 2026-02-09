@@ -1,6 +1,6 @@
 """
 Cisco Interface Driver
-รองรับ IETF + Cisco YANG models สำหรับ Interface operations
+รองรับ Cisco YANG models สำหรับ Interface operations
 
 Refactored to support:
 - configure_interface(): Unified InterfaceConfig -> Cisco-IOS-XE-native payload
@@ -211,39 +211,39 @@ class CiscoInterfaceDriver(BaseDriver):
         if not ifname:
             raise DriverBuildError("params require interface")
 
-        # Use Cisco native model - more reliable than IETF for enable/disable
-        path = f"{mount}/Cisco-IOS-XE-native:native/interface"
-        
-        # Parse interface type and number (e.g. GigabitEthernet2 -> GigabitEthernet, 2)
+        # Use Cisco native model - shutdown/no shutdown
         iface_type, iface_num = self._parse_interface_name(ifname)
         
-        payload = {
-            f"Cisco-IOS-XE-native:{iface_type}": [{
-                "name": iface_num,
-            }]
-        }
-        
-        # Cisco native: shutdown = disabled, no shutdown = remove shutdown
-        if not enabled:
-            payload[f"Cisco-IOS-XE-native:{iface_type}"][0]["shutdown"] = [None]
-        
-        method = "PATCH"
-        
-        # For enabling (no shutdown), we need to DELETE the shutdown leaf
         if enabled:
+            # Enable = DELETE the shutdown leaf (no shutdown)
             path = f"{mount}/Cisco-IOS-XE-native:native/interface/{iface_type}={iface_num}/shutdown"
-            method = "DELETE"
-            payload = None
-
-        return RequestSpec(
-            method=method,
-            datastore="config",
-            path=path,
-            payload=payload,
-            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
-            intent=Intents.INTERFACE.ENABLE if enabled else Intents.INTERFACE.DISABLE,
-            driver=self.name
-        )
+            return RequestSpec(
+                method="DELETE",
+                datastore="config",
+                path=path,
+                payload=None,
+                headers={"Accept": "application/yang-data+json"},
+                intent=Intents.INTERFACE.ENABLE,
+                driver=self.name
+            )
+        else:
+            # Disable = PATCH to add shutdown
+            path = f"{mount}/Cisco-IOS-XE-native:native/interface/{iface_type}={iface_num}"
+            payload = {
+                f"Cisco-IOS-XE-native:{iface_type}": {
+                    "name": iface_num,
+                    "shutdown": [None]
+                }
+            }
+            return RequestSpec(
+                method="PATCH",
+                datastore="config",
+                path=path,
+                payload=payload,
+                headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
+                intent=Intents.INTERFACE.DISABLE,
+                driver=self.name
+            )
     
     def _build_set_description(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
         ifname = params.get("interface")

@@ -46,12 +46,28 @@ class IntentRegistry:
         optional_params=["description"],
     )
     
+    INTERFACE_REMOVE_IPV4 = IntentDefinition(
+        name="interface.remove_ipv4",
+        category=IntentCategory.INTERFACE,
+        description="Remove IPv4 address from interface",
+        required_params=["interface"],
+        optional_params=["ip"],
+    )
+    
     INTERFACE_SET_IPV6 = IntentDefinition(
         name="interface.set_ipv6",
         category=IntentCategory.INTERFACE,
         description="Set IPv6 address on interface",
         required_params=["interface", "ip", "prefix"],
         optional_params=["description"],
+    )
+    
+    INTERFACE_REMOVE_IPV6 = IntentDefinition(
+        name="interface.remove_ipv6",
+        category=IntentCategory.INTERFACE,
+        description="Remove IPv6 address from interface",
+        required_params=["interface"],
+        optional_params=["ip"],
     )
     
     INTERFACE_ENABLE = IntentDefinition(
@@ -446,7 +462,9 @@ class Intents:
     """
     class INTERFACE:
         SET_IPV4 = "interface.set_ipv4"
+        REMOVE_IPV4 = "interface.remove_ipv4"
         SET_IPV6 = "interface.set_ipv6"
+        REMOVE_IPV6 = "interface.remove_ipv6"
         ENABLE = "interface.enable"
         DISABLE = "interface.disable"
         SET_DESCRIPTION = "interface.set_description"

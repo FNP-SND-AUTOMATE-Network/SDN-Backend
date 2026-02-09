@@ -23,7 +23,9 @@ class CiscoInterfaceDriver(BaseDriver):
     # Intents ที่ driver นี้รองรับ
     SUPPORTED_INTENTS = {
         Intents.INTERFACE.SET_IPV4,
+        Intents.INTERFACE.REMOVE_IPV4,
         Intents.INTERFACE.SET_IPV6,
+        Intents.INTERFACE.REMOVE_IPV6,
         Intents.INTERFACE.ENABLE,
         Intents.INTERFACE.DISABLE,
         Intents.INTERFACE.SET_DESCRIPTION,
@@ -32,6 +34,20 @@ class CiscoInterfaceDriver(BaseDriver):
         Intents.SHOW.INTERFACES,
     }
 
+    @staticmethod
+    def _parse_interface_name(ifname: str):
+        """
+        Parse interface name into type and number
+        e.g. 'GigabitEthernet2' -> ('GigabitEthernet', '2')
+             'GigabitEthernet0/0/0' -> ('GigabitEthernet', '0/0/0')
+             'Loopback0' -> ('Loopback', '0')
+        """
+        import re
+        match = re.match(r'^([A-Za-z\-]+?)(\d.*)$', ifname)
+        if match:
+            return match.group(1), match.group(2)
+        return ifname, ""
+
     def build(self, device: DeviceProfile, intent: str, params: Dict[str, Any]) -> RequestSpec:
         mount = odl_mount_base(device.node_id)
 
@@ -39,9 +55,17 @@ class CiscoInterfaceDriver(BaseDriver):
         if intent == Intents.INTERFACE.SET_IPV4:
             return self._build_set_ipv4(mount, params)
         
+        # ===== INTERFACE REMOVE IPv4 =====
+        if intent == Intents.INTERFACE.REMOVE_IPV4:
+            return self._build_remove_ipv4(mount, params)
+        
         # ===== INTERFACE SET IPv6 =====
         if intent == Intents.INTERFACE.SET_IPV6:
             return self._build_set_ipv6(mount, params)
+        
+        # ===== INTERFACE REMOVE IPv6 =====
+        if intent == Intents.INTERFACE.REMOVE_IPV6:
+            return self._build_remove_ipv6(mount, params)
         
         # ===== INTERFACE ENABLE =====
         if intent == Intents.INTERFACE.ENABLE:
@@ -68,6 +92,58 @@ class CiscoInterfaceDriver(BaseDriver):
             return self._build_show_interfaces(mount)
 
         raise UnsupportedIntent(intent)
+
+    # ===== Remove IP Methods =====
+    
+    def _build_remove_ipv4(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """Remove IPv4 address from interface (no ip address)"""
+        ifname = params.get("interface")
+        if not ifname:
+            raise DriverBuildError("params require interface")
+
+        ip = params.get("ip")
+        
+        if ip:
+            # DELETE specific IP address
+            path = f"{mount}/ietf-interfaces:interfaces/interface={ifname}/ietf-ip:ipv4/address={ip}"
+        else:
+            # DELETE all IPv4 config from interface
+            path = f"{mount}/ietf-interfaces:interfaces/interface={ifname}/ietf-ip:ipv4"
+
+        return RequestSpec(
+            method="DELETE",
+            datastore="config",
+            path=path,
+            payload=None,
+            headers={"Accept": "application/yang-data+json"},
+            intent=Intents.INTERFACE.REMOVE_IPV4,
+            driver=self.name
+        )
+    
+    def _build_remove_ipv6(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """Remove IPv6 address from interface (no ipv6 address)"""
+        ifname = params.get("interface")
+        if not ifname:
+            raise DriverBuildError("params require interface")
+
+        ip = params.get("ip")
+        
+        if ip:
+            # DELETE specific IPv6 address
+            path = f"{mount}/ietf-interfaces:interfaces/interface={ifname}/ietf-ip:ipv6/address={ip}"
+        else:
+            # DELETE all IPv6 config from interface
+            path = f"{mount}/ietf-interfaces:interfaces/interface={ifname}/ietf-ip:ipv6"
+
+        return RequestSpec(
+            method="DELETE",
+            datastore="config",
+            path=path,
+            payload=None,
+            headers={"Accept": "application/yang-data+json"},
+            intent=Intents.INTERFACE.REMOVE_IPV6,
+            driver=self.name
+        )
 
     # ===== Builder Methods =====
     
@@ -135,16 +211,32 @@ class CiscoInterfaceDriver(BaseDriver):
         if not ifname:
             raise DriverBuildError("params require interface")
 
-        path = f"{mount}/ietf-interfaces:interfaces/interface={ifname}"
+        # Use Cisco native model - more reliable than IETF for enable/disable
+        path = f"{mount}/Cisco-IOS-XE-native:native/interface"
+        
+        # Parse interface type and number (e.g. GigabitEthernet2 -> GigabitEthernet, 2)
+        iface_type, iface_num = self._parse_interface_name(ifname)
+        
         payload = {
-            "ietf-interfaces:interface": {
-                "name": ifname,
-                "enabled": enabled
-            }
+            f"Cisco-IOS-XE-native:{iface_type}": [{
+                "name": iface_num,
+            }]
         }
+        
+        # Cisco native: shutdown = disabled, no shutdown = remove shutdown
+        if not enabled:
+            payload[f"Cisco-IOS-XE-native:{iface_type}"][0]["shutdown"] = [None]
+        
+        method = "PATCH"
+        
+        # For enabling (no shutdown), we need to DELETE the shutdown leaf
+        if enabled:
+            path = f"{mount}/Cisco-IOS-XE-native:native/interface/{iface_type}={iface_num}/shutdown"
+            method = "DELETE"
+            payload = None
 
         return RequestSpec(
-            method="PATCH",
+            method=method,
             datastore="config",
             path=path,
             payload=payload,
@@ -183,10 +275,13 @@ class CiscoInterfaceDriver(BaseDriver):
         if not ifname or mtu is None:
             raise DriverBuildError("params require interface, mtu")
 
-        path = f"{mount}/ietf-interfaces:interfaces/interface={ifname}"
+        # Use Cisco native model - IETF model doesn't support MTU on CSR1000v
+        iface_type, iface_num = self._parse_interface_name(ifname)
+        path = f"{mount}/Cisco-IOS-XE-native:native/interface/{iface_type}={iface_num}"
+        
         payload = {
-            "ietf-interfaces:interface": {
-                "name": ifname,
+            f"Cisco-IOS-XE-native:{iface_type}": {
+                "name": iface_num,
                 "mtu": int(mtu)
             }
         }

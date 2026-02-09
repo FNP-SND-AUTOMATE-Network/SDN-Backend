@@ -24,7 +24,9 @@ class HuaweiInterfaceDriver(BaseDriver):
     # Intents supported by this driver
     SUPPORTED_INTENTS = {
         Intents.INTERFACE.SET_IPV4,
+        Intents.INTERFACE.REMOVE_IPV4,
         Intents.INTERFACE.SET_IPV6,
+        Intents.INTERFACE.REMOVE_IPV6,
         Intents.INTERFACE.ENABLE,
         Intents.INTERFACE.DISABLE,
         Intents.INTERFACE.SET_DESCRIPTION,
@@ -40,9 +42,17 @@ class HuaweiInterfaceDriver(BaseDriver):
         if intent == Intents.INTERFACE.SET_IPV4:
             return self._build_set_ipv4(mount, params)
         
+        # ===== INTERFACE REMOVE IPv4 =====
+        if intent == Intents.INTERFACE.REMOVE_IPV4:
+            return self._build_remove_ipv4(mount, params)
+        
         # ===== INTERFACE SET IPv6 =====
         if intent == Intents.INTERFACE.SET_IPV6:
             return self._build_set_ipv6(mount, params)
+        
+        # ===== INTERFACE REMOVE IPv6 =====
+        if intent == Intents.INTERFACE.REMOVE_IPV6:
+            return self._build_remove_ipv6(mount, params)
         
         # ===== INTERFACE ENABLE =====
         if intent == Intents.INTERFACE.ENABLE:
@@ -69,6 +79,46 @@ class HuaweiInterfaceDriver(BaseDriver):
             return self._build_show_interfaces(mount)
 
         raise UnsupportedIntent(intent)
+
+    # ===== Remove IP Methods =====
+    
+    def _build_remove_ipv4(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """Remove IPv4 address from interface (undo ip address)"""
+        ifname = params.get("interface")
+        if not ifname:
+            raise DriverBuildError("params require interface")
+
+        encoded_ifname = urllib.parse.quote(ifname, safe='')
+        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}/huawei-ip:ipv4Config"
+
+        return RequestSpec(
+            method="DELETE",
+            datastore="config",
+            path=path,
+            payload=None,
+            headers={"Accept": "application/yang-data+json"},
+            intent=Intents.INTERFACE.REMOVE_IPV4,
+            driver=self.name
+        )
+    
+    def _build_remove_ipv6(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """Remove IPv6 address from interface (undo ipv6 address)"""
+        ifname = params.get("interface")
+        if not ifname:
+            raise DriverBuildError("params require interface")
+
+        encoded_ifname = urllib.parse.quote(ifname, safe='')
+        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}/huawei-ip:ipv6Config"
+
+        return RequestSpec(
+            method="DELETE",
+            datastore="config",
+            path=path,
+            payload=None,
+            headers={"Accept": "application/yang-data+json"},
+            intent=Intents.INTERFACE.REMOVE_IPV6,
+            driver=self.name
+        )
 
     # ===== Builder Methods =====
     

@@ -272,37 +272,39 @@ class HuaweiRoutingDriver(BaseDriver):
         )
 
     # =========================================================================
-    # Static Routing Builder Methods
+    # Static Routing Builder Methods (huawei-routing)
     # =========================================================================
     
     def _build_static_add(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
-        """Add static route using huawei-staticrt"""
+        """
+        Add static route using huawei-routing module.
+        
+        VRP8 YANG Path: /huawei-routing:routing/static-routes/ipv4-static-route
+        
+        Params:
+            prefix: Destination prefix (e.g., "10.0.0.0/24")
+            next_hop: Next-hop IP address
+            vrf_name: VRF name (default: "_public_" for global)
+        """
         prefix = params.get("prefix")  # e.g., "10.0.0.0/24"
         next_hop = params.get("next_hop")
+        vrf_name = params.get("vrf_name", "_public_")
         
         if not prefix or not next_hop:
             raise DriverBuildError("params require prefix, next_hop")
         
         # Parse prefix
         network, mask_len = prefix.split("/")
-        mask = _prefix_to_netmask(int(mask_len))
         
-        path = f"{mount}/huawei-staticrt:staticrt/staticrtbase/srRoutes"
+        path = f"{mount}/huawei-routing:routing/static-routes/ipv4-static-route"
         
         payload = {
-            "huawei-staticrt:srRoutes": {
-                "srRoute": [{
-                    "vrfName": "_public_",
-                    "afType": "ipv4unicast",
-                    "topologyName": "base",
-                    "prefix": network,
-                    "maskLength": int(mask_len),
-                    "ifName": "",
-                    "destVrfName": "_public_",
-                    "nexthop": next_hop,
-                    "preference": 60
-                }]
-            }
+            "huawei-routing:ipv4-static-route": [{
+                "vrf-name": vrf_name,
+                "destination-ip": network,
+                "mask-length": int(mask_len),
+                "nexthop-address": next_hop
+            }]
         }
 
         return RequestSpec(
@@ -319,6 +321,7 @@ class HuaweiRoutingDriver(BaseDriver):
         """Delete static route"""
         prefix = params.get("prefix")
         next_hop = params.get("next_hop")
+        vrf_name = params.get("vrf_name", "_public_")
         
         if not prefix:
             raise DriverBuildError("params require prefix")
@@ -326,9 +329,10 @@ class HuaweiRoutingDriver(BaseDriver):
         network, mask_len = prefix.split("/")
         encoded_network = urllib.parse.quote(network, safe='')
         encoded_nexthop = urllib.parse.quote(next_hop, safe='') if next_hop else ""
+        encoded_vrf = urllib.parse.quote(vrf_name, safe='')
         
-        # Build path with all key components
-        path = f"{mount}/huawei-staticrt:staticrt/staticrtbase/srRoutes/srRoute=_public_,ipv4unicast,base,{encoded_network},{mask_len},,_public_,{encoded_nexthop}"
+        # Build path with key components
+        path = f"{mount}/huawei-routing:routing/static-routes/ipv4-static-route={encoded_vrf},{encoded_network},{mask_len},{encoded_nexthop}"
 
         return RequestSpec(
             method="DELETE",
@@ -341,8 +345,8 @@ class HuaweiRoutingDriver(BaseDriver):
         )
     
     def _build_show_ip_route(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
-        """Get routing table"""
-        path = f"{mount}/huawei-staticrt:staticrt/staticrtbase/srRoutes?content=config"
+        """Get static routing table"""
+        path = f"{mount}/huawei-routing:routing/static-routes?content=config"
 
         return RequestSpec(
             method="GET",

@@ -16,6 +16,7 @@ class IntentCategory(str, Enum):
     VLAN = "vlan"
     ACL = "acl"
     DEVICE = "device"  # Device management (mount/unmount)
+    DHCP = "dhcp"      # DHCP server configuration
 
 
 @dataclass
@@ -307,7 +308,7 @@ class IntentRegistry:
         category=IntentCategory.VLAN,
         description="Create VLAN",
         required_params=["vlan_id"],
-        optional_params=["name"],
+        optional_params=["name", "description"],
     )
     
     VLAN_DELETE = IntentDefinition(
@@ -317,12 +318,60 @@ class IntentRegistry:
         required_params=["vlan_id"],
     )
     
+    VLAN_UPDATE = IntentDefinition(
+        name="vlan.update",
+        category=IntentCategory.VLAN,
+        description="Update VLAN attributes",
+        required_params=["vlan_id"],
+        optional_params=["name", "description"],
+    )
+    
     VLAN_ASSIGN_PORT = IntentDefinition(
         name="vlan.assign_port",
         category=IntentCategory.VLAN,
         description="Assign port to VLAN",
         required_params=["interface", "vlan_id"],
         optional_params=["mode"],  # access | trunk
+    )
+    
+    SHOW_VLANS = IntentDefinition(
+        name="show.vlans",
+        category=IntentCategory.SHOW,
+        description="Show all VLANs",
+        required_params=[],
+        is_read_only=True,
+    )
+    
+    # ===== DHCP INTENTS =====
+    DHCP_CREATE_POOL = IntentDefinition(
+        name="dhcp.create_pool",
+        category=IntentCategory.DHCP,
+        description="Create DHCP pool",
+        required_params=["pool_name", "gateway", "mask", "start_ip", "end_ip"],
+        optional_params=["dns_servers", "lease_days"],
+    )
+    
+    DHCP_DELETE_POOL = IntentDefinition(
+        name="dhcp.delete_pool",
+        category=IntentCategory.DHCP,
+        description="Delete DHCP pool",
+        required_params=["pool_name"],
+    )
+    
+    DHCP_UPDATE_POOL = IntentDefinition(
+        name="dhcp.update_pool",
+        category=IntentCategory.DHCP,
+        description="Update DHCP pool",
+        required_params=["pool_name"],
+        optional_params=["gateway", "mask", "start_ip", "end_ip", "dns_servers"],
+    )
+    
+    SHOW_DHCP_POOLS = IntentDefinition(
+        name="show.dhcp_pools",
+        category=IntentCategory.SHOW,
+        description="Show DHCP pools",
+        required_params=[],
+        is_read_only=True,
     )
     
     # ===== Registry Map =====
@@ -443,4 +492,10 @@ class Intents:
     class VLAN:
         CREATE = "vlan.create"
         DELETE = "vlan.delete"
+        UPDATE = "vlan.update"
         ASSIGN_PORT = "vlan.assign_port"
+    
+    class DHCP:
+        CREATE_POOL = "dhcp.create_pool"
+        DELETE_POOL = "dhcp.delete_pool"
+        UPDATE_POOL = "dhcp.update_pool"

@@ -45,6 +45,10 @@ from app.drivers.huawei.routing import HuaweiRoutingDriver
 # VLAN Drivers
 from app.drivers.openconfig.vlan import OpenConfigVlanDriver
 from app.drivers.cisco.vlan import CiscoVlanDriver
+from app.drivers.huawei.vlan import HuaweiVlanDriver
+
+# DHCP Drivers
+from app.drivers.huawei.dhcp import HuaweiDhcpDriver
 
 # Device Driver (mount/unmount)
 from app.drivers.device import DeviceDriver
@@ -101,7 +105,12 @@ class IntentService:
         self.vlan_drivers = {
             "openconfig": OpenConfigVlanDriver(),
             "cisco": CiscoVlanDriver(),
-            # "huawei": HuaweiVlanDriver(),  # TODO: add later
+            "huawei": HuaweiVlanDriver(),
+        }
+        
+        # DHCP drivers
+        self.dhcp_drivers = {
+            "huawei": HuaweiDhcpDriver(),
         }
         
         # Device driver (mount/unmount)
@@ -126,6 +135,9 @@ class IntentService:
         elif intent_def.category == IntentCategory.VLAN:
             return self.vlan_drivers.get(driver_name)
         
+        elif intent_def.category == IntentCategory.DHCP:
+            return self.dhcp_drivers.get(driver_name)
+        
         elif intent_def.category == IntentCategory.SHOW:
             # Show intents - route to correct driver based on intent
             if intent in [Intents.SHOW.INTERFACE, Intents.SHOW.INTERFACES]:
@@ -135,6 +147,10 @@ class IntentService:
             elif intent in [Intents.SHOW.IP_ROUTE, Intents.SHOW.IP_INTERFACE_BRIEF,
                            Intents.SHOW.OSPF_NEIGHBORS, Intents.SHOW.OSPF_DATABASE]:
                 return self.routing_drivers.get(driver_name)
+            elif intent == Intents.SHOW.VLANS:
+                return self.vlan_drivers.get(driver_name)
+            elif intent == Intents.SHOW.DHCP_POOLS:
+                return self.dhcp_drivers.get(driver_name)
             else:
                 return self.interface_drivers.get(driver_name)
         

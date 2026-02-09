@@ -34,6 +34,8 @@ class TestCategory(Enum):
     OSPF = "ospf"
     ROUTING = "routing"
     SYSTEM = "system"
+    VLAN = "vlan"
+    DHCP = "dhcp"
 
 
 @dataclass
@@ -132,7 +134,7 @@ OSPF_TESTS = [
     # Create OSPF Process
     TestCase(
         name="Enable OSPF Process",
-        intent="routing.ospf_enable",
+        intent="routing.ospf.enable",
         params={
             "process_id": 1,
             "router_id": "192.168.1.1",
@@ -145,7 +147,7 @@ OSPF_TESTS = [
     # Set Router ID
     TestCase(
         name="Set OSPF Router ID",
-        intent="routing.ospf_set_router_id",
+        intent="routing.ospf.set_router_id",
         params={
             "process_id": 1,
             "router_id": "10.0.0.1"
@@ -157,7 +159,7 @@ OSPF_TESTS = [
     # Add Network to Area
     TestCase(
         name="Add OSPF Network",
-        intent="routing.ospf_add_network",
+        intent="routing.ospf.add_network",
         params={
             "process_id": 1,
             "area": "0.0.0.0",
@@ -166,7 +168,7 @@ OSPF_TESTS = [
         },
         category=TestCategory.OSPF,
         is_read_only=False,
-        cleanup_intent="routing.ospf_remove_network",
+        cleanup_intent="routing.ospf.remove_network",
         cleanup_params={
             "process_id": 1,
             "area": "0.0.0.0",
@@ -177,14 +179,14 @@ OSPF_TESTS = [
     # Show OSPF (Read-Only)
     TestCase(
         name="Show OSPF Neighbors",
-        intent="show.ospf_neighbors",
+        intent="show.ospf.neighbors",
         params={"process_id": 1},
         category=TestCategory.OSPF,
         is_read_only=True
     ),
     TestCase(
         name="Show OSPF Database",
-        intent="show.ospf_database",
+        intent="show.ospf.database",
         params={"process_id": 1},
         category=TestCategory.OSPF,
         is_read_only=True
@@ -193,7 +195,7 @@ OSPF_TESTS = [
     # Disable OSPF (cleanup)
     TestCase(
         name="Disable OSPF Process",
-        intent="routing.ospf_disable",
+        intent="routing.ospf.disable",
         params={"process_id": 1},
         category=TestCategory.OSPF,
         is_read_only=False
@@ -202,19 +204,19 @@ OSPF_TESTS = [
 
 
 # ==============================================================================
-# Static Routing Tests (huawei-staticrt)
+# Static Routing Tests (huawei-routing)
 # ==============================================================================
 ROUTING_TESTS = [
     TestCase(
         name="Add Static Route",
-        intent="routing.static_add",
+        intent="routing.static.add",
         params={
             "prefix": "10.0.0.0/24",
             "next_hop": "192.168.1.254"
         },
         category=TestCategory.ROUTING,
         is_read_only=False,
-        cleanup_intent="routing.static_delete",
+        cleanup_intent="routing.static.delete",
         cleanup_params={
             "prefix": "10.0.0.0/24",
             "next_hop": "192.168.1.254"
@@ -254,9 +256,81 @@ SYSTEM_TESTS = [
 
 
 # ==============================================================================
+# VLAN Tests (huawei-vlan)
+# ==============================================================================
+VLAN_TESTS = [
+    TestCase(
+        name="Show All VLANs",
+        intent="show.vlans",
+        params={},
+        category=TestCategory.VLAN,
+        is_read_only=True
+    ),
+    
+    TestCase(
+        name="Create VLAN",
+        intent="vlan.create",
+        params={
+            "vlan_id": 100,
+            "name": "TEST_VLAN_100",
+            "description": "Test VLAN for automation"
+        },
+        category=TestCategory.VLAN,
+        is_read_only=False,
+        cleanup_intent="vlan.delete",
+        cleanup_params={"vlan_id": 100}
+    ),
+    
+    TestCase(
+        name="Update VLAN",
+        intent="vlan.update",
+        params={
+            "vlan_id": 100,
+            "name": "UPDATED_VLAN",
+            "description": "Updated description"
+        },
+        category=TestCategory.VLAN,
+        is_read_only=False
+    ),
+]
+
+
+# ==============================================================================
+# DHCP Tests (huawei-ip-pool)
+# ==============================================================================
+DHCP_TESTS = [
+    TestCase(
+        name="Show DHCP Pools",
+        intent="show.dhcp_pools",
+        params={},
+        category=TestCategory.DHCP,
+        is_read_only=True
+    ),
+    
+    TestCase(
+        name="Create DHCP Pool",
+        intent="dhcp.create_pool",
+        params={
+            "pool_name": "TEST_POOL",
+            "gateway": "192.168.100.1",
+            "mask": "255.255.255.0",
+            "start_ip": "192.168.100.10",
+            "end_ip": "192.168.100.100",
+            "dns_servers": ["8.8.8.8", "8.8.4.4"],
+            "lease_days": 1
+        },
+        category=TestCategory.DHCP,
+        is_read_only=False,
+        cleanup_intent="dhcp.delete_pool",
+        cleanup_params={"pool_name": "TEST_POOL"}
+    ),
+]
+
+
+# ==============================================================================
 # Test Runner
 # ==============================================================================
-ALL_TESTS = INTERFACE_TESTS + OSPF_TESTS + ROUTING_TESTS + SYSTEM_TESTS
+ALL_TESTS = INTERFACE_TESTS + OSPF_TESTS + ROUTING_TESTS + SYSTEM_TESTS + VLAN_TESTS + DHCP_TESTS
 
 
 async def run_test(client: httpx.AsyncClient, node_id: str, test: TestCase) -> Dict[str, Any]:

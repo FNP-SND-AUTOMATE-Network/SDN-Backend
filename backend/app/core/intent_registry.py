@@ -206,15 +206,15 @@ class IntentRegistry:
     ROUTING_OSPF_ADD_NETWORK = IntentDefinition(
         name="routing.ospf.add_network",
         category=IntentCategory.ROUTING,
-        description="Add network to OSPF area",
-        required_params=["process_id", "network", "wildcard", "area"],
+        description="Add OSPF to interface (ip ospf process-id area area-id)",
+        required_params=["process_id", "interface", "area"],
     )
     
     ROUTING_OSPF_REMOVE_NETWORK = IntentDefinition(
         name="routing.ospf.remove_network",
         category=IntentCategory.ROUTING,
-        description="Remove network from OSPF",
-        required_params=["process_id", "network", "wildcard", "area"],
+        description="Remove OSPF from interface",
+        required_params=["process_id", "interface"],
     )
     
     ROUTING_OSPF_SET_ROUTER_ID = IntentDefinition(

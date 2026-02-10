@@ -41,15 +41,6 @@ CISCO_INTENTS = {
     "show.ip_interface_brief": {
         "params": {}
     },
-    "show.ospf.neighbors": {
-        "params": {}
-    },
-    "show.ospf.database": {
-        "params": {}
-    },
-    "show.vlans": {
-        "params": {}
-    },
     
     # ==================== INTERFACE ====================
     "interface.set_ipv4": {
@@ -101,6 +92,13 @@ CISCO_INTENTS = {
     "routing.ospf.add_network": {
         "params": {"process_id": "99", "network": "10.0.0.0", "wildcard": "0.0.0.255", "area": "0"},
     },
+    # Show OSPF data after enabling OSPF
+    "show.ospf.neighbors": {
+        "params": {}
+    },
+    "show.ospf.database": {
+        "params": {}
+    },
     "routing.ospf.set_passive_interface": {
         "params": {"process_id": "99", "interface": "GigabitEthernet1"},
     },
@@ -129,10 +127,17 @@ CISCO_INTENTS = {
     "system.set_dns": {
         "params": {"server": "8.8.8.8"},
     },
+    "system.save_config": {
+        "params": {},
+    },
     
     # ==================== VLAN ====================
     "vlan.create": {
         "params": {"vlan_id": 999, "name": "TEST_VLAN"},
+    },
+    # Show VLANs after creating one
+    "show.vlans": {
+        "params": {}
     },
     "vlan.update": {
         "params": {"vlan_id": 999, "name": "TEST_VLAN_UPDATED", "description": "Test VLAN"},

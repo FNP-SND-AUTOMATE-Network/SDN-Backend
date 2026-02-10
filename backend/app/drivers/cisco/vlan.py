@@ -52,8 +52,7 @@ class CiscoVlanDriver(BaseDriver):
     def _build_create_vlan(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
         """
         Create VLAN using Cisco IOS-XE native YANG model
-        
-        Path: /native/vlan/vlan-list={vlan_id}
+        Uses PATCH to safely merge (creates parent container if needed)
         """
         vlan_id = params.get("vlan_id")
         name = params.get("name", f"VLAN{vlan_id}")
@@ -61,17 +60,19 @@ class CiscoVlanDriver(BaseDriver):
         if not vlan_id:
             raise DriverBuildError("params require vlan_id")
 
-        path = f"{mount}/Cisco-IOS-XE-native:native/vlan/Cisco-IOS-XE-vlan:vlan-list={vlan_id}"
+        path = f"{mount}/Cisco-IOS-XE-native:native/vlan"
 
         payload = {
-            "Cisco-IOS-XE-vlan:vlan-list": {
-                "id": int(vlan_id),
-                "name": name
+            "Cisco-IOS-XE-native:vlan": {
+                "Cisco-IOS-XE-vlan:vlan-list": [{
+                    "id": int(vlan_id),
+                    "name": name
+                }]
             }
         }
 
         return RequestSpec(
-            method="PUT",
+            method="PATCH",
             datastore="config",
             path=path,
             payload=payload,
@@ -106,21 +107,22 @@ class CiscoVlanDriver(BaseDriver):
     def _build_update_vlan(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
         """
         Update VLAN name/description using PATCH
-        
-        Path: PATCH /native/vlan/vlan-list={vlan_id}
+        Uses parent container for consistency with create operation
         """
         vlan_id = params.get("vlan_id")
         if not vlan_id:
             raise DriverBuildError("params require vlan_id")
 
-        path = f"{mount}/Cisco-IOS-XE-native:native/vlan/Cisco-IOS-XE-vlan:vlan-list={vlan_id}"
+        path = f"{mount}/Cisco-IOS-XE-native:native/vlan"
 
         vlan_data = {"id": int(vlan_id)}
         if params.get("name"):
             vlan_data["name"] = params["name"]
 
         payload = {
-            "Cisco-IOS-XE-vlan:vlan-list": vlan_data
+            "Cisco-IOS-XE-native:vlan": {
+                "Cisco-IOS-XE-vlan:vlan-list": [vlan_data]
+            }
         }
 
         return RequestSpec(
@@ -139,7 +141,7 @@ class CiscoVlanDriver(BaseDriver):
 
         return RequestSpec(
             method="GET",
-            datastore="config",
+            datastore="operational",
             path=path,
             payload=None,
             headers={"accept": "application/yang-data+json"},

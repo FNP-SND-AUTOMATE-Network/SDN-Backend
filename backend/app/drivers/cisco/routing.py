@@ -14,6 +14,20 @@ from app.core.intent_registry import Intents
 class CiscoRoutingDriver(BaseDriver):
     name = "cisco"
 
+    @staticmethod
+    def _parse_interface_name(ifname: str):
+        """Parse interface name into type and number"""
+        import re
+        match = re.match(r'^([A-Za-z\-]+?)(\d.*)$', ifname)
+        if match:
+            return match.group(1), match.group(2)
+        return ifname, ""
+
+    @staticmethod
+    def _encode_interface_number(number: str) -> str:
+        """RFC-8040: / in list key must be encoded as %2F"""
+        return number.replace("/", "%2F")
+
     SUPPORTED_INTENTS = {
         Intents.ROUTING.STATIC_ADD,
         Intents.ROUTING.STATIC_DELETE,
@@ -229,9 +243,9 @@ class CiscoRoutingDriver(BaseDriver):
         )
     
     def _build_show_ip_interface_brief(self, mount: str) -> RequestSpec:
-        """Get IP interface brief (summary view)"""
-        # Cisco interface summary
-        path = f"{mount}/ietf-interfaces:interfaces-state"
+        """Get IP interface brief (summary view) using native model"""
+        # Use native model for consistency
+        path = f"{mount}/Cisco-IOS-XE-native:native/interface"
 
         return RequestSpec(
             method="GET",
@@ -244,31 +258,38 @@ class CiscoRoutingDriver(BaseDriver):
         )
 
     # ===== OSPF Methods =====
+    # Path: /Cisco-IOS-XE-native:native/router
+    # Payload: { "Cisco-IOS-XE-native:router": { "ospf": [...] } }
     
     def _build_ospf_enable(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
-        """Enable OSPF process using Cisco IOS-XE native model"""
+        """Enable OSPF process using Cisco-IOS-XE-ospf:router-ospf"""
         process_id = params.get("process_id")
         router_id = params.get("router_id")
         
         if not process_id:
             raise DriverBuildError("params require process_id")
         
-        path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf/ospf/process-id={process_id}"
+        path = f"{mount}/Cisco-IOS-XE-native:native/router"
         
-        ospf_config = {
-            "Cisco-IOS-XE-ospf:process-id": {
-                "id": int(process_id)
+        ospf_entry = {"id": int(process_id)}
+        if router_id:
+            ospf_entry["router-id"] = router_id
+
+        payload = {
+            "Cisco-IOS-XE-native:router": {
+                "Cisco-IOS-XE-ospf:router-ospf": {
+                    "ospf": {
+                        "process-id": [ospf_entry]
+                    }
+                }
             }
         }
-        
-        if router_id:
-            ospf_config["Cisco-IOS-XE-ospf:process-id"]["router-id"] = router_id
 
         return RequestSpec(
-            method="PUT",
+            method="PATCH",
             datastore="config",
             path=path,
-            payload=ospf_config,
+            payload=payload,
             headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.ROUTING.OSPF_ENABLE,
             driver=self.name
@@ -281,6 +302,7 @@ class CiscoRoutingDriver(BaseDriver):
         if not process_id:
             raise DriverBuildError("params require process_id")
         
+        # DELETE specific OSPF process
         path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf/ospf/process-id={process_id}"
 
         return RequestSpec(
@@ -288,37 +310,51 @@ class CiscoRoutingDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=None,
-            headers={"accept": "application/yang-data+json"},
+            headers={"Accept": "application/yang-data+json"},
             intent=Intents.ROUTING.OSPF_DISABLE,
             driver=self.name
         )
     
     def _build_ospf_add_network(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
-        """Add network to OSPF area (Cisco style: network x.x.x.x wildcard area X)"""
+        """
+        Add OSPF to interface (ip ospf {process_id} area {area_id})
+        
+        Uses interface-level OSPF config instead of router-level network command.
+        Path: .../Cisco-IOS-XE-native:native/interface/{Type}={Number}
+        Payload: ip.router-ospf.ospf.process-id[].id + area[].area-id
+        """
         process_id = params.get("process_id")
-        network = params.get("network")
-        wildcard = params.get("wildcard")
+        interface = params.get("interface")
         area = params.get("area")
         
-        if not all([process_id, network, wildcard, area]):
-            raise DriverBuildError("params require process_id, network, wildcard, area")
+        if not all([process_id, interface, area]):
+            raise DriverBuildError("params require process_id, interface, area")
         
-        # Cisco uses ip,wildcard as key
-        path = (
-            f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf"
-            f"/ospf/process-id={process_id}/network={network},{wildcard}"
-        )
+        iface_type, iface_num = self._parse_interface_name(interface)
+        encoded_num = self._encode_interface_number(iface_num)
+        
+        path = f"{mount}/Cisco-IOS-XE-native:native/interface/{iface_type}={encoded_num}"
         
         payload = {
-            "Cisco-IOS-XE-ospf:network": {
-                "ip": network,
-                "wildcard": wildcard,
-                "area": int(area)
-            }
+            f"Cisco-IOS-XE-native:{iface_type}": [{
+                "name": iface_num,
+                "ip": {
+                    "router-ospf": {
+                        "ospf": {
+                            "process-id": [{
+                                "id": int(process_id),
+                                "area": [{
+                                    "area-id": int(area)
+                                }]
+                            }]
+                        }
+                    }
+                }
+            }]
         }
 
         return RequestSpec(
-            method="PUT",
+            method="PATCH",
             datastore="config",
             path=path,
             payload=payload,
@@ -328,18 +364,23 @@ class CiscoRoutingDriver(BaseDriver):
         )
     
     def _build_ospf_remove_network(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
-        """Remove network from OSPF"""
-        process_id = params.get("process_id")
-        network = params.get("network")
-        wildcard = params.get("wildcard")
-        area = params.get("area")
+        """
+        Remove OSPF from interface (no ip ospf {process_id} area {area_id})
         
-        if not all([process_id, network, wildcard, area]):
-            raise DriverBuildError("params require process_id, network, wildcard, area")
+        DELETE the router-ospf config from the interface.
+        """
+        process_id = params.get("process_id")
+        interface = params.get("interface")
+        
+        if not all([process_id, interface]):
+            raise DriverBuildError("params require process_id, interface")
+        
+        iface_type, iface_num = self._parse_interface_name(interface)
+        encoded_num = self._encode_interface_number(iface_num)
         
         path = (
-            f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf"
-            f"/ospf/process-id={process_id}/network={network},{wildcard}"
+            f"{mount}/Cisco-IOS-XE-native:native/interface/{iface_type}={encoded_num}"
+            f"/ip/Cisco-IOS-XE-ospf:router-ospf/ospf/process-id={process_id}"
         )
 
         return RequestSpec(
@@ -347,7 +388,7 @@ class CiscoRoutingDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=None,
-            headers={"accept": "application/yang-data+json"},
+            headers={"Accept": "application/yang-data+json"},
             intent=Intents.ROUTING.OSPF_REMOVE_NETWORK,
             driver=self.name
         )
@@ -360,17 +401,23 @@ class CiscoRoutingDriver(BaseDriver):
         if not process_id or not router_id:
             raise DriverBuildError("params require process_id, router_id")
         
-        path = (
-            f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf"
-            f"/ospf/process-id={process_id}/router-id"
-        )
+        path = f"{mount}/Cisco-IOS-XE-native:native/router"
         
         payload = {
-            "Cisco-IOS-XE-ospf:router-id": router_id
+            "Cisco-IOS-XE-native:router": {
+                "Cisco-IOS-XE-ospf:router-ospf": {
+                    "ospf": {
+                        "process-id": [{
+                            "id": int(process_id),
+                            "router-id": router_id
+                        }]
+                    }
+                }
+            }
         }
 
         return RequestSpec(
-            method="PUT",
+            method="PATCH",
             datastore="config",
             path=path,
             payload=payload,
@@ -387,16 +434,19 @@ class CiscoRoutingDriver(BaseDriver):
         if not process_id or not interface:
             raise DriverBuildError("params require process_id, interface")
         
-        path = (
-            f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf"
-            f"/ospf/process-id={process_id}"
-        )
+        path = f"{mount}/Cisco-IOS-XE-native:native/router"
         
         payload = {
-            "Cisco-IOS-XE-ospf:process-id": {
-                "id": int(process_id),
-                "passive-interface": {
-                    "interface": [interface]
+            "Cisco-IOS-XE-native:router": {
+                "Cisco-IOS-XE-ospf:router-ospf": {
+                    "ospf": {
+                        "process-id": [{
+                            "id": int(process_id),
+                            "passive-interface": {
+                                "interface": [interface]
+                            }
+                        }]
+                    }
                 }
             }
         }
@@ -419,30 +469,21 @@ class CiscoRoutingDriver(BaseDriver):
         if not process_id or not interface:
             raise DriverBuildError("params require process_id, interface")
         
-        path = (
-            f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf"
-            f"/ospf/process-id={process_id}/passive-interface/interface={interface}"
-        )
+        path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf/ospf/process-id={process_id}/passive-interface/interface={interface}"
 
         return RequestSpec(
             method="DELETE",
             datastore="config",
             path=path,
             payload=None,
-            headers={"accept": "application/yang-data+json"},
+            headers={"Accept": "application/yang-data+json"},
             intent=Intents.ROUTING.OSPF_REMOVE_PASSIVE_INTERFACE,
             driver=self.name
         )
     
     def _build_show_ospf_neighbors(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
         """Show OSPF neighbors"""
-        process_id = params.get("process_id", "1")
-        
-        # Cisco IOS-XE OSPF operational data
-        path = (
-            f"{mount}/Cisco-IOS-XE-ospf-oper:ospf-oper-data"
-            f"/ospf-state/ospf-instance={process_id}/ospf-area"
-        )
+        path = f"{mount}/Cisco-IOS-XE-ospf-oper:ospf-oper-data"
 
         return RequestSpec(
             method="GET",
@@ -456,12 +497,7 @@ class CiscoRoutingDriver(BaseDriver):
     
     def _build_show_ospf_database(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
         """Show OSPF LSDB"""
-        process_id = params.get("process_id", "1")
-        
-        path = (
-            f"{mount}/Cisco-IOS-XE-ospf-oper:ospf-oper-data"
-            f"/ospf-state/ospf-instance={process_id}/link-scope-lsas"
-        )
+        path = f"{mount}/Cisco-IOS-XE-ospf-oper:ospf-oper-data"
 
         return RequestSpec(
             method="GET",
@@ -481,3 +517,9 @@ def _prefix_to_netmask(prefix: int) -> str:
         return "0.0.0.0"
     mask = (0xffffffff << (32 - prefix)) & 0xffffffff
     return ".".join(str((mask >> (8*i)) & 0xff) for i in [3, 2, 1, 0])
+
+
+def _wildcard_to_netmask(wildcard: str) -> str:
+    """Convert wildcard mask to subnet mask (e.g. 0.0.0.255 -> 255.255.255.0)"""
+    octets = wildcard.split(".")
+    return ".".join(str(255 - int(o)) for o in octets)

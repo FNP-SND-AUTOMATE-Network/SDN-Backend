@@ -125,80 +125,153 @@ class InterfaceNormalizer:
         )
         return out.model_dump()
     
-    # ===== Cisco (IETF) Normalizers =====
+    # ===== Cisco (Native IOS-XE) Normalizers =====
+    
+    @staticmethod
+    def _parse_native_single(iface_type: str, iface: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Parse a single native IOS-XE interface entry into normalized fields.
+        
+        Native response structure:
+        - name: interface number (e.g. "2")
+        - shutdown: [null] means admin down, absence means admin up
+        - ip.address.primary.address + mask: IPv4
+        - ipv6.address.prefix-list: IPv6
+        """
+        # Build full name: Type + Number (e.g. "GigabitEthernet" + "2")
+        iface_num = str(iface.get("name", ""))
+        full_name = f"{iface_type}{iface_num}"
+        
+        # Admin status: shutdown leaf present = down
+        has_shutdown = "shutdown" in iface
+        admin = "down" if has_shutdown else "up"
+        
+        # Extract IPv4 from ip.address.primary
+        ipv4 = []
+        ip_block = iface.get("ip", {})
+        address_block = ip_block.get("address", {})
+        primary = address_block.get("primary", {})
+        if primary:
+            ip = primary.get("address")
+            mask = primary.get("mask")
+            if ip and mask:
+                ipv4.append(f"{ip} ({mask})")
+        # Also check secondary addresses
+        secondary_list = address_block.get("secondary", [])
+        if isinstance(secondary_list, dict):
+            secondary_list = [secondary_list]
+        for sec in secondary_list:
+            ip = sec.get("address")
+            mask = sec.get("mask")
+            if ip and mask:
+                ipv4.append(f"{ip} ({mask}) secondary")
+        
+        # Extract IPv6 from ipv6.address.prefix-list
+        ipv6 = []
+        ipv6_block = iface.get("ipv6", {})
+        ipv6_addr_block = ipv6_block.get("address", {})
+        prefix_list = ipv6_addr_block.get("prefix-list", [])
+        if isinstance(prefix_list, dict):
+            prefix_list = [prefix_list]
+        for entry in prefix_list:
+            prefix = entry.get("prefix")
+            if prefix:
+                ipv6.append(prefix)
+        
+        return {
+            "name": full_name,
+            "admin": admin,
+            "ipv4": ipv4,
+            "ipv6": ipv6,
+            "mtu": ip_block.get("mtu") or iface.get("mtu"),
+            "description": iface.get("description"),
+        }
     
     def _normalize_cisco_interface(self, raw: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize Cisco/IETF single interface"""
-        iface = raw.get("ietf-interfaces:interface") or raw
+        """
+        Normalize Cisco IOS-XE Native single interface response.
         
-        if isinstance(iface, list):
-            iface = iface[0] if iface else {}
+        Response format from ODL:
+        { "Cisco-IOS-XE-native:GigabitEthernet": [{ "name": "2", ... }] }
+        or { "Cisco-IOS-XE-native:GigabitEthernet": { "name": "2", ... } }  (single item quirk)
+        """
+        # Find the interface type key in the response
+        for key, value in raw.items():
+            if key.startswith("Cisco-IOS-XE-native:"):
+                iface_type = key.replace("Cisco-IOS-XE-native:", "")
+                # Handle ODL quirk: single item = dict, multiple = list
+                if isinstance(value, dict):
+                    iface = value
+                elif isinstance(value, list) and value:
+                    iface = value[0]
+                else:
+                    continue
+                
+                parsed = self._parse_native_single(iface_type, iface)
+                out = UnifiedInterfaceStatus(
+                    name=parsed["name"],
+                    admin=parsed["admin"],
+                    oper=None,
+                    ipv4=parsed["ipv4"],
+                    ipv6=parsed["ipv6"],
+                    mtu=parsed["mtu"],
+                    description=parsed["description"],
+                    vendor="cisco",
+                )
+                return out.model_dump()
         
-        name = iface.get("name", "unknown")
-        enabled = iface.get("enabled")
-        admin = "up" if enabled else "down"
-        
-        # Extract IPv4
-        ipv4 = []
-        ip_block = iface.get("ietf-ip:ipv4", {})
-        for addr in (ip_block.get("address") or []):
-            ip = addr.get("ip")
-            mask = addr.get("netmask")
-            prefix = addr.get("prefix-length")
-            if ip:
-                if prefix:
-                    ipv4.append(f"{ip}/{prefix}")
-                elif mask:
-                    ipv4.append(f"{ip} ({mask})")
-        
-        # Extract IPv6
-        ipv6 = []
-        ipv6_block = iface.get("ietf-ip:ipv6", {})
-        for addr in (ipv6_block.get("address") or []):
-            ip = addr.get("ip")
-            prefix = addr.get("prefix-length")
-            if ip and prefix:
-                ipv6.append(f"{ip}/{prefix}")
-        
-        # Statistics (if available)
-        stats = iface.get("statistics", {})
-        
-        out = UnifiedInterfaceStatus(
-            name=name,
-            admin=admin,
-            oper=iface.get("oper-status"),
-            ipv4=ipv4,
-            ipv6=ipv6,
-            mac_address=iface.get("phys-address"),
-            mtu=iface.get("mtu"),
-            speed=iface.get("speed"),
-            description=iface.get("description"),
-            last_change=iface.get("last-change"),
-            in_octets=stats.get("in-octets"),
-            out_octets=stats.get("out-octets"),
-            in_errors=stats.get("in-errors"),
-            out_errors=stats.get("out-errors"),
-            vendor="cisco",
-        )
-        return out.model_dump()
+        # Fallback
+        return UnifiedInterfaceStatus(name="unknown", vendor="cisco").model_dump()
     
     def _normalize_cisco_interfaces(self, raw: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize Cisco/IETF interface list"""
-        interfaces_data = raw.get("ietf-interfaces:interfaces", {})
-        iface_list = interfaces_data.get("interface", [])
+        """
+        Normalize Cisco IOS-XE Native interface list response.
+        
+        Response is grouped by type:
+        {
+            "Cisco-IOS-XE-native:interface": {
+                "GigabitEthernet": [{ "name": "1" }, { "name": "2" }],
+                "Loopback": [{ "name": "0" }]
+            }
+        }
+        
+        Handles ODL quirk: single interface returns dict instead of list.
+        """
+        interfaces_data = raw.get("Cisco-IOS-XE-native:interface", {})
         
         interfaces = []
         up_count = 0
         down_count = 0
         
-        for iface in iface_list:
-            normalized = self._normalize_cisco_interface({"ietf-interfaces:interface": iface})
-            interfaces.append(UnifiedInterfaceStatus(**normalized))
+        # Iterate through all interface types (GigabitEthernet, Loopback, etc.)
+        for iface_type, iface_entries in interfaces_data.items():
+            # Handle ODL quirk: single item = dict, multiple = list
+            if isinstance(iface_entries, dict):
+                iface_entries = [iface_entries]
+            elif not isinstance(iface_entries, list):
+                continue
             
-            if normalized.get("admin") == "up":
-                up_count += 1
-            else:
-                down_count += 1
+            for iface in iface_entries:
+                parsed = self._parse_native_single(iface_type, iface)
+                status = UnifiedInterfaceStatus(
+                    name=parsed["name"],
+                    admin=parsed["admin"],
+                    oper=None,
+                    ipv4=parsed["ipv4"],
+                    ipv6=parsed["ipv6"],
+                    mtu=parsed["mtu"],
+                    description=parsed["description"],
+                    vendor="cisco",
+                )
+                interfaces.append(status)
+                
+                if parsed["admin"] == "up":
+                    up_count += 1
+                else:
+                    down_count += 1
+        
+        # Sort by name alphabetically
+        interfaces.sort(key=lambda x: x.name)
         
         out = UnifiedInterfaceList(
             interfaces=interfaces,
@@ -323,35 +396,44 @@ class InterfaceNormalizer:
     @staticmethod
     def _parse_cisco_to_config(raw: Dict[str, Any]) -> InterfaceConfig:
         """
-        Parse Cisco IETF response to InterfaceConfig
+        Parse Cisco IOS-XE Native response to InterfaceConfig
         
-        IETF structure:
-        - name: interface name
-        - enabled: boolean (no shutdown = True)
-        - ietf-ip:ipv4/address[0]/ip: IP address
-        - ietf-ip:ipv4/address[0]/netmask: subnet mask
+        Native structure:
+        - Cisco-IOS-XE-native:{Type}: [{ name, ip.address.primary, shutdown, ... }]
         """
-        iface = raw.get("ietf-interfaces:interface") or raw
-        if isinstance(iface, list):
-            iface = iface[0] if iface else {}
+        # Find the interface entry from native response
+        iface = {}
+        iface_type = ""
+        for key, value in raw.items():
+            if key.startswith("Cisco-IOS-XE-native:"):
+                iface_type = key.replace("Cisco-IOS-XE-native:", "")
+                if isinstance(value, list) and value:
+                    iface = value[0]
+                elif isinstance(value, dict):
+                    iface = value
+                break
         
-        name = iface.get("name", "")
-        enabled = iface.get("enabled", True)
+        if not iface:
+            iface = raw
+        
+        # Build full name
+        iface_num = str(iface.get("name", ""))
+        name = f"{iface_type}{iface_num}" if iface_type else iface_num
+        
+        # Admin status: shutdown leaf present = disabled
+        enabled = "shutdown" not in iface
         description = iface.get("description")
         mtu = iface.get("mtu")
         
-        # Extract IP from ietf-ip:ipv4
-        ip: Optional[str] = None
-        mask: Optional[str] = None
-        ip_block = iface.get("ietf-ip:ipv4", {})
-        addresses = ip_block.get("address", [])
-        if addresses:
-            first_addr = addresses[0]
-            ip = first_addr.get("ip")
-            # Try netmask first, then prefix-length
-            mask = first_addr.get("netmask")
-            if not mask and first_addr.get("prefix-length"):
-                mask = str(first_addr.get("prefix-length"))
+        # Extract IP from ip.address.primary (native structure)
+        ip = None
+        mask = None
+        ip_block = iface.get("ip", {})
+        address_block = ip_block.get("address", {})
+        primary = address_block.get("primary", {})
+        if primary:
+            ip = primary.get("address")
+            mask = primary.get("mask")
         
         return InterfaceConfig(
             name=name,

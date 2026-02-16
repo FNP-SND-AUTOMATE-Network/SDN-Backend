@@ -462,6 +462,9 @@ class Intents:
         # OSPF
         OSPF_NEIGHBORS = "show.ospf.neighbors"
         OSPF_DATABASE = "show.ospf.database"
+        # VLAN & DHCP
+        VLANS = "show.vlans"
+        DHCP_POOLS = "show.dhcp_pools"
     
     class ROUTING:
         STATIC_ADD = "routing.static.add"

@@ -226,21 +226,6 @@ class DeviceNetworkService:
             # Timestamps and Relations
             created_at=device.createdAt,
             updated_at=device.updatedAt,
-            # NBI/ODL Fields
-            node_id=getattr(device, 'node_id', None) or '',
-            vendor=getattr(device, 'vendor', 'OTHER'),
-            default_strategy=getattr(device, 'default_strategy', 'OC_FIRST'),
-            netconf_host=getattr(device, 'netconf_host', None),
-            netconf_port=getattr(device, 'netconf_port', 830) or 830,
-            netconf_username=getattr(device, 'netconf_username', None),
-            netconf_password=None,  # ไม่ส่ง password กลับไป frontend
-            # ODL Status Fields
-            odl_mounted=is_mounted,
-            odl_connection_status=connection_status,
-            oc_supported_intents=getattr(device, 'oc_supported_intents', None),
-            last_synced_at=getattr(device, 'last_synced_at', None),
-            ready_for_intent=ready_for_intent,
-            # Relations
             tags=tags_info,
             operatingSystem=os_info,
             localSite=site_info,

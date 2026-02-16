@@ -72,7 +72,7 @@ class OpenConfigVlanDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"Content-Type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.VLAN.CREATE,
             driver=self.name
         )
@@ -145,7 +145,7 @@ class OpenConfigVlanDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"Content-Type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.VLAN.ASSIGN_PORT,
             driver=self.name
         )

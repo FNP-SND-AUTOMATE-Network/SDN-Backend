@@ -106,7 +106,7 @@ class OpenConfigSystemDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.SYSTEM.SET_HOSTNAME,
             driver=self.name
         )
@@ -134,7 +134,7 @@ class OpenConfigSystemDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.SYSTEM.SET_NTP,
             driver=self.name
         )
@@ -161,7 +161,7 @@ class OpenConfigSystemDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.SYSTEM.SET_DNS,
             driver=self.name
         )

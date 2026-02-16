@@ -89,7 +89,7 @@ CISCO_INTENTS = {
     "routing.ospf.set_router_id": {
         "params": {"process_id": "99", "router_id": "9.9.9.9"},
     },
-    "routing.ospf.add_network": {
+    "routing.ospf.add_network_interface": {
         "params": {"process_id": "99", "network": "10.0.0.0", "wildcard": "0.0.0.255", "area": "0"},
     },
     # Show OSPF data after enabling OSPF
@@ -105,7 +105,7 @@ CISCO_INTENTS = {
     "routing.ospf.remove_passive_interface": {
         "params": {"process_id": "99", "interface": "GigabitEthernet1"},
     },
-    "routing.ospf.remove_network": {
+    "routing.ospf.remove_network_interface": {
         "params": {"process_id": "99", "network": "10.0.0.0", "wildcard": "0.0.0.255", "area": "0"},
     },
     "routing.ospf.disable": {

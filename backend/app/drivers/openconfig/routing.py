@@ -23,8 +23,8 @@ class OpenConfigRoutingDriver(BaseDriver):
         # OSPF
         Intents.ROUTING.OSPF_ENABLE,
         Intents.ROUTING.OSPF_DISABLE,
-        Intents.ROUTING.OSPF_ADD_NETWORK,
-        Intents.ROUTING.OSPF_REMOVE_NETWORK,
+        Intents.ROUTING.OSPF_ADD_NETWORK_INTERFACE,
+        Intents.ROUTING.OSPF_REMOVE_NETWORK_INTERFACE,
         Intents.ROUTING.OSPF_SET_ROUTER_ID,
         Intents.SHOW.OSPF_NEIGHBORS,
         Intents.SHOW.OSPF_DATABASE,
@@ -60,11 +60,11 @@ class OpenConfigRoutingDriver(BaseDriver):
         if intent == Intents.ROUTING.OSPF_DISABLE:
             return self._build_ospf_disable(mount, params)
         
-        if intent == Intents.ROUTING.OSPF_ADD_NETWORK:
-            return self._build_ospf_add_network(mount, params)
+        if intent == Intents.ROUTING.OSPF_ADD_NETWORK_INTERFACE:
+            return self._build_ospf_add_network_interface(mount, params)
         
-        if intent == Intents.ROUTING.OSPF_REMOVE_NETWORK:
-            return self._build_ospf_remove_network(mount, params)
+        if intent == Intents.ROUTING.OSPF_REMOVE_NETWORK_INTERFACE:
+            return self._build_ospf_remove_network_interface(mount, params)
         
         if intent == Intents.ROUTING.OSPF_SET_ROUTER_ID:
             return self._build_ospf_set_router_id(mount, params)
@@ -312,7 +312,7 @@ class OpenConfigRoutingDriver(BaseDriver):
             driver=self.name
         )
     
-    def _build_ospf_add_network(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+    def _build_ospf_add_network_interface(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
         """Add network to OSPF area"""
         process_id = params.get("process_id")
         network = params.get("network")
@@ -350,11 +350,11 @@ class OpenConfigRoutingDriver(BaseDriver):
             path=path,
             payload=payload,
             headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
-            intent=Intents.ROUTING.OSPF_ADD_NETWORK,
+            intent=Intents.ROUTING.OSPF_ADD_NETWORK_INTERFACE,
             driver=self.name
         )
     
-    def _build_ospf_remove_network(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+    def _build_ospf_remove_network_interface(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
         """Remove network from OSPF"""
         process_id = params.get("process_id")
         network = params.get("network")
@@ -380,7 +380,7 @@ class OpenConfigRoutingDriver(BaseDriver):
             path=path,
             payload=None,
             headers={"accept": "application/yang-data+json"},
-            intent=Intents.ROUTING.OSPF_REMOVE_NETWORK,
+            intent=Intents.ROUTING.OSPF_REMOVE_NETWORK_INTERFACE,
             driver=self.name
         )
     

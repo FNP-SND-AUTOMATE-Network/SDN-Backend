@@ -13,12 +13,12 @@ device_service = DeviceProfileService()
 
 
 @router.get(
-    "/devices/{device_id}/interfaces/discover",
+    "/devices/{node_id}/interfaces/discover",
     summary="Discover interfaces from device",
     description="ดึง interface list จาก device ผ่าน ODL ใช้สำหรับ dropdown ให้ user เลือก interface",
 )
 async def discover_interfaces(
-    device_id: str,
+    node_id: str,
     force_refresh: bool = Query(False, description="Force refresh cache"),
 ):
     """
@@ -50,16 +50,15 @@ async def discover_interfaces(
     }
     """
     try:
-        # Resolve device → get node_id and vendor
-        device = await device_service.get_device(device_id)
+        # Resolve device → get vendor from node_id
+        device = await device_service.get(node_id)
         if not device:
             raise HTTPException(
                 status_code=404,
-                detail={"error": "DEVICE_NOT_FOUND", "message": f"Device '{device_id}' not found"},
+                detail={"error": "DEVICE_NOT_FOUND", "message": f"Device '{node_id}' not found"},
             )
 
-        node_id = device.get("node_id", device_id)
-        vendor = device.get("vendor", "cisco")
+        vendor = device.vendor or "cisco"
 
         interfaces = await discovery_service.discover(
             node_id=node_id,
@@ -78,7 +77,7 @@ async def discover_interfaces(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Interface discovery failed for {device_id}: {e}")
+        logger.error(f"Interface discovery failed for {node_id}: {e}")
         raise HTTPException(
             status_code=502,
             detail={"error": "DISCOVERY_FAILED", "message": str(e)},
@@ -86,12 +85,12 @@ async def discover_interfaces(
 
 
 @router.get(
-    "/devices/{device_id}/interfaces/names",
+    "/devices/{node_id}/interfaces/names",
     summary="Get interface name list",
     description="ดึงเฉพาะชื่อ interface สำหรับ dropdown",
 )
 async def get_interface_names(
-    device_id: str,
+    node_id: str,
     force_refresh: bool = Query(False, description="Force refresh cache"),
 ):
     """
@@ -105,15 +104,14 @@ async def get_interface_names(
     }
     """
     try:
-        device = await device_service.get_device(device_id)
+        device = await device_service.get(node_id)
         if not device:
             raise HTTPException(
                 status_code=404,
-                detail={"error": "DEVICE_NOT_FOUND", "message": f"Device '{device_id}' not found"},
+                detail={"error": "DEVICE_NOT_FOUND", "message": f"Device '{node_id}' not found"},
             )
 
-        node_id = device.get("node_id", device_id)
-        vendor = device.get("vendor", "cisco")
+        vendor = device.vendor or "cisco"
 
         names = await discovery_service.get_interface_names(
             node_id=node_id,
@@ -131,7 +129,7 @@ async def get_interface_names(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Interface name discovery failed for {device_id}: {e}")
+        logger.error(f"Interface name discovery failed for {node_id}: {e}")
         raise HTTPException(
             status_code=502,
             detail={"error": "DISCOVERY_FAILED", "message": str(e)},
@@ -139,16 +137,13 @@ async def get_interface_names(
 
 
 @router.delete(
-    "/devices/{device_id}/interfaces/cache",
+    "/devices/{node_id}/interfaces/cache",
     summary="Invalidate interface cache",
     description="ล้าง cache interface list ของ device",
 )
-async def invalidate_cache(device_id: str):
+async def invalidate_cache(node_id: str):
     """Invalidate cached interfaces for a device"""
     try:
-        device = await device_service.get_device(device_id)
-        node_id = device.get("node_id", device_id) if device else device_id
-
         discovery_service.invalidate(node_id)
 
         return {

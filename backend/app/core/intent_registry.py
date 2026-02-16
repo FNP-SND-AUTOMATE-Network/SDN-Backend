@@ -124,6 +124,7 @@ class IntentRegistry:
         required_params=[],
         optional_params=["section"],
         is_read_only=True,
+        needs_normalization=True,
     )
     
     SHOW_VERSION = IntentDefinition(
@@ -203,15 +204,15 @@ class IntentRegistry:
         required_params=["process_id"],
     )
     
-    ROUTING_OSPF_ADD_NETWORK = IntentDefinition(
-        name="routing.ospf.add_network",
+    ROUTING_OSPF_ADD_NETWORK_INTERFACE = IntentDefinition(
+        name="routing.ospf.add_network_interface",
         category=IntentCategory.ROUTING,
         description="Add OSPF to interface (ip ospf process-id area area-id)",
         required_params=["process_id", "interface", "area"],
     )
     
-    ROUTING_OSPF_REMOVE_NETWORK = IntentDefinition(
-        name="routing.ospf.remove_network",
+    ROUTING_OSPF_REMOVE_NETWORK_INTERFACE = IntentDefinition(
+        name="routing.ospf.remove_network_interface",
         category=IntentCategory.ROUTING,
         description="Remove OSPF from interface",
         required_params=["process_id", "interface"],
@@ -356,6 +357,7 @@ class IntentRegistry:
         description="Show all VLANs",
         required_params=[],
         is_read_only=True,
+        needs_normalization=True,
     )
     
     # ===== DHCP INTENTS =====
@@ -388,6 +390,7 @@ class IntentRegistry:
         description="Show DHCP pools",
         required_params=[],
         is_read_only=True,
+        needs_normalization=True,
     )
     
     # ===== Registry Map =====
@@ -492,8 +495,8 @@ class Intents:
         # OSPF
         OSPF_ENABLE = "routing.ospf.enable"
         OSPF_DISABLE = "routing.ospf.disable"
-        OSPF_ADD_NETWORK = "routing.ospf.add_network"
-        OSPF_REMOVE_NETWORK = "routing.ospf.remove_network"
+        OSPF_ADD_NETWORK_INTERFACE = "routing.ospf.add_network_interface"
+        OSPF_REMOVE_NETWORK_INTERFACE = "routing.ospf.remove_network_interface"
         OSPF_SET_ROUTER_ID = "routing.ospf.set_router_id"
         OSPF_SET_PASSIVE_INTERFACE = "routing.ospf.set_passive_interface"
         OSPF_REMOVE_PASSIVE_INTERFACE = "routing.ospf.remove_passive_interface"

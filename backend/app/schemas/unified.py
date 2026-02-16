@@ -94,10 +94,50 @@ class UnifiedSystemInfo(BaseModel):
     cpu_usage: Optional[float] = None     # percentage
 
 
+class RunningConfigInterface(BaseModel):
+    """Interface entry in running config"""
+    name: str                                     # "GigabitEthernet1"
+    type: Optional[str] = None                    # "GigabitEthernet"
+    ip_address: Optional[str] = None              # "10.0.0.1/24"
+    enabled: Optional[bool] = None                # True = no shutdown
+    description: Optional[str] = None
+    mtu: Optional[int] = None
+
+
+class RunningConfigRoute(BaseModel):
+    """Static route entry in running config"""
+    prefix: str                                   # "10.0.0.0/24"
+    next_hop: Optional[str] = None
+    protocol: str = "static"
+
+
+class RunningConfigOspf(BaseModel):
+    """OSPF configuration in running config"""
+    process_id: Optional[int] = None
+    router_id: Optional[str] = None
+    networks: List[Dict[str, Any]] = []           # [{"interface": "Gi1", "area": 0}]
+    passive_interfaces: List[str] = []
+
+
+class RunningConfigSystem(BaseModel):
+    """System services in running config"""
+    hostname: Optional[str] = None
+    domain_name: Optional[str] = None
+    ntp_servers: List[str] = []
+    dns_servers: List[str] = []
+    banner: Optional[str] = None
+
+
 class UnifiedRunningConfig(BaseModel):
-    """Unified running config"""
-    config_text: str
-    last_changed: Optional[str] = None
+    """Unified running config — structured for frontend dashboard"""
+    hostname: Optional[str] = None
+    version: Optional[str] = None
+    vendor: Optional[str] = None
+    interfaces: List[RunningConfigInterface] = []
+    static_routes: List[RunningConfigRoute] = []
+    ospf: Optional[RunningConfigOspf] = None
+    system: Optional[RunningConfigSystem] = None
+    raw_config: Optional[Dict[str, Any]] = None   # raw JSON สำรอง
     section: Optional[str] = None
 
 

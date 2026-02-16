@@ -30,6 +30,8 @@ from app.clients.odl_restconf_client import OdlRestconfClient
 from app.normalizers.interface import InterfaceNormalizer
 from app.normalizers.system import SystemNormalizer
 from app.normalizers.routing import RoutingNormalizer, InterfaceBriefNormalizer, OspfNormalizer
+from app.normalizers.vlan import VlanNormalizer
+from app.normalizers.dhcp import DhcpNormalizer
 from app.core.errors import OdlRequestError, UnsupportedIntent, DeviceNotMounted
 from app.core.intent_registry import IntentRegistry, Intents, IntentCategory
 from app.core.logging import logger
@@ -91,6 +93,8 @@ class IntentService:
         # Normalizers
         self.interface_normalizer = InterfaceNormalizer()
         self.system_normalizer = SystemNormalizer()
+        self.vlan_normalizer = VlanNormalizer()
+        self.dhcp_normalizer = DhcpNormalizer()
 
         # Register drivers by vendor and category
         self.interface_drivers = {
@@ -345,6 +349,14 @@ class IntentService:
         
         if intent == Intents.SHOW.OSPF_DATABASE:
             return OspfNormalizer.normalize_database(raw, device_id, driver_name).model_dump()
+        
+        # VLAN normalization
+        if intent == Intents.SHOW.VLANS:
+            return self.vlan_normalizer.normalize_show_vlans(driver_name, raw)
+        
+        # DHCP normalization
+        if intent == Intents.SHOW.DHCP_POOLS:
+            return self.dhcp_normalizer.normalize_show_dhcp_pools(driver_name, raw)
         
         return raw
     

@@ -159,7 +159,7 @@ OSPF_TESTS = [
     # Add Network to Area
     TestCase(
         name="Add OSPF Network",
-        intent="routing.ospf.add_network",
+        intent="routing.ospf.add_network_interface",
         params={
             "process_id": 1,
             "area": "0.0.0.0",
@@ -168,7 +168,7 @@ OSPF_TESTS = [
         },
         category=TestCategory.OSPF,
         is_read_only=False,
-        cleanup_intent="routing.ospf.remove_network",
+        cleanup_intent="routing.ospf.remove_network_interface",
         cleanup_params={
             "process_id": 1,
             "area": "0.0.0.0",

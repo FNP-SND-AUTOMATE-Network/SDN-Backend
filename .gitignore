@@ -7,3 +7,10 @@ node_modules
 __pycache__
 
 .DS_Store
+backend/.envlod
+backend/.envlod2
+CSR1000v-showrun.txt
+parse_config_textfsm.py
+readconfig-template.py
+test_phpipam.py
+textfsm_templates/cisco_interface.textfsm

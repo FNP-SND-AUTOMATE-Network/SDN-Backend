@@ -4,7 +4,12 @@ node_modules
 
 /app/generated/prisma
 
-__pycache__
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
 
 .DS_Store
 backend/.envlod

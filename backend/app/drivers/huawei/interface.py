@@ -66,33 +66,47 @@ class HuaweiInterfaceDriver(BaseDriver):
     # ===== Builder Methods =====
     
     def _build_set_ipv4(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """
+        Configure IPv4 address on interface using VRP8 huawei-ip augmentation.
+        
+        VRP8 YANG Structure:
+        - Base: huawei-ifm:ifm/interfaces/interface={ifName}
+        - Augmentation: huawei-ip:ipv4Config
+        
+        Note: Interface name must be URL-encoded (e.g., Ethernet1%2F0%2F3)
+        """
         ifname = params.get("interface")
         ip = params.get("ip")
         prefix = params.get("prefix")
         if not ifname or not ip or prefix is None:
             raise DriverBuildError("params require interface, ip, prefix")
 
-        # Huawei uses huawei-ifm for interface management
-        # IP configuration is typically in huawei-ifm:ipv4
-        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={ifname}"
+        # URL encode interface name (e.g., Ethernet1/0/3 -> Ethernet1%2F0%2F3)
+        import urllib.parse
+        encoded_ifname = urllib.parse.quote(ifname, safe='')
+        
+        # VRP8 path structure
+        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}"
+        
+        # VRP8 huawei-ip:ipv4Config augmentation structure
         payload = {
-            "huawei-ifm:interface": {
+            "huawei-ifm:interface": [{
                 "ifName": ifname,
-                "adminStatus": "up",
-                "ipv4": {
-                    "addresses": {
-                        "address": [{
-                            "ip": ip,
-                            "mask": _prefix_to_netmask(int(prefix)),
-                            "type": "main"
+                "huawei-ip:ipv4Config": {
+                    "addrCfgType": "config",
+                    "am4CfgAddrs": {
+                        "am4CfgAddr": [{
+                            "ifIpAddr": ip,
+                            "subnetMask": _prefix_to_netmask(int(prefix)),
+                            "addrType": "main"
                         }]
                     }
                 }
-            }
+            }]
         }
 
         return RequestSpec(
-            method="PUT",
+            method="PATCH",
             datastore="config",
             path=path,
             payload=payload,

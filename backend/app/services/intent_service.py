@@ -1,16 +1,29 @@
 """
-Intent Service - Core service สำหรับ handle Intent requests
-รองรับ multi-vendor, strategy pattern และ fallback mechanism
+Intent Service - Core service for handling Intent requests
+
+Supports multi-vendor, strategy pattern, and fallback mechanism.
+
+Terminology:
+-----------
+- node_id: ODL topology-netconf identifier (URL-safe)
+           Used in both API requests and database
+- device_id: Database UUID (internal, not in API)
+
+Flow:
+-----
+1. API receives: { "intent": "show.interface", "node_id": "CSR1" }
+2. Query DeviceNetwork WHERE node_id = 'CSR1'
+3. Use node_id for ODL RESTCONF mount path
 """
 from typing import Dict, Any
 from app.schemas.intent import IntentRequest, IntentResponse
-from app.services.device_profile_service import DeviceProfileService
+from app.services.device_profile_service_db import DeviceProfileService
 from app.services.strategy_resolver import StrategyResolver
 from app.clients.odl_restconf_client import OdlRestconfClient
 from app.normalizers.interface import InterfaceNormalizer
 from app.normalizers.system import SystemNormalizer
 from app.normalizers.routing import RoutingNormalizer, InterfaceBriefNormalizer, OspfNormalizer
-from app.core.errors import OdlRequestError, UnsupportedIntent
+from app.core.errors import OdlRequestError, UnsupportedIntent, DeviceNotMounted
 from app.core.intent_registry import IntentRegistry, Intents, IntentCategory
 from app.core.logging import logger
 
@@ -22,14 +35,20 @@ from app.drivers.huawei.interface import HuaweiInterfaceDriver
 # System Drivers
 from app.drivers.openconfig.system import OpenConfigSystemDriver
 from app.drivers.cisco.system import CiscoSystemDriver
+from app.drivers.huawei.system import HuaweiSystemDriver
 
 # Routing Drivers
 from app.drivers.openconfig.routing import OpenConfigRoutingDriver
 from app.drivers.cisco.routing import CiscoRoutingDriver
+from app.drivers.huawei.routing import HuaweiRoutingDriver
 
 # VLAN Drivers
 from app.drivers.openconfig.vlan import OpenConfigVlanDriver
 from app.drivers.cisco.vlan import CiscoVlanDriver
+from app.drivers.huawei.vlan import HuaweiVlanDriver
+
+# DHCP Drivers
+from app.drivers.huawei.dhcp import HuaweiDhcpDriver
 
 # Device Driver (mount/unmount)
 from app.drivers.device import DeviceDriver
@@ -39,15 +58,20 @@ class IntentService:
     """
     Main service for handling Intent-based requests
     
+    Terminology Note:
+        - req.node_id = database 'node_id' = ODL node identifier
+        - Used directly in ODL RESTCONF paths
+    
     Flow:
     1. Validate intent exists in registry
-    2. Get device profile
+    2. Get device profile (lookup by node_id)
     3. Strategy resolver decides which driver to use
-    4. Driver builds RESTCONF request
+    4. Driver builds RESTCONF request (uses node_id for mount path)
     5. Send to ODL via client
     6. Normalize response if needed
     7. Return unified response
     """
+
     
     def __init__(self):
         self.device_profiles = DeviceProfileService()
@@ -68,20 +92,25 @@ class IntentService:
         self.system_drivers = {
             "openconfig": OpenConfigSystemDriver(),
             "cisco": CiscoSystemDriver(),
-            # "huawei": HuaweiSystemDriver(),  # TODO: add later
+            "huawei": HuaweiSystemDriver(),
         }
         
         self.routing_drivers = {
             "openconfig": OpenConfigRoutingDriver(),
             "cisco": CiscoRoutingDriver(),
-            # "huawei": HuaweiRoutingDriver(),  # TODO: add later
+            "huawei": HuaweiRoutingDriver(),
         }
         
         # VLAN drivers
         self.vlan_drivers = {
             "openconfig": OpenConfigVlanDriver(),
             "cisco": CiscoVlanDriver(),
-            # "huawei": HuaweiVlanDriver(),  # TODO: add later
+            "huawei": HuaweiVlanDriver(),
+        }
+        
+        # DHCP drivers
+        self.dhcp_drivers = {
+            "huawei": HuaweiDhcpDriver(),
         }
         
         # Device driver (mount/unmount)
@@ -106,6 +135,9 @@ class IntentService:
         elif intent_def.category == IntentCategory.VLAN:
             return self.vlan_drivers.get(driver_name)
         
+        elif intent_def.category == IntentCategory.DHCP:
+            return self.dhcp_drivers.get(driver_name)
+        
         elif intent_def.category == IntentCategory.SHOW:
             # Show intents - route to correct driver based on intent
             if intent in [Intents.SHOW.INTERFACE, Intents.SHOW.INTERFACES]:
@@ -115,6 +147,10 @@ class IntentService:
             elif intent in [Intents.SHOW.IP_ROUTE, Intents.SHOW.IP_INTERFACE_BRIEF,
                            Intents.SHOW.OSPF_NEIGHBORS, Intents.SHOW.OSPF_DATABASE]:
                 return self.routing_drivers.get(driver_name)
+            elif intent == Intents.SHOW.VLANS:
+                return self.vlan_drivers.get(driver_name)
+            elif intent == Intents.SHOW.DHCP_POOLS:
+                return self.dhcp_drivers.get(driver_name)
             else:
                 return self.interface_drivers.get(driver_name)
         
@@ -138,13 +174,35 @@ class IntentService:
         if intent_def.category == IntentCategory.DEVICE:
             return await self._handle_device_intent(req)
         
-        # Step 3: Get device profile
-        device = self.device_profiles.get(req.deviceId)
+        # Step 3: Get device profile และ check mount status
+        device = await self.device_profiles.get(req.node_id)
+        
+        # Step 3.1: Check if device is mounted and connected
+        mount_status = await self.device_profiles.check_mount_status(req.node_id)
+        if not mount_status.get("ready_for_intent"):
+            connection_status = mount_status.get("connection_status", "unknown")
+            is_mounted = mount_status.get("mounted", False)
+            
+            if not is_mounted:
+                raise DeviceNotMounted(
+                    f"Device '{req.node_id}' is not mounted in ODL. "
+                    f"Please mount the device first using POST /api/v1/nbi/devices/{req.node_id}/mount"
+                )
+            elif connection_status == "connecting":
+                raise DeviceNotMounted(
+                    f"Device '{req.node_id}' is still connecting. "
+                    f"Current status: {connection_status}. Please wait and try again."
+                )
+            else:
+                raise DeviceNotMounted(
+                    f"Device '{req.node_id}' is not connected. "
+                    f"Current status: {connection_status}. Please check device connectivity."
+                )
         
         # Step 4: Decide strategy
         decision = self.strategy.decide(device, req.intent)
         
-        logger.info(f"Intent: {req.intent}, Device: {req.deviceId}, "
+        logger.info(f"Intent: {req.intent}, Device: {req.node_id}, "
                    f"Strategy: {decision.strategy_used}, Primary: {decision.primary_driver}")
 
         # Step 5: Try primary driver
@@ -167,16 +225,16 @@ class IntentService:
 
     async def _handle_device_intent(self, req: IntentRequest) -> IntentResponse:
         """
-        Handle device management intents (mount/unmount/status/list)
+        Handle device management intents (status/list)
         These don't require device profile lookup
-        """
-        node_id = req.deviceId  # deviceId is used as node_id for ODL
         
-        if req.intent == Intents.DEVICE.MOUNT:
-            spec = self.device_driver.build_mount(node_id, req.params)
-        elif req.intent == Intents.DEVICE.UNMOUNT:
-            spec = self.device_driver.build_unmount(node_id)
-        elif req.intent == Intents.DEVICE.STATUS:
+        Note: mount/unmount removed - use dedicated REST endpoints:
+            POST /api/v1/nbi/devices/{node_id}/mount
+            POST /api/v1/nbi/devices/{node_id}/unmount
+        """
+        node_id = req.node_id  # Use node_id directly for ODL
+        
+        if req.intent == Intents.DEVICE.STATUS:
             spec = self.device_driver.build_get_status(node_id)
         elif req.intent == Intents.DEVICE.LIST:
             spec = self.device_driver.build_list_devices()
@@ -195,7 +253,7 @@ class IntentService:
         return IntentResponse(
             success=True,
             intent=req.intent,
-            deviceId=req.deviceId,
+            node_id=req.node_id,
             strategy_used="direct",
             driver_used="device",
             result=result
@@ -244,13 +302,13 @@ class IntentService:
         # Send to ODL
         raw = await self.client.send(spec)
 
-        # Normalize response if needed (pass device_id for routing normalizers)
-        result = self._normalize_response(req.intent, driver_name, raw, req.deviceId)
+        # Normalize response if needed (pass node_id for routing normalizers)
+        result = self._normalize_response(req.intent, driver_name, raw, req.node_id)
 
         return IntentResponse(
             success=True,
             intent=req.intent,
-            deviceId=req.deviceId,
+            node_id=req.node_id,
             strategy_used=strategy_used,
             driver_used=driver_name,
             result=result

@@ -129,7 +129,7 @@ class CiscoRoutingDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.ROUTING.STATIC_ADD,
             driver=self.name
         )
@@ -190,7 +190,7 @@ class CiscoRoutingDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.ROUTING.DEFAULT_ADD,
             driver=self.name
         )
@@ -268,7 +268,7 @@ class CiscoRoutingDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=ospf_config,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.ROUTING.OSPF_ENABLE,
             driver=self.name
         )
@@ -321,7 +321,7 @@ class CiscoRoutingDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.ROUTING.OSPF_ADD_NETWORK,
             driver=self.name
         )
@@ -373,7 +373,7 @@ class CiscoRoutingDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.ROUTING.OSPF_SET_ROUTER_ID,
             driver=self.name
         )
@@ -400,7 +400,7 @@ class CiscoRoutingDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.ROUTING.OSPF_SET_PASSIVE_INTERFACE,
             driver=self.name
         )

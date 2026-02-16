@@ -18,9 +18,29 @@ from app.core.logging import logger
 from app.database import get_prisma_client
 
 
+# Map ODL connection status string to DB enum value
+def map_odl_status_to_enum(odl_status: str) -> str:
+    """
+    Map ODL connection-status string to Prisma enum
+    ODL returns: 'connected', 'connecting', 'unable-to-connect'
+    DB enum: CONNECTED, CONNECTING, UNABLE_TO_CONNECT
+    """
+    mapping = {
+        "connected": "CONNECTED",
+        "connecting": "CONNECTING",
+        "unable-to-connect": "UNABLE_TO_CONNECT",
+        "not-mounted": "UNABLE_TO_CONNECT",
+        "unknown": "UNABLE_TO_CONNECT",
+    }
+    return mapping.get(odl_status.lower(), "UNABLE_TO_CONNECT")
+
+
 class OdlMountService:
     """
     Service สำหรับ Mount/Unmount NETCONF nodes ใน ODL
+    
+    หมายเหตุ: ทุก method รับ node_id เท่านั้น (เช่น "CSR1", "router-core-01")
+    node_id เป็น unique field ใน Database และใช้ตรงกับ ODL
     """
     
     # ODL topology-netconf base path
@@ -29,34 +49,65 @@ class OdlMountService:
     def __init__(self):
         self.odl_client = OdlRestconfClient()
     
+    async def _find_device(self, node_id: str):
+        """
+        ค้นหา device จาก node_id (หรือ fallback ไป device_name)
+        
+        Args:
+            node_id: ODL node-id (เช่น "CSR1") หรือ device_name
+        
+        Returns:
+            DeviceNetwork object หรือ None
+        """
+        prisma = get_prisma_client()
+        
+        # 1. ลองหาจาก node_id ก่อน
+        device = await prisma.devicenetwork.find_unique(
+            where={"node_id": node_id}
+        )
+        
+        # 2. ถ้าไม่เจอ ลองหาจาก device_name
+        if not device:
+            device = await prisma.devicenetwork.find_first(
+                where={"device_name": node_id}
+            )
+        
+        return device
+    
     def _build_mount_payload(self, device) -> Dict[str, Any]:
         """
-        สร้าง payload สำหรับ mount NETCONF node
+        สร้าง payload สำหรับ mount NETCONF node (ODL Potassium compatible)
         
         Args:
             device: DeviceNetwork object จาก DB
         
         Returns:
-            ODL mount payload
+            ODL mount payload with RFC-8040 compliant structure
         """
         return {
-            "node": [
+            "network-topology:node": [
                 {
                     "node-id": device.node_id,
                     "netconf-node-topology:host": device.netconf_host or device.ip_address,
                     "netconf-node-topology:port": device.netconf_port or 830,
                     "netconf-node-topology:username": device.netconf_username,
                     "netconf-node-topology:password": device.netconf_password,
+                    # Stability parameters for ODL Potassium
+                    "netconf-node-topology:tcp-only": False,
+                    "netconf-node-topology:keepalive-delay": 0,
+                    "netconf-node-topology:connection-timeout-millis": 20000,
+                    "netconf-node-topology:default-request-timeout-millis": 60000,
+                    "netconf-node-topology:max-connection-attempts": 0,
                 }
             ]
         }
     
-    async def mount_device(self, device_id: str) -> Dict[str, Any]:
+    async def mount_device(self, node_id: str) -> Dict[str, Any]:
         """
         Mount device ใน ODL โดยใช้ข้อมูลจาก Database
         
         Args:
-            device_id: Database ID ของ device
+            node_id: ODL node-id (เช่น "CSR1")
         
         Returns:
             {
@@ -67,15 +118,14 @@ class OdlMountService:
             }
         """
         prisma = get_prisma_client()
+        device = None
         
         try:
             # 1. ดึงข้อมูล device จาก DB
-            device = await prisma.devicenetwork.find_unique(
-                where={"id": device_id}
-            )
+            device = await self._find_device(node_id)
             
             if not device:
-                raise ValueError(f"Device not found: {device_id}")
+                raise ValueError(f"Device not found: {node_id}")
             
             # 2. Validate required fields
             if not device.node_id:
@@ -120,12 +170,12 @@ class OdlMountService:
             logger.info(f"Mounting device {device.node_id} to ODL...")
             response = await self.odl_client.send(spec)
             
-            # 6. Update database
+            # 6. Update database (ใช้ device.id เพราะต้องเป็น UUID เสมอ)
             await prisma.devicenetwork.update(
-                where={"id": device_id},
+                where={"id": device.id},
                 data={
                     "odl_mounted": True,
-                    "odl_connection_status": "connecting",
+                    "odl_connection_status": "CONNECTING",
                     "last_synced_at": datetime.utcnow()
                 }
             )
@@ -137,11 +187,12 @@ class OdlMountService:
             # 8. Update final status
             connection_status = status.get("connection_status", "unknown")
             device_status = "ONLINE" if connection_status == "connected" else "OFFLINE"
+            db_status = map_odl_status_to_enum(connection_status)
             
             await prisma.devicenetwork.update(
-                where={"id": device_id},
+                where={"id": device.id},
                 data={
-                    "odl_connection_status": connection_status,
+                    "odl_connection_status": db_status,
                     "status": device_status,
                     "last_synced_at": datetime.utcnow()
                 }
@@ -159,26 +210,27 @@ class OdlMountService:
             logger.error(f"Failed to mount device: {e}")
             
             # Update error status in DB
-            try:
-                await prisma.devicenetwork.update(
-                    where={"id": device_id},
-                    data={
-                        "odl_mounted": False,
-                        "odl_connection_status": f"error: {str(e)[:100]}",
-                        "status": "OFFLINE"
-                    }
-                )
-            except:
-                pass
+            if device:
+                try:
+                    await prisma.devicenetwork.update(
+                        where={"id": device.id},
+                        data={
+                            "odl_mounted": False,
+                            "odl_connection_status": "UNABLE_TO_CONNECT",
+                            "status": "OFFLINE"
+                        }
+                    )
+                except:
+                    pass
             
             raise
     
-    async def unmount_device(self, device_id: str) -> Dict[str, Any]:
+    async def unmount_device(self, node_id: str) -> Dict[str, Any]:
         """
         Unmount device จาก ODL
         
         Args:
-            device_id: Database ID ของ device
+            node_id: ODL node-id (เช่น "CSR1")
         
         Returns:
             {
@@ -191,12 +243,10 @@ class OdlMountService:
         
         try:
             # 1. ดึงข้อมูล device จาก DB
-            device = await prisma.devicenetwork.find_unique(
-                where={"id": device_id}
-            )
+            device = await self._find_device(node_id)
             
             if not device:
-                raise ValueError(f"Device not found: {device_id}")
+                raise ValueError(f"Device not found: {node_id}")
             
             if not device.node_id:
                 raise ValueError("node_id is required for unmounting")
@@ -214,12 +264,12 @@ class OdlMountService:
             logger.info(f"Unmounting device {device.node_id} from ODL...")
             await self.odl_client.send(spec)
             
-            # 3. Update database
+            # 3. Update database (ใช้ device.id เพราะต้องเป็น UUID เสมอ)
             await prisma.devicenetwork.update(
-                where={"id": device_id},
+                where={"id": device.id},
                 data={
                     "odl_mounted": False,
-                    "odl_connection_status": "not-mounted",
+                    "odl_connection_status": "UNABLE_TO_CONNECT",
                     "status": "OFFLINE",
                     "last_synced_at": datetime.utcnow()
                 }
@@ -283,12 +333,12 @@ class OdlMountService:
             logger.debug(f"Node {node_id} not found in ODL: {e}")
             return {"mounted": False, "connection_status": "not-mounted"}
     
-    async def check_and_sync_status(self, device_id: str) -> Dict[str, Any]:
+    async def check_and_sync_status(self, node_id: str) -> Dict[str, Any]:
         """
         Check connection status และ sync กับ Database
         
         Args:
-            device_id: Database ID ของ device
+            node_id: ODL node-id (เช่น "CSR1")
         
         Returns:
             {
@@ -302,15 +352,10 @@ class OdlMountService:
         
         try:
             # 1. ดึงข้อมูล device จาก DB
-            device = await prisma.devicenetwork.find_unique(
-                where={"id": device_id}
-            )
+            device = await self._find_device(node_id)
             
             if not device:
-                raise ValueError(f"Device not found: {device_id}")
-            
-            if not device.node_id:
-                raise ValueError("node_id is required")
+                raise ValueError(f"Device not found: {node_id}")
             
             # 2. Get status from ODL
             status = await self.get_connection_status(device.node_id)
@@ -320,14 +365,15 @@ class OdlMountService:
             is_mounted = status.get("mounted", False)
             ready_for_intent = is_connected and is_mounted
             
-            # 4. Update database
+            # 4. Update database (ใช้ device.id เพราะต้องเป็น UUID เสมอ)
             device_status = "ONLINE" if is_connected else "OFFLINE"
+            db_status = map_odl_status_to_enum(status.get("connection_status", "unknown"))
             
             await prisma.devicenetwork.update(
-                where={"id": device_id},
+                where={"id": device.id},
                 data={
                     "odl_mounted": is_mounted,
-                    "odl_connection_status": status.get("connection_status", "unknown"),
+                    "odl_connection_status": db_status,
                     "status": device_status,
                     "last_synced_at": datetime.utcnow()
                 }
@@ -336,7 +382,7 @@ class OdlMountService:
             return {
                 "synced": True,
                 "node_id": device.node_id,
-                "device_id": device_id,
+                "device_id": device.id,
                 "device_name": device.device_name,
                 "mounted": is_mounted,
                 "connection_status": status.get("connection_status", "unknown"),
@@ -351,7 +397,7 @@ class OdlMountService:
     
     async def mount_and_wait(
         self, 
-        device_id: str, 
+        node_id: str, 
         max_wait_seconds: int = 30,
         check_interval: int = 3
     ) -> Dict[str, Any]:
@@ -359,7 +405,7 @@ class OdlMountService:
         Mount device และรอจนกว่าจะ connected (หรือ timeout)
         
         Args:
-            device_id: Database ID ของ device
+            node_id: ODL node-id (เช่น "CSR1")
             max_wait_seconds: เวลารอสูงสุด (วินาที)
             check_interval: interval ในการ check status (วินาที)
         
@@ -367,14 +413,15 @@ class OdlMountService:
             Mount result พร้อม final connection status
         """
         # 1. Mount
-        mount_result = await self.mount_device(device_id)
+        mount_result = await self.mount_device(node_id)
         
         if not mount_result.get("success"):
             return mount_result
         
-        node_id = mount_result.get("node_id")
+        # 2. Get device for DB updates
+        device = await self._find_device(node_id)
         
-        # 2. Wait for connection
+        # 3. Wait for connection
         elapsed = 0
         while elapsed < max_wait_seconds:
             status = await self.get_connection_status(node_id)
@@ -384,9 +431,9 @@ class OdlMountService:
                 # Update DB and return success
                 prisma = get_prisma_client()
                 await prisma.devicenetwork.update(
-                    where={"id": device_id},
+                    where={"id": device.id},
                     data={
-                        "odl_connection_status": "connected",
+                        "odl_connection_status": "CONNECTED",
                         "status": "ONLINE",
                         "last_synced_at": datetime.utcnow()
                     }

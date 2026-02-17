@@ -47,7 +47,6 @@ async def list_devices(
                 "vendor": d.vendor,
                 "model": d.model,
                 "role": d.role,
-                "default_strategy": d.default_strategy,
             }
             for d in devices
         ]
@@ -144,10 +143,8 @@ async def get_device_info(device_id: str):
                 # === NBI/ODL Fields ===
                 "node_id": device.node_id,
                 "vendor": device.vendor,
-                "default_strategy": device.default_strategy,
                 "odl_mounted": device.odl_mounted,
                 "odl_connection_status": device.odl_connection_status,
-                "oc_supported_intents": device.oc_supported_intents,
                 "last_synced_at": device.last_synced_at.isoformat() if device.last_synced_at else None,
                 
                 # === NETCONF Connection (ซ่อน password) ===
@@ -205,9 +202,7 @@ async def get_device_capabilities(device_id: str):
     try:
         device = await device_service.get(device_id)
         
-        # Group intents (All are now vendor-only)
-        oc_supported = []
-        
+        # All intents are vendor-only (OpenConfig removed)
         # Vendor only: all intents starting with INTERFACE, ROUTING, SYSTEM, VLAN
         vendor_only = [
             Intents.INTERFACE.SET_IPV4, Intents.INTERFACE.SET_IPV6, 
@@ -228,10 +223,8 @@ async def get_device_capabilities(device_id: str):
                 "device_id": device_id,
                 "node_id": device.node_id,
                 "vendor": device.vendor,
-                "default_strategy": device.default_strategy,
-                "openconfig_supported": oc_supported,
                 "vendor_only": vendor_only,
-                "total_intents": len(oc_supported) + len(vendor_only)
+                "total_intents": len(vendor_only)
             }
         }
     except Exception as e:

@@ -20,18 +20,8 @@ class DeviceProfileService:
     สำหรับใช้กับ Intent processing
     """
     
-   
     
-    
-    # Strategy mapping
-    # Strategy mapping
-    STRATEGY_MAP = {
-        "OPERATION_BASED": "vendor-only",  # Default to vendor-Only
-        "OC_FIRST": "vendor-only",
-        "VENDOR_FIRST": "vendor-only",
-        "OC_ONLY": "vendor-only",
-        "VENDOR_ONLY": "vendor-only"
-    }
+
     
     def __init__(self):
         self._cache: Dict[str, DeviceProfile] = {}  # Optional caching
@@ -40,22 +30,6 @@ class DeviceProfileService:
         """
         แปลง DeviceNetwork (DB model) เป็น DeviceProfile
         """
-        # Get OC support from DB or use default based on vendor
-        oc_support = {}
-        if db_device.oc_supported_intents:
-            # ใช้ค่าจาก DB ถ้ามี
-            oc_support = db_device.oc_supported_intents
-        else:
-            # ใช้ default ตาม vendor
-            vendor = db_device.vendor if db_device.vendor else "OTHER"
-            oc_support = self.DEFAULT_OC_SUPPORT.get(vendor, {})
-        
-        # Map strategy - default to vendor-only
-        strategy = self.STRATEGY_MAP.get(
-            db_device.default_strategy if db_device.default_strategy else "VENDOR_ONLY",
-            "vendor-only"
-        )
-        
         # Map type to role
         role = "router" if db_device.type == "ROUTER" else "switch"
         
@@ -65,8 +39,6 @@ class DeviceProfileService:
             vendor=(db_device.vendor or "OTHER").lower(),
             model=db_device.device_model,
             role=role,
-            default_strategy=strategy,
-            oc_supported_intents=oc_support
         )
     
     async def get(self, device_id: str) -> DeviceProfile:
@@ -168,40 +140,9 @@ class DeviceProfileService:
         
         return [self._db_to_profile(d) for d in devices]
     
-    async def update_oc_support(self, device_id: str, oc_support: Dict[str, bool]) -> DeviceProfile:
-        """
-        Update OpenConfig support mapping for a device
-        
-        Args:
-            device_id: Device ID (node_id or database ID)
-            oc_support: Dict mapping intent name -> bool (supports OC or not)
-        """
-        prisma = get_prisma_client()
-        
-        # Find device
-        device = await prisma.devicenetwork.find_first(
-            where={"node_id": device_id}
-        )
-        if not device:
-            device = await prisma.devicenetwork.find_unique(
-                where={"id": device_id}
-            )
-        
-        if not device:
-            raise DeviceNotFound(device_id)
-        
-        # Update OC support
-        updated = await prisma.devicenetwork.update(
-            where={"id": device.id},
-            data={"oc_supported_intents": oc_support}
-        )
-        
-        return self._db_to_profile(updated)
-    
     async def check_intent_support(self, device_id: str, intent: str) -> bool:
-        """Check if device supports specific intent via OpenConfig"""
-        profile = await self.get(device_id)
-        return profile.oc_supported_intents.get(intent, False)
+        """Check if device supports specific intent (OpenConfig removed, always returns False)"""
+        return False
     
     async def check_mount_status(self, device_id: str) -> Dict[str, Any]:
         """

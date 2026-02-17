@@ -24,8 +24,6 @@ class DeviceProfileService:
                 vendor="cisco",
                 model="CSR1000v",
                 role="router",
-                default_strategy="vendor-only",
-                oc_supported_intents={}
             ),
             
             "CSR2": DeviceProfile(
@@ -34,8 +32,6 @@ class DeviceProfileService:
                 vendor="cisco",
                 model="CSR1000v",
                 role="router",
-                default_strategy="vendor-only",
-                oc_supported_intents={}
             ),
             
             # ===== Huawei Devices =====
@@ -45,8 +41,6 @@ class DeviceProfileService:
                 vendor="huawei",
                 model="NE40E",
                 role="router",
-                default_strategy="vendor-only",
-                oc_supported_intents={}
             ),
             
             "NE40E2": DeviceProfile(
@@ -55,8 +49,6 @@ class DeviceProfileService:
                 vendor="huawei",
                 model="NE40E-X8",
                 role="router",
-                default_strategy="vendor-only",
-                oc_supported_intents={}
             ),
             
             # ===== Mixed/Test Devices =====
@@ -66,8 +58,6 @@ class DeviceProfileService:
                 vendor="cisco",
                 model="Nexus9000",
                 role="switch",
-                default_strategy="vendor-only",
-                oc_supported_intents={}
             ),
         }
 
@@ -113,6 +103,5 @@ class DeviceProfileService:
         return True
     
     def check_intent_support(self, device_id: str, intent: str) -> bool:
-        """Check if device supports specific intent via OpenConfig"""
-        device = self.get(device_id)
-        return device.oc_supported_intents.get(intent, False)
+        """Check if device supports specific intent (OpenConfig removed, always returns False)"""
+        return False

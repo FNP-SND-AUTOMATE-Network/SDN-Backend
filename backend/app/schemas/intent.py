@@ -40,7 +40,7 @@ class IntentResponse(BaseModel):
         success: True if intent executed successfully
         intent: The executed intent
         node_id: ODL device identifier (same as request)
-        driver_used: Driver that was used (cisco, huawei, openconfig, etc.)
+        driver_used: Driver that was used (cisco, huawei, etc.)
         result: Intent execution result
         error: Error details if success=False
     """

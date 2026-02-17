@@ -36,7 +36,7 @@ class DriverFactory:
             return
         
         # Interface Drivers
-        from app.drivers.cisco.interface import CiscoInterfaceDriver
+        from app.drivers.cisco.ios_xe.interface import CiscoInterfaceDriver
         from app.drivers.huawei.interface import HuaweiInterfaceDriver
         cls._interface_drivers = {
             "cisco": CiscoInterfaceDriver,
@@ -44,7 +44,7 @@ class DriverFactory:
         }
         
         # Routing Drivers
-        from app.drivers.cisco.routing import CiscoRoutingDriver
+        from app.drivers.cisco.ios_xe.routing import CiscoRoutingDriver
         from app.drivers.huawei.routing import HuaweiRoutingDriver
         cls._routing_drivers = {
             "cisco": CiscoRoutingDriver,
@@ -52,7 +52,7 @@ class DriverFactory:
         }
         
         # System Drivers
-        from app.drivers.cisco.system import CiscoSystemDriver
+        from app.drivers.cisco.ios_xe.system import CiscoSystemDriver
         from app.drivers.huawei.system import HuaweiSystemDriver
         cls._system_drivers = {
             "cisco": CiscoSystemDriver,
@@ -60,7 +60,7 @@ class DriverFactory:
         }
         
         # VLAN Drivers
-        from app.drivers.cisco.vlan import CiscoVlanDriver
+        from app.drivers.cisco.ios_xe.vlan import CiscoVlanDriver
         from app.drivers.huawei.vlan import HuaweiVlanDriver
         cls._vlan_drivers = {
             "cisco": CiscoVlanDriver,

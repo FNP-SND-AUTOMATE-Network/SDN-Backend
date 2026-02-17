@@ -211,7 +211,7 @@ model DeviceNetwork {
   // ========= NBI/ODL Fields =========
   node_id               String?             @unique // ODL node-id ใน topology-netconf (ใช้สำหรับ Intent API)
   vendor                DeviceVendor        @default(OTHER) // Vendor สำหรับเลือก driver
-  default_strategy      IntentStrategy      @default(OC_FIRST) // Strategy สำหรับ Intent execution
+  default_strategy      IntentStrategy      @default(VENDOR_ONLY) // Strategy สำหรับ Intent execution (OpenConfig removed)
   odl_mounted           Boolean             @default(false) // Mount status ใน ODL
   odl_connection_status OdlConnectionStatus @default(UNABLE_TO_CONNECT)
   oc_supported_intents  Json? // JSON map ของ intent -> boolean (รองรับ OpenConfig หรือไม่)

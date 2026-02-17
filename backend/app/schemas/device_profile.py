@@ -8,7 +8,7 @@ Terminology:
            This is what API clients send as 'deviceId' in requests.
 """
 from pydantic import BaseModel
-from typing import Dict, Optional
+from typing import Optional
 
 
 class DeviceProfile(BaseModel):
@@ -21,22 +21,14 @@ class DeviceProfile(BaseModel):
         vendor: Device vendor ("cisco" | "huawei" | "juniper" | "arista")
         model: Device model (optional)
         role: Device role ("router" | "switch")
-        default_strategy: YANG driver selection strategy
-        oc_supported_intents: Map of intent->bool for OpenConfig support
-    
-    Strategy Options:
-        - "operation-based" (default): GET→OpenConfig, PUT/POST→Vendor YANG
-        - "oc-first": Try OpenConfig first, fallback to vendor
-        - "vendor-first": Try vendor YANG first, fallback to OpenConfig
     
     Note:
         - API uses 'deviceId' = database 'node_id' (same value)
         - 'device_id' is internal UUID, not exposed to API clients
+        - Driver selection is based on vendor directly (no strategy needed)
     """
     device_id: str              # Database UUID (internal)
     node_id: str                # ODL node identifier = API 'deviceId'
     vendor: str                 # "cisco" | "huawei" | etc.
     model: Optional[str] = None
     role: str = "router"        # router | switch
-    default_strategy: str = "operation-based"  # operation-based | oc-first | vendor-first
-    oc_supported_intents: Dict[str, bool] = {}

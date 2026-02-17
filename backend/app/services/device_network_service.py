@@ -98,7 +98,6 @@ class DeviceNetworkService:
                     # NBI/ODL Fields
                     "node_id": device_data.node_id,
                     "vendor": device_data.vendor.value if device_data.vendor else "OTHER",
-                    "default_strategy": device_data.default_strategy.value if device_data.default_strategy else "OC_FIRST",
                     # NETCONF Connection Fields
                     "netconf_host": device_data.netconf_host or device_data.ip_address,
                     "netconf_port": device_data.netconf_port or 830,
@@ -207,7 +206,6 @@ class DeviceNetworkService:
             # NBI/ODL Fields
             node_id=getattr(device, 'node_id', None) or '',
             vendor=getattr(device, 'vendor', 'OTHER'),
-            default_strategy=getattr(device, 'default_strategy', 'OC_FIRST'),
             netconf_host=getattr(device, 'netconf_host', None),
             netconf_port=getattr(device, 'netconf_port', 830) or 830,
             netconf_username=getattr(device, 'netconf_username', None),
@@ -215,7 +213,6 @@ class DeviceNetworkService:
             # ODL Status Fields
             odl_mounted=is_mounted,
             odl_connection_status=connection_status,
-            oc_supported_intents=getattr(device, 'oc_supported_intents', None),
             last_synced_at=getattr(device, 'last_synced_at', None),
             ready_for_intent=ready_for_intent,
             # Relations
@@ -398,8 +395,6 @@ class DeviceNetworkService:
             if update_data.vendor is not None:
                 update_dict["vendor"] = update_data.vendor.value
 
-            if update_data.default_strategy is not None:
-                update_dict["default_strategy"] = update_data.default_strategy.value
 
             # NETCONF Connection Fields
             if update_data.netconf_host is not None:

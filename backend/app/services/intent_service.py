@@ -39,22 +39,22 @@ from app.core.intent_registry import IntentRegistry, Intents, IntentCategory
 from app.core.logging import logger
 
 # Interface Drivers
-from app.drivers.cisco.interface import CiscoInterfaceDriver
+from app.drivers.cisco.ios_xe.interface import CiscoInterfaceDriver
 from app.drivers.huawei.interface import HuaweiInterfaceDriver
 
 # System Drivers
 # System Drivers
-from app.drivers.cisco.system import CiscoSystemDriver
+from app.drivers.cisco.ios_xe.system import CiscoSystemDriver
 from app.drivers.huawei.system import HuaweiSystemDriver
 
 # Routing Drivers
 # Routing Drivers
-from app.drivers.cisco.routing import CiscoRoutingDriver
+from app.drivers.cisco.ios_xe.routing import CiscoRoutingDriver
 from app.drivers.huawei.routing import HuaweiRoutingDriver
 
 # VLAN Drivers
 # VLAN Drivers
-from app.drivers.cisco.vlan import CiscoVlanDriver
+from app.drivers.cisco.ios_xe.vlan import CiscoVlanDriver
 from app.drivers.huawei.vlan import HuaweiVlanDriver
 
 # DHCP Drivers

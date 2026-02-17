@@ -65,6 +65,11 @@ class ConfigNormalizer:
             iface = params.get("interface", "")
             mtu = params.get("mtu", "")
             changes.append(f"Set MTU to {mtu} on {iface}")
+
+        elif intent == "interface.create_subinterface":
+            iface = params.get("interface", "")
+            vlan = params.get("vlan_id", "")
+            changes.append(f"Created sub-interface {iface} with VLAN {vlan}")
             
         # Routing Intents
         elif intent == "routing.static.add":

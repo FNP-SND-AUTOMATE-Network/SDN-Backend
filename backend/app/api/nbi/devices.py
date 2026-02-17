@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, status
 from app.services.device_profile_service_db import DeviceProfileService
 from app.core.logging import logger
+from app.core.intent_registry import Intents
 
 from .models import ErrorCode, DeviceListResponse, DeviceDetailResponse
 
@@ -194,7 +195,9 @@ async def get_device_capabilities(device_id: str):
     """
     Get intent capabilities for a specific device
     
-    Shows which intents are supported via OpenConfig
+    Get intent capabilities for a specific device.
+    
+    (Note: OpenConfig support has been removed. All intents are now vendor-specific)
     
     **Error Codes:**
     - `DEVICE_NOT_FOUND`: ไม่พบ device
@@ -202,15 +205,20 @@ async def get_device_capabilities(device_id: str):
     try:
         device = await device_service.get(device_id)
         
-        # Group intents by support status
+        # Group intents (All are now vendor-only)
         oc_supported = []
-        vendor_only = []
         
-        for intent_name, oc_ok in device.oc_supported_intents.items():
-            if oc_ok:
-                oc_supported.append(intent_name)
-            else:
-                vendor_only.append(intent_name)
+        # Vendor only: all intents starting with INTERFACE, ROUTING, SYSTEM, VLAN
+        vendor_only = [
+            Intents.INTERFACE.SET_IPV4, Intents.INTERFACE.SET_IPV6, 
+            Intents.INTERFACE.ENABLE, Intents.INTERFACE.DISABLE,
+            Intents.INTERFACE.SET_DESCRIPTION, Intents.INTERFACE.SET_MTU,
+            Intents.SHOW.INTERFACE, Intents.SHOW.INTERFACES,
+            Intents.SHOW.IP_ROUTE, Intents.SHOW.IP_INTERFACE_BRIEF,
+            Intents.SHOW.VERSION, Intents.SHOW.RUNNING_CONFIG,
+            Intents.ROUTING.STATIC_ADD, Intents.ROUTING.STATIC_DELETE,
+            Intents.VLAN.CREATE, Intents.VLAN.DELETE, Intents.SHOW.VLANS
+        ]
         
         return {
             "success": True,

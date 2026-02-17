@@ -31,6 +31,7 @@ class CiscoInterfaceDriver(BaseDriver):
         Intents.INTERFACE.DISABLE,
         Intents.INTERFACE.SET_DESCRIPTION,
         Intents.INTERFACE.SET_MTU,
+        Intents.INTERFACE.CREATE_SUBINTERFACE,
         Intents.SHOW.INTERFACE,
         Intents.SHOW.INTERFACES,
     }
@@ -91,6 +92,10 @@ class CiscoInterfaceDriver(BaseDriver):
         # ===== INTERFACE SET MTU =====
         if intent == Intents.INTERFACE.SET_MTU:
             return self._build_set_mtu(mount, params)
+            
+        # ===== INTERFACE CREATE SUBINTERFACE =====
+        if intent == Intents.INTERFACE.CREATE_SUBINTERFACE:
+            return self._build_create_subinterface(mount, params)
         
         # ===== SHOW INTERFACE =====
         if intent == Intents.SHOW.INTERFACE:
@@ -345,6 +350,78 @@ class CiscoInterfaceDriver(BaseDriver):
             payload=payload,
             headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.INTERFACE.SET_MTU,
+            driver=self.name
+        )
+    
+    def _build_create_subinterface(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """
+        Create sub-interface with Dot1Q encapsulation
+        
+        Path: .../Cisco-IOS-XE-native:native/interface/{Type}={Number}
+        Payload: 
+          {
+            "Cisco-IOS-XE-native:{Type}": [
+              {
+                "name": "{Number}",
+                "encapsulation": { "dot1Q": { "vlan-id": {vlan_id} } },
+                "ip": ... (optional)
+              }
+            ]
+          }
+        """
+        ifname = params.get("interface")
+        vlan_id = params.get("vlan_id")
+        
+        if not ifname or not vlan_id:
+            raise DriverBuildError("params require interface, vlan_id")
+
+        iface_type, iface_num = self._parse_interface_name(ifname)
+        # Ensure iface_num matches the subinterface format expected (e.g. "2.100")
+        
+        encoded_num = self._encode_interface_number(iface_num)
+        
+        path = f"{mount}/Cisco-IOS-XE-native:native/interface/{iface_type}={encoded_num}"
+        
+        # Build base payload with encapsulation
+        interface_payload = {
+            "name": iface_num,
+            "encapsulation": {
+                "dot1Q": {
+                    "vlan-id": int(vlan_id)
+                }
+            }
+        }
+        
+        # Add IP if specified
+        ip = params.get("ip")
+        prefix = params.get("prefix")
+        if ip and prefix:
+            netmask = _prefix_to_netmask(int(prefix))
+            interface_payload["ip"] = {
+                "address": {
+                    "primary": {
+                        "address": ip,
+                        "mask": netmask
+                    }
+                }
+            }
+            
+        # Add description if specified
+        description = params.get("description")
+        if description:
+            interface_payload["description"] = description
+            
+        payload = {
+            f"Cisco-IOS-XE-native:{iface_type}": [interface_payload]
+        }
+
+        return RequestSpec(
+            method="PATCH",
+            datastore="config",
+            path=path,
+            payload=payload,
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
+            intent=Intents.INTERFACE.CREATE_SUBINTERFACE,
             driver=self.name
         )
     

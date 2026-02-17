@@ -44,9 +44,7 @@ class RoutingNormalizer:
         routes = []
         
         # Detect format and normalize
-        if "openconfig-network-instance:static-routes" in str(raw):
-            routes = RoutingNormalizer._parse_openconfig(raw)
-        elif "Cisco-IOS-XE-native:route" in str(raw) or "ip-route-interface-forwarding-list" in str(raw):
+        if "Cisco-IOS-XE-native:route" in str(raw) or "ip-route-interface-forwarding-list" in str(raw):
             routes = RoutingNormalizer._parse_cisco(raw)
         elif "huawei-routing:routing" in str(raw):
             routes = RoutingNormalizer._parse_huawei(raw)
@@ -165,46 +163,6 @@ class RoutingNormalizer:
             
         return routes
 
-    @staticmethod
-    def _parse_openconfig(raw: Dict[str, Any]) -> List[RouteEntry]:
-        """Parse OpenConfig network-instance static routes"""
-        routes = []
-        
-        try:
-            # Navigate OpenConfig structure
-            # openconfig-network-instance:network-instances
-            network_instances = raw.get("openconfig-network-instance:network-instances", {})
-            instances = network_instances.get("network-instance", [])
-            
-            for instance in instances:
-                protocols = instance.get("protocols", {}).get("protocol", [])
-                
-                for protocol in protocols:
-                    proto_name = protocol.get("name", "unknown")
-                    proto_id = protocol.get("identifier", "")
-                    
-                    if "STATIC" in str(proto_id):
-                        static_routes = protocol.get("static-routes", {}).get("static", [])
-                        
-                        for static in static_routes:
-                            prefix = static.get("prefix", "")
-                            next_hops = static.get("next-hops", {}).get("next-hop", [])
-                            
-                            for nh in next_hops:
-                                nh_config = nh.get("config", {})
-                                routes.append(RouteEntry(
-                                    prefix=prefix,
-                                    next_hop=nh_config.get("next-hop"),
-                                    interface=nh.get("interface-ref", {}).get("config", {}).get("interface"),
-                                    protocol="static",
-                                    metric=nh_config.get("metric"),
-                                    preference=None,
-                                    active=True
-                                ))
-        except Exception:
-            pass
-        
-        return routes
 
     @staticmethod
     def _parse_cisco(raw: Dict[str, Any]) -> List[RouteEntry]:
@@ -341,8 +299,6 @@ class InterfaceBriefNormalizer:
         # Detect and parse
         if "ietf-interfaces:interfaces" in str(raw) or "interfaces-state" in str(raw):
             interfaces = InterfaceBriefNormalizer._parse_ietf(raw)
-        elif "openconfig-interfaces:interfaces" in str(raw):
-            interfaces = InterfaceBriefNormalizer._parse_openconfig(raw)
         elif "huawei-ifm:interfaces" in str(raw):
             interfaces = InterfaceBriefNormalizer._parse_huawei(raw)
         else:
@@ -406,53 +362,6 @@ class InterfaceBriefNormalizer:
         
         return interfaces
 
-    @staticmethod
-    def _parse_openconfig(raw: Dict[str, Any]) -> List[InterfaceBriefEntry]:
-        """Parse OpenConfig interfaces"""
-        interfaces = []
-        
-        try:
-            oc_ifaces = raw.get("openconfig-interfaces:interfaces", {}).get("interface", [])
-            
-            if isinstance(oc_ifaces, dict):
-                oc_ifaces = [oc_ifaces]
-            
-            for iface in oc_ifaces:
-                name = iface.get("name", "unknown")
-                state = iface.get("state", {})
-                
-                # Get IP
-                ip_addr = None
-                subifs = iface.get("subinterfaces", {}).get("subinterface", [])
-                if subifs:
-                    if isinstance(subifs, dict):
-                        subifs = [subifs]
-                    ipv4 = subifs[0].get("openconfig-if-ip:ipv4", {})
-                    addrs = ipv4.get("addresses", {}).get("address", [])
-                    if addrs:
-                        if isinstance(addrs, dict):
-                            addrs = [addrs]
-                        ip_addr = addrs[0].get("state", {}).get("ip")
-                
-                oper_status = state.get("oper-status", "DOWN")
-                admin_status = state.get("admin-status", "DOWN")
-                
-                if admin_status == "DOWN":
-                    status = "admin-down"
-                else:
-                    status = "up" if oper_status == "UP" else "down"
-                
-                interfaces.append(InterfaceBriefEntry(
-                    interface=name,
-                    ip_address=ip_addr,
-                    status=status,
-                    protocol="up" if oper_status == "UP" else "down",
-                    method="manual"
-                ))
-        except Exception:
-            pass
-        
-        return interfaces
 
     @staticmethod
     def _parse_huawei(raw: Dict[str, Any]) -> List[InterfaceBriefEntry]:
@@ -588,9 +497,7 @@ class OspfNormalizer:
         """Normalize OSPF neighbors response"""
         neighbors = []
         
-        if "openconfig-ospfv2" in str(raw) or "ospfv2" in str(raw):
-            neighbors = OspfNormalizer._parse_openconfig_neighbors(raw)
-        elif "Cisco-IOS-XE-ospf-oper" in str(raw) or "ospf-oper-data" in str(raw):
+        if "Cisco-IOS-XE-ospf-oper" in str(raw) or "ospf-oper-data" in str(raw):
             neighbors = OspfNormalizer._parse_cisco_neighbors(raw)
         else:
             neighbors = OspfNormalizer._parse_generic_neighbors(raw)
@@ -613,9 +520,7 @@ class OspfNormalizer:
         """Normalize OSPF LSDB response"""
         lsas = []
         
-        if "openconfig-ospfv2" in str(raw):
-            lsas = OspfNormalizer._parse_openconfig_lsdb(raw)
-        elif "Cisco-IOS-XE-ospf-oper" in str(raw):
+        if "Cisco-IOS-XE-ospf-oper" in str(raw):
             lsas = OspfNormalizer._parse_cisco_lsdb(raw)
         else:
             lsas = OspfNormalizer._parse_generic_lsdb(raw)
@@ -629,47 +534,6 @@ class OspfNormalizer:
             raw=raw
         )
 
-    @staticmethod
-    def _parse_openconfig_neighbors(raw: Dict[str, Any]) -> List[OspfNeighborEntry]:
-        """Parse OpenConfig OSPF neighbors"""
-        neighbors = []
-        
-        try:
-            # Navigate OpenConfig structure
-            areas = raw.get("openconfig-ospfv2:areas", {}).get("area", [])
-            if isinstance(areas, dict):
-                areas = [areas]
-            
-            for area in areas:
-                area_id = area.get("identifier", "0")
-                interfaces = area.get("interfaces", {}).get("interface", [])
-                
-                if isinstance(interfaces, dict):
-                    interfaces = [interfaces]
-                
-                for iface in interfaces:
-                    iface_name = iface.get("id", "")
-                    nbrs = iface.get("neighbors", {}).get("neighbor", [])
-                    
-                    if isinstance(nbrs, dict):
-                        nbrs = [nbrs]
-                    
-                    for nbr in nbrs:
-                        state = nbr.get("state", {})
-                        neighbors.append(OspfNeighborEntry(
-                            neighbor_id=nbr.get("router-id", state.get("router-id", "")),
-                            neighbor_address=state.get("address", ""),
-                            state=state.get("adjacency-state", "UNKNOWN"),
-                            interface=iface_name,
-                            area=str(area_id),
-                            priority=state.get("priority"),
-                            dr=state.get("designated-router"),
-                            bdr=state.get("backup-designated-router")
-                        ))
-        except Exception:
-            pass
-        
-        return neighbors
 
     @staticmethod
     def _parse_cisco_neighbors(raw: Dict[str, Any]) -> List[OspfNeighborEntry]:
@@ -739,45 +603,6 @@ class OspfNormalizer:
         find_neighbors(raw)
         return neighbors
 
-    @staticmethod
-    def _parse_openconfig_lsdb(raw: Dict[str, Any]) -> List[OspfLsaEntry]:
-        """Parse OpenConfig OSPF LSDB"""
-        lsas = []
-        
-        try:
-            areas = raw.get("openconfig-ospfv2:areas", {}).get("area", [])
-            if isinstance(areas, dict):
-                areas = [areas]
-            
-            for area in areas:
-                area_id = area.get("identifier", "0")
-                lsdb = area.get("lsdb", {})
-                lsa_types = lsdb.get("lsa-types", {}).get("lsa-type", [])
-                
-                if isinstance(lsa_types, dict):
-                    lsa_types = [lsa_types]
-                
-                for lsa_type in lsa_types:
-                    type_name = lsa_type.get("type", "")
-                    lsa_list = lsa_type.get("lsas", {}).get("lsa", [])
-                    
-                    if isinstance(lsa_list, dict):
-                        lsa_list = [lsa_list]
-                    
-                    for lsa in lsa_list:
-                        state = lsa.get("state", {})
-                        lsas.append(OspfLsaEntry(
-                            lsa_type=type_name,
-                            link_state_id=lsa.get("link-state-id", ""),
-                            advertising_router=lsa.get("advertising-router", ""),
-                            sequence_number=state.get("sequence-number"),
-                            age=state.get("age"),
-                            area=str(area_id)
-                        ))
-        except Exception:
-            pass
-        
-        return lsas
 
     @staticmethod
     def _parse_cisco_lsdb(raw: Dict[str, Any]) -> List[OspfLsaEntry]:

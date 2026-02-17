@@ -18,8 +18,6 @@ class VlanNormalizer:
         if driver_used == "huawei":
             return self._normalize_huawei_vlans(raw)
         
-        if driver_used == "openconfig":
-            return self._normalize_openconfig_vlans(raw)
         
         # Fallback
         return UnifiedVlanList(vlans=[], total_count=0).model_dump()
@@ -97,41 +95,3 @@ class VlanNormalizer:
         )
         return out.model_dump()
     
-    # =========================================================
-    # OpenConfig
-    # =========================================================
-    
-    def _normalize_openconfig_vlans(self, raw: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Parse OpenConfig VLAN response
-        Raw: { "openconfig-network-instance:network-instances": { "network-instance": [...] } }
-        """
-        vlans: List[UnifiedVlan] = []
-        
-        ni_list = (
-            raw.get("openconfig-network-instance:network-instances", {})
-                .get("network-instance", [])
-        )
-        
-        for ni in ni_list:
-            vlan_list = ni.get("vlans", {}).get("vlan", [])
-            if not isinstance(vlan_list, list):
-                vlan_list = [vlan_list]
-            
-            for v in vlan_list:
-                if not isinstance(v, dict):
-                    continue
-                config = v.get("config", {})
-                status = config.get("status", "ACTIVE").lower()
-                
-                vlans.append(UnifiedVlan(
-                    vlan_id=int(config.get("vlan-id", v.get("vlan-id", 0))),
-                    name=config.get("name"),
-                    status="active" if status == "active" else "suspended",
-                ))
-        
-        out = UnifiedVlanList(
-            vlans=vlans,
-            total_count=len(vlans),
-        )
-        return out.model_dump()

@@ -20,8 +20,6 @@ class SystemNormalizer:
     
     def normalize_show_version(self, driver_used: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize show version response"""
-        if driver_used == "openconfig":
-            return self._normalize_openconfig_version(raw)
         
         if driver_used == "cisco":
             return self._normalize_cisco_version(raw)
@@ -40,8 +38,6 @@ class SystemNormalizer:
         if driver_used == "huawei":
             return self._normalize_huawei_running_config(raw)
         
-        if driver_used == "openconfig":
-            return self._normalize_openconfig_running_config(raw)
         
         # Fallback: return raw with vendor info
         return UnifiedRunningConfig(
@@ -49,89 +45,6 @@ class SystemNormalizer:
             raw_config=raw,
         ).model_dump()
     
-    # =========================================================
-    # OpenConfig Normalizers
-    # =========================================================
-    
-    def _normalize_openconfig_version(self, raw: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize OpenConfig system state"""
-        state = raw.get("openconfig-system:state") or raw.get("state") or raw
-        
-        out = UnifiedSystemInfo(
-            hostname=state.get("hostname", "unknown"),
-            vendor="openconfig",
-            model=state.get("hardware", {}).get("model"),
-            serial_number=state.get("hardware", {}).get("serial-number"),
-            software_version=state.get("software-version"),
-            uptime=state.get("boot-time"),
-        )
-        return out.model_dump()
-    
-    def _normalize_openconfig_running_config(self, raw: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize OpenConfig running config"""
-        interfaces: List[RunningConfigInterface] = []
-        routes: List[RunningConfigRoute] = []
-        hostname = None
-        
-        # Parse interfaces
-        oc_ifaces = (
-            raw.get("openconfig-interfaces:interfaces", {}).get("interface", [])
-            or raw.get("interfaces", {}).get("interface", [])
-        )
-        for iface in oc_ifaces:
-            name = iface.get("name", "")
-            config = iface.get("config", {})
-            subifs = iface.get("subinterfaces", {}).get("subinterface", [])
-            
-            ip_addr = None
-            for sub in subifs:
-                ipv4 = sub.get("openconfig-if-ip:ipv4", {}) or sub.get("ipv4", {})
-                addrs = ipv4.get("addresses", {}).get("address", [])
-                if addrs:
-                    a = addrs[0]
-                    ip = a.get("config", {}).get("ip") or a.get("ip")
-                    prefix = a.get("config", {}).get("prefix-length") or a.get("prefix-length")
-                    if ip:
-                        ip_addr = f"{ip}/{prefix}" if prefix else ip
-            
-            interfaces.append(RunningConfigInterface(
-                name=name,
-                type=config.get("type", "").split(":")[-1] if config.get("type") else None,
-                ip_address=ip_addr,
-                enabled=config.get("enabled"),
-                description=config.get("description"),
-                mtu=config.get("mtu"),
-            ))
-        
-        # Parse hostname from system
-        system = raw.get("openconfig-system:system", {}) or raw.get("system", {})
-        if system:
-            hostname = system.get("config", {}).get("hostname") or system.get("hostname")
-        
-        # Parse static routes
-        ni_list = (
-            raw.get("openconfig-network-instance:network-instances", {})
-                .get("network-instance", [])
-        )
-        for ni in ni_list:
-            protocols = ni.get("protocols", {}).get("protocol", [])
-            for proto in protocols:
-                static = proto.get("static-routes", {}).get("static", [])
-                for s in static:
-                    prefix = s.get("prefix", "")
-                    nhs = s.get("next-hops", {}).get("next-hop", [])
-                    nh = nhs[0].get("config", {}).get("next-hop") if nhs else None
-                    routes.append(RunningConfigRoute(prefix=prefix, next_hop=str(nh) if nh else None))
-        
-        out = UnifiedRunningConfig(
-            hostname=hostname,
-            vendor="openconfig",
-            interfaces=interfaces,
-            static_routes=routes,
-            system=RunningConfigSystem(hostname=hostname) if hostname else None,
-            raw_config=raw,
-        )
-        return out.model_dump()
     
     # =========================================================
     # Cisco Normalizers

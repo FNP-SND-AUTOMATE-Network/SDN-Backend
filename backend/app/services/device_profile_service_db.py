@@ -20,62 +20,16 @@ class DeviceProfileService:
     สำหรับใช้กับ Intent processing
     """
     
-    # Default OpenConfig support by vendor
-    DEFAULT_OC_SUPPORT = {
-        "CISCO": {
-            # Cisco รองรับ OpenConfig ค่อนข้างดี
-            Intents.INTERFACE.SET_IPV4: True,
-            Intents.INTERFACE.SET_IPV6: True,
-            Intents.INTERFACE.ENABLE: True,
-            Intents.INTERFACE.DISABLE: True,
-            Intents.INTERFACE.SET_DESCRIPTION: True,
-            Intents.INTERFACE.SET_MTU: True,
-            Intents.SHOW.INTERFACE: True,
-            Intents.SHOW.INTERFACES: True,
-            Intents.SHOW.VERSION: False,
-            Intents.SHOW.IP_ROUTE: False,
-            Intents.ROUTING.STATIC_ADD: False,
-            Intents.ROUTING.STATIC_DELETE: False,
-            Intents.SYSTEM.SET_HOSTNAME: False,
-            Intents.SYSTEM.SET_NTP: False,
-        },
-        "HUAWEI": {
-            # Huawei มักไม่รองรับ OpenConfig เต็มที่
-            Intents.INTERFACE.SET_IPV4: False,
-            Intents.INTERFACE.SET_IPV6: False,
-            Intents.INTERFACE.ENABLE: False,
-            Intents.INTERFACE.DISABLE: False,
-            Intents.SHOW.INTERFACE: False,
-            Intents.SHOW.INTERFACES: False,
-        },
-        "JUNIPER": {
-            # Juniper รองรับ OpenConfig ดี
-            Intents.INTERFACE.SET_IPV4: True,
-            Intents.INTERFACE.ENABLE: True,
-            Intents.INTERFACE.DISABLE: True,
-            Intents.SHOW.INTERFACE: True,
-            Intents.SHOW.INTERFACES: True,
-        },
-        "ARISTA": {
-            # Arista รองรับ OpenConfig ดีมาก
-            Intents.INTERFACE.SET_IPV4: True,
-            Intents.INTERFACE.SET_IPV6: True,
-            Intents.INTERFACE.ENABLE: True,
-            Intents.INTERFACE.DISABLE: True,
-            Intents.SHOW.INTERFACE: True,
-            Intents.SHOW.INTERFACES: True,
-        },
-        "OTHER": {
-            # Default: ไม่รองรับ OC
-        }
-    }
+   
+    
     
     # Strategy mapping
+    # Strategy mapping
     STRATEGY_MAP = {
-        "OPERATION_BASED": "operation-based",  # NEW DEFAULT: GET→OC, PUT→Vendor
-        "OC_FIRST": "oc-first",
-        "VENDOR_FIRST": "vendor-first",
-        "OC_ONLY": "oc-only",
+        "OPERATION_BASED": "vendor-only",  # Default to vendor-Only
+        "OC_FIRST": "vendor-only",
+        "VENDOR_FIRST": "vendor-only",
+        "OC_ONLY": "vendor-only",
         "VENDOR_ONLY": "vendor-only"
     }
     
@@ -96,10 +50,10 @@ class DeviceProfileService:
             vendor = db_device.vendor if db_device.vendor else "OTHER"
             oc_support = self.DEFAULT_OC_SUPPORT.get(vendor, {})
         
-        # Map strategy - default to operation-based
+        # Map strategy - default to vendor-only
         strategy = self.STRATEGY_MAP.get(
-            db_device.default_strategy if db_device.default_strategy else "OPERATION_BASED",
-            "operation-based"  # Fallback to operation-based
+            db_device.default_strategy if db_device.default_strategy else "VENDOR_ONLY",
+            "vendor-only"
         )
         
         # Map type to role

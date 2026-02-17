@@ -39,22 +39,21 @@ from app.core.intent_registry import IntentRegistry, Intents, IntentCategory
 from app.core.logging import logger
 
 # Interface Drivers
-from app.drivers.openconfig.interface import OpenConfigInterfaceDriver
 from app.drivers.cisco.interface import CiscoInterfaceDriver
 from app.drivers.huawei.interface import HuaweiInterfaceDriver
 
 # System Drivers
-from app.drivers.openconfig.system import OpenConfigSystemDriver
+# System Drivers
 from app.drivers.cisco.system import CiscoSystemDriver
 from app.drivers.huawei.system import HuaweiSystemDriver
 
 # Routing Drivers
-from app.drivers.openconfig.routing import OpenConfigRoutingDriver
+# Routing Drivers
 from app.drivers.cisco.routing import CiscoRoutingDriver
 from app.drivers.huawei.routing import HuaweiRoutingDriver
 
 # VLAN Drivers
-from app.drivers.openconfig.vlan import OpenConfigVlanDriver
+# VLAN Drivers
 from app.drivers.cisco.vlan import CiscoVlanDriver
 from app.drivers.huawei.vlan import HuaweiVlanDriver
 
@@ -101,26 +100,22 @@ class IntentService:
 
         # Register drivers by vendor and category
         self.interface_drivers = {
-            "openconfig": OpenConfigInterfaceDriver(),
             "cisco": CiscoInterfaceDriver(),
             "huawei": HuaweiInterfaceDriver(),
         }
         
         self.system_drivers = {
-            "openconfig": OpenConfigSystemDriver(),
             "cisco": CiscoSystemDriver(),
             "huawei": HuaweiSystemDriver(),
         }
         
         self.routing_drivers = {
-            "openconfig": OpenConfigRoutingDriver(),
             "cisco": CiscoRoutingDriver(),
             "huawei": HuaweiRoutingDriver(),
         }
         
         # VLAN drivers
         self.vlan_drivers = {
-            "openconfig": OpenConfigVlanDriver(),
             "cisco": CiscoVlanDriver(),
             "huawei": HuaweiVlanDriver(),
         }

@@ -24,27 +24,8 @@ class DeviceProfileService:
                 vendor="cisco",
                 model="CSR1000v",
                 role="router",
-                default_strategy="oc-first",
-                oc_supported_intents={
-                    # Interface intents
-                    Intents.INTERFACE.SET_IPV4: True,
-                    Intents.INTERFACE.SET_IPV6: True,
-                    Intents.INTERFACE.ENABLE: True,
-                    Intents.INTERFACE.DISABLE: True,
-                    Intents.INTERFACE.SET_DESCRIPTION: True,
-                    Intents.INTERFACE.SET_MTU: True,
-                    # Show intents
-                    Intents.SHOW.INTERFACE: True,
-                    Intents.SHOW.INTERFACES: True,
-                    Intents.SHOW.VERSION: False,
-                    Intents.SHOW.IP_ROUTE: False,
-                    # Routing intents
-                    Intents.ROUTING.STATIC_ADD: False,
-                    Intents.ROUTING.STATIC_DELETE: False,
-                    # System intents
-                    Intents.SYSTEM.SET_HOSTNAME: False,
-                    Intents.SYSTEM.SET_NTP: False,
-                }
+                default_strategy="vendor-only",
+                oc_supported_intents={}
             ),
             
             "CSR2": DeviceProfile(
@@ -53,14 +34,8 @@ class DeviceProfileService:
                 vendor="cisco",
                 model="CSR1000v",
                 role="router",
-                default_strategy="oc-first",
-                oc_supported_intents={
-                    Intents.INTERFACE.SET_IPV4: True,
-                    Intents.INTERFACE.ENABLE: True,
-                    Intents.INTERFACE.DISABLE: True,
-                    Intents.SHOW.INTERFACE: True,
-                    Intents.SHOW.INTERFACES: True,
-                }
+                default_strategy="vendor-only",
+                oc_supported_intents={}
             ),
             
             # ===== Huawei Devices =====
@@ -70,16 +45,8 @@ class DeviceProfileService:
                 vendor="huawei",
                 model="NE40E",
                 role="router",
-                default_strategy="vendor-first",  # Huawei ใช้ vendor-first เป็นค่าเริ่มต้น
-                oc_supported_intents={
-                    # Huawei NE40E มักไม่รองรับ OpenConfig เต็มที่
-                    Intents.INTERFACE.SET_IPV4: False,
-                    Intents.INTERFACE.SET_IPV6: False,
-                    Intents.INTERFACE.ENABLE: False,
-                    Intents.INTERFACE.DISABLE: False,
-                    Intents.SHOW.INTERFACE: False,
-                    Intents.SHOW.INTERFACES: False,
-                }
+                default_strategy="vendor-only",
+                oc_supported_intents={}
             ),
             
             "NE40E2": DeviceProfile(
@@ -88,11 +55,8 @@ class DeviceProfileService:
                 vendor="huawei",
                 model="NE40E-X8",
                 role="router",
-                default_strategy="vendor-first",
-                oc_supported_intents={
-                    Intents.INTERFACE.SET_IPV4: False,
-                    Intents.SHOW.INTERFACE: False,
-                }
+                default_strategy="vendor-only",
+                oc_supported_intents={}
             ),
             
             # ===== Mixed/Test Devices =====
@@ -102,14 +66,8 @@ class DeviceProfileService:
                 vendor="cisco",
                 model="Nexus9000",
                 role="switch",
-                default_strategy="oc-first",
-                oc_supported_intents={
-                    Intents.INTERFACE.SET_IPV4: True,
-                    Intents.INTERFACE.ENABLE: True,
-                    Intents.SHOW.INTERFACE: True,
-                    Intents.VLAN.CREATE: False,
-                    Intents.VLAN.DELETE: False,
-                }
+                default_strategy="vendor-only",
+                oc_supported_intents={}
             ),
         }
 

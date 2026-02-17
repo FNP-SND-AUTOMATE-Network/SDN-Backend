@@ -18,9 +18,6 @@ class InterfaceNormalizer:
     
     def normalize_show_interface(self, driver_used: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize single interface response"""
-        if driver_used == "openconfig":
-            return self._normalize_openconfig_interface(raw)
-        
         if driver_used == "cisco":
             return self._normalize_cisco_interface(raw)
         
@@ -31,9 +28,6 @@ class InterfaceNormalizer:
     
     def normalize_show_interfaces(self, driver_used: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize interface list response"""
-        if driver_used == "openconfig":
-            return self._normalize_openconfig_interfaces(raw)
-        
         if driver_used == "cisco":
             return self._normalize_cisco_interfaces(raw)
         
@@ -42,88 +36,6 @@ class InterfaceNormalizer:
 
         return {"vendor": driver_used, "raw": raw}
     
-    # ===== OpenConfig Normalizers =====
-    
-    def _normalize_openconfig_interface(self, raw: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize OpenConfig single interface"""
-        iface = raw.get("openconfig-interfaces:interface") or raw
-        
-        # Handle list response (may contain single item)
-        if isinstance(iface, list):
-            iface = iface[0] if iface else {}
-        
-        name = iface.get("name") or iface.get("config", {}).get("name")
-        state = iface.get("state", {})
-        config = iface.get("config", {})
-        
-        # Extract IPv4 addresses
-        ipv4 = []
-        subifs = iface.get("subinterfaces", {}).get("subinterface", [])
-        for sub in subifs:
-            ipv4_block = sub.get("openconfig-if-ip:ipv4", {})
-            for addr in ipv4_block.get("addresses", {}).get("address", []):
-                ip = addr.get("ip") or addr.get("config", {}).get("ip")
-                prefix = addr.get("config", {}).get("prefix-length")
-                if ip and prefix:
-                    ipv4.append(f"{ip}/{prefix}")
-        
-        # Extract IPv6 addresses
-        ipv6 = []
-        for sub in subifs:
-            ipv6_block = sub.get("openconfig-if-ip:ipv6", {})
-            for addr in ipv6_block.get("addresses", {}).get("address", []):
-                ip = addr.get("ip") or addr.get("config", {}).get("ip")
-                prefix = addr.get("config", {}).get("prefix-length")
-                if ip and prefix:
-                    ipv6.append(f"{ip}/{prefix}")
-        
-        # Extract counters
-        counters = state.get("counters", {})
-        
-        out = UnifiedInterfaceStatus(
-            name=name or "unknown",
-            admin=str(state.get("admin-status", "")).lower() or None,
-            oper=str(state.get("oper-status", "")).lower() or None,
-            ipv4=ipv4,
-            ipv6=ipv6,
-            mac_address=state.get("mac-address"),
-            mtu=config.get("mtu"),
-            speed=state.get("speed"),
-            description=config.get("description") or state.get("description"),
-            last_change=state.get("last-change"),
-            in_octets=counters.get("in-octets"),
-            out_octets=counters.get("out-octets"),
-            in_errors=counters.get("in-errors"),
-            out_errors=counters.get("out-errors"),
-            vendor="openconfig",
-        )
-        return out.model_dump()
-    
-    def _normalize_openconfig_interfaces(self, raw: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize OpenConfig interface list"""
-        interfaces_data = raw.get("openconfig-interfaces:interfaces", {})
-        iface_list = interfaces_data.get("interface", [])
-        
-        interfaces = []
-        up_count = 0
-        down_count = 0
-        
-        for iface in iface_list:
-            normalized = self._normalize_openconfig_interface({"openconfig-interfaces:interface": iface})
-            interfaces.append(UnifiedInterfaceStatus(**normalized))
-            
-            if normalized.get("oper") == "up":
-                up_count += 1
-            else:
-                down_count += 1
-        
-        out = UnifiedInterfaceList(
-            interfaces=interfaces,
-            total_count=len(interfaces),
-            up_count=up_count,
-            down_count=down_count
-        )
-        return out.model_dump()
     
     # ===== Cisco (Native IOS-XE) Normalizers =====
     

@@ -97,6 +97,14 @@ class IntentRegistry:
         description="Set MTU size on interface",
         required_params=["interface", "mtu"],
     )
+
+    INTERFACE_CREATE_SUBINTERFACE = IntentDefinition(
+        name="interface.create_subinterface",
+        category=IntentCategory.INTERFACE,
+        description="Create sub-interface with Dot1Q encapsulation",
+        required_params=["interface", "vlan_id"],
+        optional_params=["ip", "prefix", "description"],
+    )
     
     # ===== SHOW INTENTS =====
     SHOW_INTERFACE = IntentDefinition(
@@ -462,6 +470,7 @@ class Intents:
         DISABLE = "interface.disable"
         SET_DESCRIPTION = "interface.set_description"
         SET_MTU = "interface.set_mtu"
+        CREATE_SUBINTERFACE = "interface.create_subinterface"
     
     class SHOW:
         INTERFACE = "show.interface"

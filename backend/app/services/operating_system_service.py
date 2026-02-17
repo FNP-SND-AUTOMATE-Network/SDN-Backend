@@ -17,18 +17,17 @@ class OperatingSystemService:
     async def create_operating_system(self, os_data: OperatingSystemCreate) -> Optional[OperatingSystemResponse]:
         #สร้าง Operating System ใหม่
         try:
-            #ตรวจสอบว่า os_name ซ้ำหรือไม่
+            #ตรวจสอบว่า os_type ซ้ำหรือไม่
             existing_os = await self.prisma.operatingsystem.find_unique(
-                where={"os_name": os_data.os_name}
+                where={"os_type": os_data.os_type.value}
             )
             if existing_os:
-                raise ValueError(f"ชื่อ OS '{os_data.os_name}' มีอยู่ในระบบแล้ว")
+                raise ValueError(f"OS Type '{os_data.os_type.value}' มีอยู่ในระบบแล้ว")
 
 
             #สร้าง Operating System ใหม่
             os = await self.prisma.operatingsystem.create(
                 data={
-                    "os_name": os_data.os_name,
                     "os_type": os_data.os_type.value,
                     "description": os_data.description
                 },
@@ -50,7 +49,6 @@ class OperatingSystemService:
 
             return OperatingSystemResponse(
                 id=os.id,
-                os_name=os.os_name,
                 os_type=os.os_type,
                 description=os.description,
                 created_at=os.createdAt,
@@ -85,7 +83,6 @@ class OperatingSystemService:
             
             if search:
                 where_conditions["OR"] = [
-                    {"os_name": {"contains": search, "mode": "insensitive"}},
                     {"description": {"contains": search, "mode": "insensitive"}}
                 ]
 
@@ -128,7 +125,6 @@ class OperatingSystemService:
                 
                 os_responses.append(OperatingSystemResponse(
                     id=os.id,
-                    os_name=os.os_name,
                     os_type=os.os_type,
                     description=os.description,
                     created_at=os.createdAt,
@@ -177,7 +173,6 @@ class OperatingSystemService:
 
             return OperatingSystemResponse(
                 id=os.id,
-                os_name=os.os_name,
                 os_type=os.os_type,
                 description=os.description,
                 created_at=os.createdAt,
@@ -230,7 +225,6 @@ class OperatingSystemService:
 
             return OperatingSystemUsageResponse(
                 id=os.id,
-                os_name=os.os_name,
                 os_type=os.os_type,
                 device_networks=device_networks,
                 backups=backups,
@@ -258,18 +252,15 @@ class OperatingSystemService:
 
             # เตรียมข้อมูลสำหรับอัปเดต
             update_dict: Dict[str, Any] = {}
-            
-            if update_data.os_name is not None:
-                # ตรวจสอบว่า os_name ซ้ำหรือไม่
-                if update_data.os_name != existing_os.os_name:
-                    duplicate = await self.prisma.operatingsystem.find_unique(
-                        where={"os_name": update_data.os_name}
-                    )
-                    if duplicate:
-                        raise ValueError(f"ชื่อ OS '{update_data.os_name}' มีอยู่ในระบบแล้ว")
-                update_dict["os_name"] = update_data.os_name
 
             if update_data.os_type is not None:
+                # ตรวจสอบว่า os_type ซ้ำหรือไม่
+                if update_data.os_type.value != existing_os.os_type:
+                    duplicate = await self.prisma.operatingsystem.find_unique(
+                        where={"os_type": update_data.os_type.value}
+                    )
+                    if duplicate:
+                        raise ValueError(f"OS Type '{update_data.os_type.value}' มีอยู่ในระบบแล้ว")
                 update_dict["os_type"] = update_data.os_type.value
 
             if update_data.description is not None:
@@ -306,7 +297,6 @@ class OperatingSystemService:
 
             return OperatingSystemResponse(
                 id=updated_os.id,
-                os_name=updated_os.os_name,
                 os_type=updated_os.os_type,
                 description=updated_os.description,
                 created_at=updated_os.createdAt,
@@ -413,7 +403,6 @@ class OperatingSystemService:
 
             return OperatingSystemResponse(
                 id=updated_os.id,
-                os_name=updated_os.os_name,
                 os_type=updated_os.os_type,
                 description=updated_os.description,
                 created_at=updated_os.createdAt,
@@ -469,7 +458,6 @@ class OperatingSystemService:
 
             return OperatingSystemResponse(
                 id=updated_os.id,
-                os_name=updated_os.os_name,
                 os_type=updated_os.os_type,
                 description=updated_os.description,
                 created_at=updated_os.createdAt,
@@ -485,4 +473,3 @@ class OperatingSystemService:
             if "ไม่พบ" in str(e):
                 raise e
             return None
-

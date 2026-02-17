@@ -147,7 +147,6 @@ class DeviceNetworkService:
         if device.operatingSystem:
             os_info = RelatedOSInfo(
                 id=device.operatingSystem.id,
-                os_name=device.operatingSystem.os_name,
                 os_type=device.operatingSystem.os_type
             )
 

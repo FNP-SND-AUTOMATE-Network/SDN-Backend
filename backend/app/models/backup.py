@@ -34,7 +34,6 @@ class RelatedPolicyInfoBackup(BaseModel):
 
 class RelatedOSInfoBackup(BaseModel):
     id: str
-    os_name: str
     os_type: str
 
 class BackupResponse(BackupBase):

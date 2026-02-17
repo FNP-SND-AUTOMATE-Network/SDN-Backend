@@ -41,6 +41,8 @@ class DriverFactory:
         cls._interface_drivers = {
             "cisco": CiscoInterfaceDriver,
             "huawei": HuaweiInterfaceDriver,
+            "IOS_XE": CiscoInterfaceDriver,
+            "HUAWEI_VRP": HuaweiInterfaceDriver,
         }
         
         # Routing Drivers
@@ -49,6 +51,8 @@ class DriverFactory:
         cls._routing_drivers = {
             "cisco": CiscoRoutingDriver,
             "huawei": HuaweiRoutingDriver,
+            "IOS_XE": CiscoRoutingDriver,
+            "HUAWEI_VRP": HuaweiRoutingDriver,
         }
         
         # System Drivers
@@ -57,6 +61,8 @@ class DriverFactory:
         cls._system_drivers = {
             "cisco": CiscoSystemDriver,
             "huawei": HuaweiSystemDriver,
+            "IOS_XE": CiscoSystemDriver,
+            "HUAWEI_VRP": HuaweiSystemDriver,
         }
         
         # VLAN Drivers
@@ -65,6 +71,8 @@ class DriverFactory:
         cls._vlan_drivers = {
             "cisco": CiscoVlanDriver,
             "huawei": HuaweiVlanDriver,
+            "IOS_XE": CiscoVlanDriver,
+            "HUAWEI_VRP": HuaweiVlanDriver,
         }
         
         # DHCP Drivers (Huawei only for now)
@@ -72,6 +80,7 @@ class DriverFactory:
         
         cls._dhcp_drivers = {
             "huawei": HuaweiDhcpDriver,
+            "HUAWEI_VRP": HuaweiDhcpDriver,
         }
         
         cls._drivers_loaded = True
@@ -97,42 +106,56 @@ class DriverFactory:
         cls,
         node_id: str,
         vendor: str,
+        os_type: Optional[str] = None,
         category: IntentCategory = IntentCategory.INTERFACE
     ) -> BaseDriver:
         """
-        Get the appropriate native driver for a vendor (deterministic - no fallback)
+        Get the appropriate native driver based on OS Type (preferred) or Vendor (fallback)
         
         Args:
             node_id: Device node identifier (for logging/context)
-            vendor: Vendor name ("cisco", "huawei")
+            vendor: Vendor name ("cisco", "huawei") - Legacy fallback
+            os_type: OS Type ("IOS_XE", "HUAWEI_VRP") - Preferred
             category: Intent category to select driver type
             
         Returns:
             Instantiated native driver
             
         Raises:
-            UnsupportedVendor: If vendor is not supported for the given category
+            UnsupportedVendor: If no driver is found
         """
-        vendor_lower = vendor.lower()
         registry = cls._get_registry(category)
+        driver_class = None
+
+        # 1. Try OS Type first
+        if os_type:
+            driver_class = registry.get(os_type)
         
-        driver_class = registry.get(vendor_lower)
+        # 2. Fallback to Vendor
         if not driver_class:
-            raise UnsupportedVendor(
-                f"Vendor '{vendor}' is not supported for category '{category.value}'. "
-                f"Supported vendors: {list(registry.keys())}"
-            )
+            vendor_lower = vendor.lower()
+            driver_class = registry.get(vendor_lower)
+            
+        if not driver_class:
+            msg = f"No driver found for category '{category.value}'."
+            if os_type:
+                msg += f" os_type='{os_type}'"
+            msg += f" vendor='{vendor}'"
+            
+            raise UnsupportedVendor(msg)
         
         return driver_class()
     
     @classmethod
     def get_supported_vendors(cls, category: IntentCategory = IntentCategory.INTERFACE) -> list:
-        """Get list of supported vendors for a category"""
+        """Get list of supported vendors/os_types for a category"""
         registry = cls._get_registry(category)
         return list(registry.keys())
     
     @classmethod
     def is_vendor_supported(cls, vendor: str, category: IntentCategory = IntentCategory.INTERFACE) -> bool:
-        """Check if a vendor is supported for a category"""
+        """
+        Check if a vendor OR os_type is supported
+        """
         registry = cls._get_registry(category)
-        return vendor.lower() in registry
+        return vendor in registry or vendor.lower() in registry

@@ -32,10 +32,10 @@ class DhcpNormalizer:
     def normalize_show_dhcp_pools(self, driver_used: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize show dhcp pools response → unified DHCP pool list"""
         
-        if driver_used == "huawei":
+        if driver_used == "huawei" or driver_used == "HUAWEI_VRP":
             return self._normalize_huawei_dhcp(raw)
         
-        if driver_used == "cisco":
+        if driver_used == "cisco" or driver_used == "IOS_XE":
             return self._normalize_cisco_dhcp(raw)
         
         # Fallback

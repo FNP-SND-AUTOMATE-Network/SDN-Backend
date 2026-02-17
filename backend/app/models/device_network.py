@@ -139,7 +139,6 @@ class RelatedTagInfo(BaseModel):
 
 class RelatedOSInfo(BaseModel):
     id: str
-    os_name: str
     os_type: str
 
 class RelatedSiteInfo(BaseModel):

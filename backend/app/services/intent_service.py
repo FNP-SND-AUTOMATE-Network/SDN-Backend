@@ -22,7 +22,7 @@ Flow:
 6. Normalize response if needed
 7. Return unified response
 """
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from app.schemas.intent import IntentRequest, IntentResponse
 from app.services.device_profile_service_db import DeviceProfileService
 from app.services.driver_factory import DriverFactory
@@ -98,76 +98,52 @@ class IntentService:
         self.dhcp_normalizer = DhcpNormalizer()
         self.config_normalizer = ConfigNormalizer()
 
-        # Register drivers by vendor and category
-        self.interface_drivers = {
-            "cisco": CiscoInterfaceDriver(),
-            "huawei": HuaweiInterfaceDriver(),
-        }
+    def __init__(self):
+        self.device_profiles = DeviceProfileService()
+        self.client = OdlRestconfClient()
         
-        self.system_drivers = {
-            "cisco": CiscoSystemDriver(),
-            "huawei": HuaweiSystemDriver(),
-        }
-        
-        self.routing_drivers = {
-            "cisco": CiscoRoutingDriver(),
-            "huawei": HuaweiRoutingDriver(),
-        }
-        
-        # VLAN drivers
-        self.vlan_drivers = {
-            "cisco": CiscoVlanDriver(),
-            "huawei": HuaweiVlanDriver(),
-        }
-        
-        # DHCP drivers
-        self.dhcp_drivers = {
-            "huawei": HuaweiDhcpDriver(),
-        }
+        # Normalizers
+        self.interface_normalizer = InterfaceNormalizer()
+        self.system_normalizer = SystemNormalizer()
+        self.vlan_normalizer = VlanNormalizer()
+        self.dhcp_normalizer = DhcpNormalizer()
+        self.config_normalizer = ConfigNormalizer()
         
         # Device driver (mount/unmount)
         self.device_driver = DeviceDriver()
     
-    def _get_driver(self, intent: str, driver_name: str):
-        """Get appropriate driver based on intent category"""
+    def _get_driver(self, intent: str, driver_name: str, os_type: Optional[str] = None):
+        """Get appropriate driver based on intent category using DriverFactory"""
         intent_def = IntentRegistry.get(intent)
         if not intent_def:
             raise UnsupportedIntent(intent)
         
-        # เลือก driver ตาม category
-        if intent_def.category == IntentCategory.INTERFACE:
-            return self.interface_drivers.get(driver_name)
+        # Select category
+        category = intent_def.category
         
-        elif intent_def.category == IntentCategory.ROUTING:
-            return self.routing_drivers.get(driver_name)
-        
-        elif intent_def.category == IntentCategory.SYSTEM:
-            return self.system_drivers.get(driver_name)
-        
-        elif intent_def.category == IntentCategory.VLAN:
-            return self.vlan_drivers.get(driver_name)
-        
-        elif intent_def.category == IntentCategory.DHCP:
-            return self.dhcp_drivers.get(driver_name)
-        
-        elif intent_def.category == IntentCategory.SHOW:
-            # Show intents - route to correct driver based on intent
+        # Special handling for SHOW category which maps to specific drivers
+        if category == IntentCategory.SHOW:
             if intent in [Intents.SHOW.INTERFACE, Intents.SHOW.INTERFACES]:
-                return self.interface_drivers.get(driver_name)
+                category = IntentCategory.INTERFACE
             elif intent in [Intents.SHOW.RUNNING_CONFIG, Intents.SHOW.VERSION]:
-                return self.system_drivers.get(driver_name)
+                category = IntentCategory.SYSTEM
             elif intent in [Intents.SHOW.IP_ROUTE, Intents.SHOW.IP_INTERFACE_BRIEF,
                            Intents.SHOW.OSPF_NEIGHBORS, Intents.SHOW.OSPF_DATABASE]:
-                return self.routing_drivers.get(driver_name)
+                category = IntentCategory.ROUTING
             elif intent == Intents.SHOW.VLANS:
-                return self.vlan_drivers.get(driver_name)
+                category = IntentCategory.VLAN
             elif intent == Intents.SHOW.DHCP_POOLS:
-                return self.dhcp_drivers.get(driver_name)
+                category = IntentCategory.DHCP
             else:
-                return self.interface_drivers.get(driver_name)
+                 category = IntentCategory.INTERFACE
         
-        # Default to interface drivers
-        return self.interface_drivers.get(driver_name)
+        # Use DriverFactory to get the driver
+        return DriverFactory.get_driver(
+            node_id="unknown", # We don't have node_id here easily, but it's for logging only
+            vendor=driver_name,
+            os_type=os_type,
+            category=category
+        )
     
     async def handle(self, req: IntentRequest) -> IntentResponse:
         """Handle incoming intent request"""
@@ -213,13 +189,14 @@ class IntentService:
         
         # Step 4: Get driver directly from factory (deterministic - no fallback)
         intent_def = IntentRegistry.get(req.intent)
-        driver_name = device.vendor  # Use vendor directly, no strategy decision
+        driver_name = device.vendor  # Use vendor directly (legacy fallback)
+        os_type = device.os_type     # Use OsType (preferred)
         
         logger.info(f"Intent: {req.intent}, Device: {req.node_id}, "
-                   f"Driver: {driver_name} (deterministic, no fallback)")
+                   f"Vendor: {driver_name}, OS: {os_type} (deterministic)")
         
         # Step 5: Execute with native driver (no fallback mechanism)
-        return await self._execute(req, device, driver_name)
+        return await self._execute(req, device, driver_name, os_type)
 
     async def _handle_device_intent(self, req: IntentRequest) -> IntentResponse:
         """
@@ -285,9 +262,9 @@ class IntentService:
         
         return raw
 
-    async def _execute(self, req: IntentRequest, device, driver_name: str) -> IntentResponse:
+    async def _execute(self, req: IntentRequest, device, driver_name: str, os_type: Optional[str] = None) -> IntentResponse:
         """Execute intent with specific driver"""
-        driver = self._get_driver(req.intent, driver_name)
+        driver = self._get_driver(req.intent, driver_name, os_type)
         
         if not driver:
             raise UnsupportedIntent(f"No driver found for {req.intent} with {driver_name}")

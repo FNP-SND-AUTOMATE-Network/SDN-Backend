@@ -18,20 +18,20 @@ class InterfaceNormalizer:
     
     def normalize_show_interface(self, driver_used: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize single interface response"""
-        if driver_used == "cisco":
+        if driver_used == "cisco" or driver_used == "IOS_XE":
             return self._normalize_cisco_interface(raw)
         
-        if driver_used == "huawei":
+        if driver_used == "huawei" or driver_used == "HUAWEI_VRP":
             return self._normalize_huawei_interface(raw)
 
         return {"vendor": driver_used, "raw": raw}
     
     def normalize_show_interfaces(self, driver_used: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize interface list response"""
-        if driver_used == "cisco":
+        if driver_used == "cisco" or driver_used == "IOS_XE":
             return self._normalize_cisco_interfaces(raw)
         
-        if driver_used == "huawei":
+        if driver_used == "huawei" or driver_used == "HUAWEI_VRP":
             return self._normalize_huawei_interfaces(raw)
 
         return {"vendor": driver_used, "raw": raw}
@@ -294,9 +294,9 @@ class InterfaceNormalizer:
         """
         vendor_lower = vendor.lower()
         
-        if vendor_lower == "cisco":
+        if vendor_lower == "cisco" or vendor == "IOS_XE":
             return InterfaceNormalizer._parse_cisco_to_config(raw)
-        elif vendor_lower == "huawei":
+        elif vendor_lower == "huawei" or vendor == "HUAWEI_VRP":
             return InterfaceNormalizer._parse_huawei_to_config(raw)
         else:
             # Generic fallback - try to extract basic info

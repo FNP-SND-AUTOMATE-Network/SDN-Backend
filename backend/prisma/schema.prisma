@@ -323,8 +323,7 @@ enum TypeDevice {
 
 model OperatingSystem {
   id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  os_name     String  @unique
-  os_type     OsType  @default(OTHER)
+  os_type     OsType  @unique @default(OTHER)
   description String?
 
   deviceNetworks DeviceNetwork[]
@@ -337,7 +336,7 @@ model OperatingSystem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([os_name])
+  @@index([os_type])
 }
 
 // ========= OS File (สำหรับเก็บไฟล์ OS images) =========
@@ -386,12 +385,8 @@ enum TypeTag {
 }
 
 enum OsType {
-  CISCO_IOS
-  CISCO_NXOS
-  CISCO_ASA
-  CISCO_Nexus
-  CISCO_IOS_XR
-  CISCO_IOS_XE
+  IOS_XE
+  HUAWEI_VRP
   OTHER
 }
 

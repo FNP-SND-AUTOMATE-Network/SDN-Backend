@@ -61,7 +61,6 @@ class BackupService:
             if backup.operatingSystem:
                 os_info = RelatedOSInfoBackup(
                     id=backup.operatingSystem.id,
-                    os_name=backup.operatingSystem.os_name,
                     os_type=backup.operatingSystem.os_type
                 )
 
@@ -150,7 +149,6 @@ class BackupService:
                 if backup.operatingSystem:
                     os_info = RelatedOSInfoBackup(
                         id=backup.operatingSystem.id,
-                        os_name=backup.operatingSystem.os_name,
                         os_type=backup.operatingSystem.os_type
                     )
 
@@ -206,7 +204,6 @@ class BackupService:
             if backup.operatingSystem:
                 os_info = RelatedOSInfoBackup(
                     id=backup.operatingSystem.id,
-                    os_name=backup.operatingSystem.os_name,
                     os_type=backup.operatingSystem.os_type
                 )
 
@@ -297,7 +294,6 @@ class BackupService:
             if updated_backup.operatingSystem:
                 os_info = RelatedOSInfoBackup(
                     id=updated_backup.operatingSystem.id,
-                    os_name=updated_backup.operatingSystem.os_name,
                     os_type=updated_backup.operatingSystem.os_type
                 )
 

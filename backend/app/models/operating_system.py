@@ -4,16 +4,11 @@ from datetime import datetime
 from enum import Enum
 
 class OsType(str, Enum):
-    CISCO_IOS = "CISCO_IOS"
-    CISCO_NXOS = "CISCO_NXOS"
-    CISCO_ASA = "CISCO_ASA"
-    CISCO_Nexus = "CISCO_Nexus"
-    CISCO_IOS_XR = "CISCO_IOS_XR"
-    CISCO_IOS_XE = "CISCO_IOS_XE"
+    IOS_XE = "IOS_XE"
+    HUAWEI_VRP = "HUAWEI_VRP"
     OTHER = "OTHER"
 
 class OperatingSystemBase(BaseModel):
-    os_name: str = Field(..., description="ชื่อ OS (ต้องไม่ซ้ำ)", min_length=1, max_length=100)
     os_type: OsType = Field(default=OsType.OTHER, description="ประเภทของ OS")
     description: Optional[str] = Field(None, description="คำอธิบาย OS", max_length=500)
 
@@ -21,7 +16,6 @@ class OperatingSystemCreate(OperatingSystemBase):
     pass
 
 class OperatingSystemUpdate(BaseModel):
-    os_name: Optional[str] = Field(None, description="ชื่อ OS (ต้องไม่ซ้ำ)", min_length=1, max_length=100)
     os_type: Optional[OsType] = Field(None, description="ประเภทของ OS")
     description: Optional[str] = Field(None, description="คำอธิบาย OS", max_length=500)
 
@@ -67,9 +61,7 @@ class OperatingSystemDeleteResponse(BaseModel):
 
 class OperatingSystemUsageResponse(BaseModel):
     id: str
-    os_name: str
     os_type: str
     device_networks: list[dict] = Field(default_factory=list, description="รายการ Device ที่ใช้ OS นี้")
     backups: list[dict] = Field(default_factory=list, description="รายการ Backup ที่เชื่อมโยง")
     total_usage: int = Field(..., description="จำนวนการใช้งานทั้งหมด")
-

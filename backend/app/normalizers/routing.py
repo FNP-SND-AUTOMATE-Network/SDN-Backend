@@ -50,6 +50,8 @@ class RoutingNormalizer:
             routes = RoutingNormalizer._parse_cisco(raw)
         elif "huawei-routing:routing" in str(raw):
             routes = RoutingNormalizer._parse_huawei(raw)
+        elif "ietf-routing:routing-state" in str(raw) or "routing-state" in str(raw):
+            routes = RoutingNormalizer._parse_ietf(raw)
         else:
             # Try generic parse
             routes = RoutingNormalizer._parse_generic(raw)
@@ -62,6 +64,106 @@ class RoutingNormalizer:
             routes=routes,
             raw=raw
         )
+
+    @staticmethod
+    def _parse_ietf(raw: Dict[str, Any]) -> List[RouteEntry]:
+        """Parse IETF routing-state (standard RFC 8022)"""
+        routes = []
+        
+        try:
+            # Handle both namespaced and non-namespaced keys
+            root = raw.get("ietf-routing:routing-state") or raw.get("routing-state") or raw
+            
+            # Start from routing-instance
+            # Standard: routing-state/routing-instance/ribs/rib/routes/route
+            
+            # Helper to find routes recursively if structure varies slightly
+            def find_routes_recursive(obj):
+                if isinstance(obj, dict):
+                    if "destination-prefix" in obj and "next-hop" in obj:
+                        # Found a route entry
+                        return [obj]
+                    
+                    found = []
+                    for k, v in obj.items():
+                        if isinstance(v, (dict, list)):
+                            found.extend(find_routes_recursive(v))
+                    return found
+                elif isinstance(obj, list):
+                    found = []
+                    for item in obj:
+                        found.extend(find_routes_recursive(item))
+                    return found
+                return []
+
+            # Try strict path first
+            ribs = []
+            instances = root.get("routing-instance", [])
+            if isinstance(instances, dict):
+                instances = [instances]
+            
+            for inst in instances:
+                inst_ribs = inst.get("ribs", {}).get("rib", [])
+                if isinstance(inst_ribs, dict):
+                    inst_ribs = [inst_ribs]
+                ribs.extend(inst_ribs)
+            
+            # If explicit path worked, get routes from ribs
+            route_list = []
+            if ribs:
+                for rib in ribs:
+                    rts = rib.get("routes", {}).get("route", [])
+                    if isinstance(rts, dict):
+                        rts = [rts]
+                    route_list.extend(rts)
+            else:
+                # Fallback to recursive search if structure is different
+                route_list = find_routes_recursive(root)
+            
+            for route in route_list:
+                # Extract next-hop
+                next_hop = None
+                nh_container = route.get("next-hop", {})
+                
+                # Handle different next-hop structures
+                if "next-hop-address" in nh_container:
+                    next_hop = nh_container.get("next-hop-address")
+                elif "next-hop-list" in nh_container:
+                    nh_list = nh_container.get("next-hop-list", {}).get("next-hop", [])
+                    if isinstance(nh_list, dict):
+                        nh_list = [nh_list]
+                    if nh_list:
+                        next_hop = nh_list[0].get("address") or nh_list[0].get("next-hop-address")
+                
+                # Extract prefix
+                dest_prefix = route.get("destination-prefix", "")
+                
+                # Extract protocol
+                proto = route.get("source-protocol", "unknown")
+                if "static" in proto:
+                    proto = "static"
+                elif "connected" in proto:
+                    proto = "connected" 
+                elif "ospf" in proto:
+                    proto = "ospf"
+                elif "bgp" in proto:
+                    proto = "bgp"
+                
+                if dest_prefix:
+                    routes.append(RouteEntry(
+                        prefix=dest_prefix,
+                        next_hop=next_hop,
+                        interface=route.get("outgoing-interface"),
+                        protocol=proto,
+                        metric=route.get("metric"),
+                        preference=route.get("preference"),
+                        active=route.get("active", True)
+                    ))
+                        
+        except Exception:
+            pass
+            
+        return routes
 
     @staticmethod
     def _parse_openconfig(raw: Dict[str, Any]) -> List[RouteEntry]:

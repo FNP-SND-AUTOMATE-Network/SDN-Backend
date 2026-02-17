@@ -28,7 +28,7 @@ class IntentDefinition:
     required_params: List[str]          # params ที่ต้องมี
     optional_params: List[str] = field(default_factory=list)  # params ทางเลือก
     is_read_only: bool = False          # True = GET operation (ไม่เปลี่ยน config)
-    needs_normalization: bool = False   # True = ต้อง normalize response
+    needs_normalization: bool = True    # True = ต้อง normalize response (Default True for Unified JSON)
 
 
 class IntentRegistry:
@@ -105,7 +105,6 @@ class IntentRegistry:
         description="Show single interface status",
         required_params=["interface"],
         is_read_only=True,
-        needs_normalization=True,
     )
     
     SHOW_INTERFACES = IntentDefinition(
@@ -114,7 +113,6 @@ class IntentRegistry:
         description="Show all interfaces",
         required_params=[],
         is_read_only=True,
-        needs_normalization=True,
     )
     
     SHOW_RUNNING_CONFIG = IntentDefinition(
@@ -124,7 +122,6 @@ class IntentRegistry:
         required_params=[],
         optional_params=["section"],
         is_read_only=True,
-        needs_normalization=True,
     )
     
     SHOW_VERSION = IntentDefinition(
@@ -133,7 +130,6 @@ class IntentRegistry:
         description="Show device version/system info",
         required_params=[],
         is_read_only=True,
-        needs_normalization=True,
     )
     
     SHOW_IP_ROUTE = IntentDefinition(
@@ -143,7 +139,6 @@ class IntentRegistry:
         required_params=[],
         optional_params=["vrf"],
         is_read_only=True,
-        needs_normalization=True,
     )
     
     SHOW_IP_INTERFACE_BRIEF = IntentDefinition(
@@ -152,7 +147,6 @@ class IntentRegistry:
         description="Show IP interface brief (summary)",
         required_params=[],
         is_read_only=True,
-        needs_normalization=True,
     )
     
     # ===== ROUTING INTENTS =====
@@ -246,7 +240,6 @@ class IntentRegistry:
         required_params=[],
         optional_params=["process_id"],
         is_read_only=True,
-        needs_normalization=True,
     )
     
     SHOW_OSPF_DATABASE = IntentDefinition(
@@ -256,7 +249,6 @@ class IntentRegistry:
         required_params=[],
         optional_params=["process_id", "area"],
         is_read_only=True,
-        needs_normalization=True,
     )
     
     # ===== SYSTEM INTENTS =====
@@ -357,7 +349,6 @@ class IntentRegistry:
         description="Show all VLANs",
         required_params=[],
         is_read_only=True,
-        needs_normalization=True,
     )
     
     # ===== DHCP INTENTS =====
@@ -390,7 +381,6 @@ class IntentRegistry:
         description="Show DHCP pools",
         required_params=[],
         is_read_only=True,
-        needs_normalization=True,
     )
     
     # ===== Registry Map =====

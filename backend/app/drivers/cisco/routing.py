@@ -228,9 +228,8 @@ class CiscoRoutingDriver(BaseDriver):
     
     def _build_show_ip_route(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
         """Get routing table from Cisco device"""
-        # Use ietf-routing model - works even without static routes
-        # Cisco-IOS-XE-native:native/ip/route returns 409 if no static routes configured
-        path = f"{mount}/ietf-routing:routing"
+        # Use ietf-routing:routing-state for operational data (Active Routes)
+        path = f"{mount}/ietf-routing:routing-state"
 
         return RequestSpec(
             method="GET",

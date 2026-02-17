@@ -31,7 +31,9 @@ from app.normalizers.interface import InterfaceNormalizer
 from app.normalizers.system import SystemNormalizer
 from app.normalizers.routing import RoutingNormalizer, InterfaceBriefNormalizer, OspfNormalizer
 from app.normalizers.vlan import VlanNormalizer
+from app.normalizers.vlan import VlanNormalizer
 from app.normalizers.dhcp import DhcpNormalizer
+from app.normalizers.config import ConfigNormalizer
 from app.core.errors import OdlRequestError, UnsupportedIntent, DeviceNotMounted
 from app.core.intent_registry import IntentRegistry, Intents, IntentCategory
 from app.core.logging import logger
@@ -95,6 +97,7 @@ class IntentService:
         self.system_normalizer = SystemNormalizer()
         self.vlan_normalizer = VlanNormalizer()
         self.dhcp_normalizer = DhcpNormalizer()
+        self.config_normalizer = ConfigNormalizer()
 
         # Register drivers by vendor and category
         self.interface_drivers = {
@@ -221,7 +224,7 @@ class IntentService:
                    f"Driver: {driver_name} (deterministic, no fallback)")
         
         # Step 5: Execute with native driver (no fallback mechanism)
-        return await self._execute(req, device, "deterministic", driver_name)
+        return await self._execute(req, device, driver_name)
 
     async def _handle_device_intent(self, req: IntentRequest) -> IntentResponse:
         """
@@ -254,7 +257,6 @@ class IntentService:
             success=True,
             intent=req.intent,
             node_id=req.node_id,
-            strategy_used="direct",
             driver_used="device",
             result=result
         )
@@ -288,7 +290,7 @@ class IntentService:
         
         return raw
 
-    async def _execute(self, req: IntentRequest, device, strategy_used: str, driver_name: str) -> IntentResponse:
+    async def _execute(self, req: IntentRequest, device, driver_name: str) -> IntentResponse:
         """Execute intent with specific driver"""
         driver = self._get_driver(req.intent, driver_name)
         
@@ -303,24 +305,26 @@ class IntentService:
         raw = await self.client.send(spec)
 
         # Normalize response if needed (pass node_id for routing normalizers)
-        result = self._normalize_response(req.intent, driver_name, raw, req.node_id)
+        result = self._normalize_response(req.intent, driver_name, raw, req.node_id, req.params)
 
         return IntentResponse(
             success=True,
             intent=req.intent,
             node_id=req.node_id,
-            strategy_used=strategy_used,
             driver_used=driver_name,
             result=result
         )
     
-    def _normalize_response(self, intent: str, driver_name: str, raw: Dict[str, Any], device_id: str = "") -> Dict[str, Any]:
+    def _normalize_response(self, intent: str, driver_name: str, raw: Dict[str, Any], device_id: str = "", params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Normalize response based on intent type"""
         
         # Check if intent needs normalization
         intent_def = IntentRegistry.get(intent)
-        if not intent_def or not intent_def.needs_normalization:
+        if not intent_def:
             return raw
+        
+        if not params:
+            params = {}
         
         # Interface normalizations
         if intent == Intents.SHOW.INTERFACE:
@@ -357,6 +361,10 @@ class IntentService:
         # DHCP normalization
         if intent == Intents.SHOW.DHCP_POOLS:
             return self.dhcp_normalizer.normalize_show_dhcp_pools(driver_name, raw)
+        
+        # Config Normalization (Write Operations)
+        if intent_def.category != IntentCategory.SHOW and intent_def.category != IntentCategory.DEVICE:
+             return self.config_normalizer.normalize(intent, driver_name, raw, params)
         
         return raw
     

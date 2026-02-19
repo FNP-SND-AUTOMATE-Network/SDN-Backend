@@ -233,8 +233,13 @@ class DeviceNetworkService:
             # NBI/ODL Fields
             node_id=getattr(device, 'node_id', None),
             vendor=getattr(device, 'vendor', 'OTHER'),
-            odl_mounted=getattr(device, 'odl_mounted', False),
-            odl_connection_status=getattr(device, 'odl_connection_status', 'UNABLE_TO_CONNECT'),
+            netconf_host=getattr(device, 'netconf_host', None),
+            netconf_port=getattr(device, 'netconf_port', 830) or 830,
+            netconf_username=getattr(device, 'netconf_username', None),
+            netconf_password=None,  # ไม่ส่ง password กลับไป frontend
+            # ODL Status Fields
+            odl_mounted=is_mounted,
+            odl_connection_status=connection_status,
             last_synced_at=getattr(device, 'last_synced_at', None),
             ready_for_intent=ready_for_intent,
             # NETCONF Connection Fields
@@ -420,7 +425,6 @@ class DeviceNetworkService:
 
             if update_data.vendor is not None:
                 update_dict["vendor"] = update_data.vendor.value
-
 
 
             # NETCONF Connection Fields

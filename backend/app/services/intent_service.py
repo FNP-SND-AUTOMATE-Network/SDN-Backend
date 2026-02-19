@@ -1,7 +1,10 @@
 """
 Intent Service - Core service for handling Intent requests
 
-Supports multi-vendor, strategy pattern, and fallback mechanism.
+Refactored from Strategy Resolver to Deterministic Driver Factory Pattern:
+- No fallback mechanism (reduces latency)
+- Direct driver selection based on vendor
+- All write operations use PATCH method
 
 Terminology:
 -----------
@@ -13,38 +16,45 @@ Flow:
 -----
 1. API receives: { "intent": "show.interface", "node_id": "CSR1" }
 2. Query DeviceNetwork WHERE node_id = 'CSR1'
-3. Use node_id for ODL RESTCONF mount path
+3. DriverFactory selects native driver based on vendor (no fallback)
+4. Driver builds RESTCONF request
+5. Send to ODL via client
+6. Normalize response if needed
+7. Return unified response
 """
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from app.schemas.intent import IntentRequest, IntentResponse
 from app.services.device_profile_service_db import DeviceProfileService
-from app.services.strategy_resolver import StrategyResolver
+from app.services.driver_factory import DriverFactory
 from app.clients.odl_restconf_client import OdlRestconfClient
 from app.normalizers.interface import InterfaceNormalizer
 from app.normalizers.system import SystemNormalizer
 from app.normalizers.routing import RoutingNormalizer, InterfaceBriefNormalizer, OspfNormalizer
+from app.normalizers.vlan import VlanNormalizer
+from app.normalizers.vlan import VlanNormalizer
+from app.normalizers.dhcp import DhcpNormalizer
+from app.normalizers.config import ConfigNormalizer
 from app.core.errors import OdlRequestError, UnsupportedIntent, DeviceNotMounted
 from app.core.intent_registry import IntentRegistry, Intents, IntentCategory
 from app.core.logging import logger
 
 # Interface Drivers
-from app.drivers.openconfig.interface import OpenConfigInterfaceDriver
-from app.drivers.cisco.interface import CiscoInterfaceDriver
+from app.drivers.cisco.ios_xe.interface import CiscoInterfaceDriver
 from app.drivers.huawei.interface import HuaweiInterfaceDriver
 
 # System Drivers
-from app.drivers.openconfig.system import OpenConfigSystemDriver
-from app.drivers.cisco.system import CiscoSystemDriver
+# System Drivers
+from app.drivers.cisco.ios_xe.system import CiscoSystemDriver
 from app.drivers.huawei.system import HuaweiSystemDriver
 
 # Routing Drivers
-from app.drivers.openconfig.routing import OpenConfigRoutingDriver
-from app.drivers.cisco.routing import CiscoRoutingDriver
+# Routing Drivers
+from app.drivers.cisco.ios_xe.routing import CiscoRoutingDriver
 from app.drivers.huawei.routing import HuaweiRoutingDriver
 
 # VLAN Drivers
-from app.drivers.openconfig.vlan import OpenConfigVlanDriver
-from app.drivers.cisco.vlan import CiscoVlanDriver
+# VLAN Drivers
+from app.drivers.cisco.ios_xe.vlan import CiscoVlanDriver
 from app.drivers.huawei.vlan import HuaweiVlanDriver
 
 # DHCP Drivers
@@ -58,6 +68,10 @@ class IntentService:
     """
     Main service for handling Intent-based requests
     
+    Architecture: Deterministic Driver Factory Pattern
+    - No fallback mechanism for lower latency
+    - Driver selected directly based on device vendor
+    
     Terminology Note:
         - req.node_id = database 'node_id' = ODL node identifier
         - Used directly in ODL RESTCONF paths
@@ -65,8 +79,8 @@ class IntentService:
     Flow:
     1. Validate intent exists in registry
     2. Get device profile (lookup by node_id)
-    3. Strategy resolver decides which driver to use
-    4. Driver builds RESTCONF request (uses node_id for mount path)
+    3. DriverFactory selects native driver (deterministic, no fallback)
+    4. Driver builds RESTCONF request
     5. Send to ODL via client
     6. Normalize response if needed
     7. Return unified response
@@ -75,87 +89,61 @@ class IntentService:
     
     def __init__(self):
         self.device_profiles = DeviceProfileService()
-        self.strategy = StrategyResolver()
         self.client = OdlRestconfClient()
         
         # Normalizers
         self.interface_normalizer = InterfaceNormalizer()
         self.system_normalizer = SystemNormalizer()
+        self.vlan_normalizer = VlanNormalizer()
+        self.dhcp_normalizer = DhcpNormalizer()
+        self.config_normalizer = ConfigNormalizer()
 
-        # Register drivers by vendor and category
-        self.interface_drivers = {
-            "openconfig": OpenConfigInterfaceDriver(),
-            "cisco": CiscoInterfaceDriver(),
-            "huawei": HuaweiInterfaceDriver(),
-        }
+    def __init__(self):
+        self.device_profiles = DeviceProfileService()
+        self.client = OdlRestconfClient()
         
-        self.system_drivers = {
-            "openconfig": OpenConfigSystemDriver(),
-            "cisco": CiscoSystemDriver(),
-            "huawei": HuaweiSystemDriver(),
-        }
-        
-        self.routing_drivers = {
-            "openconfig": OpenConfigRoutingDriver(),
-            "cisco": CiscoRoutingDriver(),
-            "huawei": HuaweiRoutingDriver(),
-        }
-        
-        # VLAN drivers
-        self.vlan_drivers = {
-            "openconfig": OpenConfigVlanDriver(),
-            "cisco": CiscoVlanDriver(),
-            "huawei": HuaweiVlanDriver(),
-        }
-        
-        # DHCP drivers
-        self.dhcp_drivers = {
-            "huawei": HuaweiDhcpDriver(),
-        }
+        # Normalizers
+        self.interface_normalizer = InterfaceNormalizer()
+        self.system_normalizer = SystemNormalizer()
+        self.vlan_normalizer = VlanNormalizer()
+        self.dhcp_normalizer = DhcpNormalizer()
+        self.config_normalizer = ConfigNormalizer()
         
         # Device driver (mount/unmount)
         self.device_driver = DeviceDriver()
     
-    def _get_driver(self, intent: str, driver_name: str):
-        """Get appropriate driver based on intent category"""
+    def _get_driver(self, intent: str, driver_name: str, os_type: Optional[str] = None):
+        """Get appropriate driver based on intent category using DriverFactory"""
         intent_def = IntentRegistry.get(intent)
         if not intent_def:
             raise UnsupportedIntent(intent)
         
-        # เลือก driver ตาม category
-        if intent_def.category == IntentCategory.INTERFACE:
-            return self.interface_drivers.get(driver_name)
+        # Select category
+        category = intent_def.category
         
-        elif intent_def.category == IntentCategory.ROUTING:
-            return self.routing_drivers.get(driver_name)
-        
-        elif intent_def.category == IntentCategory.SYSTEM:
-            return self.system_drivers.get(driver_name)
-        
-        elif intent_def.category == IntentCategory.VLAN:
-            return self.vlan_drivers.get(driver_name)
-        
-        elif intent_def.category == IntentCategory.DHCP:
-            return self.dhcp_drivers.get(driver_name)
-        
-        elif intent_def.category == IntentCategory.SHOW:
-            # Show intents - route to correct driver based on intent
+        # Special handling for SHOW category which maps to specific drivers
+        if category == IntentCategory.SHOW:
             if intent in [Intents.SHOW.INTERFACE, Intents.SHOW.INTERFACES]:
-                return self.interface_drivers.get(driver_name)
+                category = IntentCategory.INTERFACE
             elif intent in [Intents.SHOW.RUNNING_CONFIG, Intents.SHOW.VERSION]:
-                return self.system_drivers.get(driver_name)
+                category = IntentCategory.SYSTEM
             elif intent in [Intents.SHOW.IP_ROUTE, Intents.SHOW.IP_INTERFACE_BRIEF,
                            Intents.SHOW.OSPF_NEIGHBORS, Intents.SHOW.OSPF_DATABASE]:
-                return self.routing_drivers.get(driver_name)
+                category = IntentCategory.ROUTING
             elif intent == Intents.SHOW.VLANS:
-                return self.vlan_drivers.get(driver_name)
+                category = IntentCategory.VLAN
             elif intent == Intents.SHOW.DHCP_POOLS:
-                return self.dhcp_drivers.get(driver_name)
+                category = IntentCategory.DHCP
             else:
-                return self.interface_drivers.get(driver_name)
+                 category = IntentCategory.INTERFACE
         
-        # Default to interface drivers
-        return self.interface_drivers.get(driver_name)
+        # Use DriverFactory to get the driver
+        return DriverFactory.get_driver(
+            node_id="unknown", # We don't have node_id here easily, but it's for logging only
+            vendor=driver_name,
+            os_type=os_type,
+            category=category
+        )
     
     async def handle(self, req: IntentRequest) -> IntentResponse:
         """Handle incoming intent request"""
@@ -199,29 +187,16 @@ class IntentService:
                     f"Current status: {connection_status}. Please check device connectivity."
                 )
         
-        # Step 4: Decide strategy
-        decision = self.strategy.decide(device, req.intent)
+        # Step 4: Get driver directly from factory (deterministic - no fallback)
+        intent_def = IntentRegistry.get(req.intent)
+        driver_name = device.vendor  # Use vendor directly (legacy fallback)
+        os_type = device.os_type     # Use OsType (preferred)
         
         logger.info(f"Intent: {req.intent}, Device: {req.node_id}, "
-                   f"Strategy: {decision.strategy_used}, Primary: {decision.primary_driver}")
-
-        # Step 5: Try primary driver
-        try:
-            return await self._execute(req, device, decision.strategy_used, decision.primary_driver)
-
-        except OdlRequestError as e:
-            # Step 6: Check fallback condition
-            details = e.detail if isinstance(e.detail, dict) else {"details": str(e.detail)}
-            status = details.get("details", {}).get("status", e.status_code)
-            body = details.get("details", {}).get("body", "")
-
-            fallback_driver = self._get_driver(req.intent, decision.fallback_driver)
-            if (fallback_driver and 
-                self.strategy.should_fallback(int(status), str(body))):
-                logger.info(f"Fallback to {decision.fallback_driver}")
-                return await self._execute(req, device, decision.strategy_used, decision.fallback_driver)
-
-            raise
+                   f"Vendor: {driver_name}, OS: {os_type} (deterministic)")
+        
+        # Step 5: Execute with native driver (no fallback mechanism)
+        return await self._execute(req, device, driver_name, os_type)
 
     async def _handle_device_intent(self, req: IntentRequest) -> IntentResponse:
         """
@@ -254,7 +229,6 @@ class IntentService:
             success=True,
             intent=req.intent,
             node_id=req.node_id,
-            strategy_used="direct",
             driver_used="device",
             result=result
         )
@@ -288,9 +262,9 @@ class IntentService:
         
         return raw
 
-    async def _execute(self, req: IntentRequest, device, strategy_used: str, driver_name: str) -> IntentResponse:
+    async def _execute(self, req: IntentRequest, device, driver_name: str, os_type: Optional[str] = None) -> IntentResponse:
         """Execute intent with specific driver"""
-        driver = self._get_driver(req.intent, driver_name)
+        driver = self._get_driver(req.intent, driver_name, os_type)
         
         if not driver:
             raise UnsupportedIntent(f"No driver found for {req.intent} with {driver_name}")
@@ -303,24 +277,26 @@ class IntentService:
         raw = await self.client.send(spec)
 
         # Normalize response if needed (pass node_id for routing normalizers)
-        result = self._normalize_response(req.intent, driver_name, raw, req.node_id)
+        result = self._normalize_response(req.intent, driver_name, raw, req.node_id, req.params)
 
         return IntentResponse(
             success=True,
             intent=req.intent,
             node_id=req.node_id,
-            strategy_used=strategy_used,
             driver_used=driver_name,
             result=result
         )
     
-    def _normalize_response(self, intent: str, driver_name: str, raw: Dict[str, Any], device_id: str = "") -> Dict[str, Any]:
+    def _normalize_response(self, intent: str, driver_name: str, raw: Dict[str, Any], device_id: str = "", params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Normalize response based on intent type"""
         
         # Check if intent needs normalization
         intent_def = IntentRegistry.get(intent)
-        if not intent_def or not intent_def.needs_normalization:
+        if not intent_def:
             return raw
+        
+        if not params:
+            params = {}
         
         # Interface normalizations
         if intent == Intents.SHOW.INTERFACE:
@@ -349,6 +325,18 @@ class IntentService:
         
         if intent == Intents.SHOW.OSPF_DATABASE:
             return OspfNormalizer.normalize_database(raw, device_id, driver_name).model_dump()
+        
+        # VLAN normalization
+        if intent == Intents.SHOW.VLANS:
+            return self.vlan_normalizer.normalize_show_vlans(driver_name, raw)
+        
+        # DHCP normalization
+        if intent == Intents.SHOW.DHCP_POOLS:
+            return self.dhcp_normalizer.normalize_show_dhcp_pools(driver_name, raw)
+        
+        # Config Normalization (Write Operations)
+        if intent_def.category != IntentCategory.SHOW and intent_def.category != IntentCategory.DEVICE:
+             return self.config_normalizer.normalize(intent, driver_name, raw, params)
         
         return raw
     

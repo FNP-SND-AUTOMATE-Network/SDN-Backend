@@ -28,7 +28,7 @@ class IntentDefinition:
     required_params: List[str]          # params ที่ต้องมี
     optional_params: List[str] = field(default_factory=list)  # params ทางเลือก
     is_read_only: bool = False          # True = GET operation (ไม่เปลี่ยน config)
-    needs_normalization: bool = False   # True = ต้อง normalize response
+    needs_normalization: bool = True    # True = ต้อง normalize response (Default True for Unified JSON)
 
 
 class IntentRegistry:
@@ -46,12 +46,28 @@ class IntentRegistry:
         optional_params=["description"],
     )
     
+    INTERFACE_REMOVE_IPV4 = IntentDefinition(
+        name="interface.remove_ipv4",
+        category=IntentCategory.INTERFACE,
+        description="Remove IPv4 address from interface",
+        required_params=["interface"],
+        optional_params=["ip"],
+    )
+    
     INTERFACE_SET_IPV6 = IntentDefinition(
         name="interface.set_ipv6",
         category=IntentCategory.INTERFACE,
         description="Set IPv6 address on interface",
         required_params=["interface", "ip", "prefix"],
         optional_params=["description"],
+    )
+    
+    INTERFACE_REMOVE_IPV6 = IntentDefinition(
+        name="interface.remove_ipv6",
+        category=IntentCategory.INTERFACE,
+        description="Remove IPv6 address from interface",
+        required_params=["interface"],
+        optional_params=["ip"],
     )
     
     INTERFACE_ENABLE = IntentDefinition(
@@ -81,6 +97,14 @@ class IntentRegistry:
         description="Set MTU size on interface",
         required_params=["interface", "mtu"],
     )
+
+    INTERFACE_CREATE_SUBINTERFACE = IntentDefinition(
+        name="interface.create_subinterface",
+        category=IntentCategory.INTERFACE,
+        description="Create sub-interface with Dot1Q encapsulation",
+        required_params=["interface", "vlan_id"],
+        optional_params=["ip", "prefix", "description"],
+    )
     
     # ===== SHOW INTENTS =====
     SHOW_INTERFACE = IntentDefinition(
@@ -89,7 +113,6 @@ class IntentRegistry:
         description="Show single interface status",
         required_params=["interface"],
         is_read_only=True,
-        needs_normalization=True,
     )
     
     SHOW_INTERFACES = IntentDefinition(
@@ -98,7 +121,6 @@ class IntentRegistry:
         description="Show all interfaces",
         required_params=[],
         is_read_only=True,
-        needs_normalization=True,
     )
     
     SHOW_RUNNING_CONFIG = IntentDefinition(
@@ -116,7 +138,6 @@ class IntentRegistry:
         description="Show device version/system info",
         required_params=[],
         is_read_only=True,
-        needs_normalization=True,
     )
     
     SHOW_IP_ROUTE = IntentDefinition(
@@ -126,7 +147,6 @@ class IntentRegistry:
         required_params=[],
         optional_params=["vrf"],
         is_read_only=True,
-        needs_normalization=True,
     )
     
     SHOW_IP_INTERFACE_BRIEF = IntentDefinition(
@@ -135,7 +155,6 @@ class IntentRegistry:
         description="Show IP interface brief (summary)",
         required_params=[],
         is_read_only=True,
-        needs_normalization=True,
     )
     
     # ===== ROUTING INTENTS =====
@@ -187,18 +206,18 @@ class IntentRegistry:
         required_params=["process_id"],
     )
     
-    ROUTING_OSPF_ADD_NETWORK = IntentDefinition(
-        name="routing.ospf.add_network",
+    ROUTING_OSPF_ADD_NETWORK_INTERFACE = IntentDefinition(
+        name="routing.ospf.add_network_interface",
         category=IntentCategory.ROUTING,
-        description="Add network to OSPF area",
-        required_params=["process_id", "network", "wildcard", "area"],
+        description="Add OSPF to interface (ip ospf process-id area area-id)",
+        required_params=["process_id", "interface", "area"],
     )
     
-    ROUTING_OSPF_REMOVE_NETWORK = IntentDefinition(
-        name="routing.ospf.remove_network",
+    ROUTING_OSPF_REMOVE_NETWORK_INTERFACE = IntentDefinition(
+        name="routing.ospf.remove_network_interface",
         category=IntentCategory.ROUTING,
-        description="Remove network from OSPF",
-        required_params=["process_id", "network", "wildcard", "area"],
+        description="Remove OSPF from interface",
+        required_params=["process_id", "interface"],
     )
     
     ROUTING_OSPF_SET_ROUTER_ID = IntentDefinition(
@@ -229,7 +248,6 @@ class IntentRegistry:
         required_params=[],
         optional_params=["process_id"],
         is_read_only=True,
-        needs_normalization=True,
     )
     
     SHOW_OSPF_DATABASE = IntentDefinition(
@@ -239,7 +257,6 @@ class IntentRegistry:
         required_params=[],
         optional_params=["process_id", "area"],
         is_read_only=True,
-        needs_normalization=True,
     )
     
     # ===== SYSTEM INTENTS =====
@@ -446,11 +463,14 @@ class Intents:
     """
     class INTERFACE:
         SET_IPV4 = "interface.set_ipv4"
+        REMOVE_IPV4 = "interface.remove_ipv4"
         SET_IPV6 = "interface.set_ipv6"
+        REMOVE_IPV6 = "interface.remove_ipv6"
         ENABLE = "interface.enable"
         DISABLE = "interface.disable"
         SET_DESCRIPTION = "interface.set_description"
         SET_MTU = "interface.set_mtu"
+        CREATE_SUBINTERFACE = "interface.create_subinterface"
     
     class SHOW:
         INTERFACE = "show.interface"
@@ -474,8 +494,8 @@ class Intents:
         # OSPF
         OSPF_ENABLE = "routing.ospf.enable"
         OSPF_DISABLE = "routing.ospf.disable"
-        OSPF_ADD_NETWORK = "routing.ospf.add_network"
-        OSPF_REMOVE_NETWORK = "routing.ospf.remove_network"
+        OSPF_ADD_NETWORK_INTERFACE = "routing.ospf.add_network_interface"
+        OSPF_REMOVE_NETWORK_INTERFACE = "routing.ospf.remove_network_interface"
         OSPF_SET_ROUTER_ID = "routing.ospf.set_router_id"
         OSPF_SET_PASSIVE_INTERFACE = "routing.ospf.set_passive_interface"
         OSPF_REMOVE_PASSIVE_INTERFACE = "routing.ospf.remove_passive_interface"

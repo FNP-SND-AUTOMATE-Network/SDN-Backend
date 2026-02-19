@@ -270,9 +270,6 @@ class OdlSyncService:
             }
             vendor_enum = vendor_map.get(vendor.lower(), "OTHER")
             
-            # Determine strategy based on vendor
-            strategy = "OC_FIRST" if vendor.lower() == "cisco" else "VENDOR_FIRST"
-            
             # Create device
             db_connection_status = map_odl_status_to_enum(odl_node["connection_status"])
             device = await prisma.devicenetwork.create(
@@ -287,7 +284,6 @@ class OdlSyncService:
                     "description": f"Auto-created from ODL mount. Node: {node_id}",
                     "node_id": node_id,
                     "vendor": vendor_enum,
-                    "default_strategy": strategy,
                     "odl_mounted": True,
                     "odl_connection_status": db_connection_status,
                     "last_synced_at": datetime.utcnow()

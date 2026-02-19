@@ -20,6 +20,8 @@ class CiscoSystemDriver(BaseDriver):
         Intents.SYSTEM.SET_HOSTNAME,
         Intents.SYSTEM.SET_NTP,
         Intents.SYSTEM.SET_DNS,
+        Intents.SYSTEM.SET_BANNER,
+        Intents.SYSTEM.SAVE_CONFIG,
     }
 
     def build(self, device: DeviceProfile, intent: str, params: Dict[str, Any]) -> RequestSpec:
@@ -40,6 +42,18 @@ class CiscoSystemDriver(BaseDriver):
         # ===== SYSTEM SET NTP =====
         if intent == Intents.SYSTEM.SET_NTP:
             return self._build_set_ntp(mount, params)
+        
+        # ===== SYSTEM SET DNS =====
+        if intent == Intents.SYSTEM.SET_DNS:
+            return self._build_set_dns(mount, params)
+        
+        # ===== SYSTEM SET BANNER =====
+        if intent == Intents.SYSTEM.SET_BANNER:
+            return self._build_set_banner(mount, params)
+            
+        # ===== SYSTEM SAVE CONFIG =====
+        if intent == Intents.SYSTEM.SAVE_CONFIG:
+            return self._build_save_config(mount)
 
         raise UnsupportedIntent(intent)
 
@@ -124,5 +138,68 @@ class CiscoSystemDriver(BaseDriver):
             payload=payload,
             headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.SYSTEM.SET_NTP,
+            driver=self.name
+        )
+    
+    def _build_set_dns(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """Set DNS name-server"""
+        server = params.get("server")
+        if not server:
+            raise DriverBuildError("params require server")
+        
+        path = f"{mount}/Cisco-IOS-XE-native:native/ip/name-server"
+        payload = {
+            "Cisco-IOS-XE-native:name-server": {
+                "no-vrf": [server]
+            }
+        }
+        
+        return RequestSpec(
+            method="PATCH",
+            datastore="config",
+            path=path,
+            payload=payload,
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
+            intent=Intents.SYSTEM.SET_DNS,
+            driver=self.name
+        )
+    
+    def _build_set_banner(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """Set login banner (banner motd)"""
+        banner = params.get("banner")
+        if not banner:
+            raise DriverBuildError("params require banner")
+        
+        path = f"{mount}/Cisco-IOS-XE-native:native/banner/motd"
+        payload = {
+            "Cisco-IOS-XE-native:motd": {
+                "banner": banner
+            }
+        }
+        
+        return RequestSpec(
+            method="PATCH",
+            datastore="config",
+            path=path,
+            payload=payload,
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
+            intent=Intents.SYSTEM.SET_BANNER,
+            driver=self.name
+        )
+    
+    def _build_save_config(self, mount: str) -> RequestSpec:
+        """Save running config to startup config"""
+        path = f"{mount}/cisco-ia:save-config"
+        payload = {
+            "cisco-ia:input": {}
+        }
+        
+        return RequestSpec(
+            method="POST",
+            datastore="operations",  # RPC uses operations
+            path=path,
+            payload=payload,
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
+            intent=Intents.SYSTEM.SAVE_CONFIG,
             driver=self.name
         )

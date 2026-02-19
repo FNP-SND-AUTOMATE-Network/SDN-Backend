@@ -70,4 +70,3 @@ class OperatingSystemUsageResponse(BaseModel):
     device_networks: list[dict] = Field(default_factory=list, description="รายการ Device ที่ใช้ OS นี้")
     backups: list[dict] = Field(default_factory=list, description="รายการ Backup ที่เชื่อมโยง")
     total_usage: int = Field(..., description="จำนวนการใช้งานทั้งหมด")
-

@@ -36,6 +36,28 @@ class UnifiedInterfaceList(BaseModel):
     down_count: int = 0
 
 
+# ===== INTERFACE CONFIG (Write Operations) =====
+class InterfaceConfig(BaseModel):
+    """
+    Unified Interface Configuration Model
+    ใช้เป็น input สำหรับ configure_interface()
+    
+    Attributes:
+        name: Interface name (e.g., "GigabitEthernet1", "Ethernet1/0/3")
+        ip: IPv4 address (e.g., "10.0.0.1")
+        mask: Subnet mask in CIDR format (e.g., "24") or dotted decimal
+        enabled: Administrative status (True = no shutdown)
+        description: Interface description
+        mtu: MTU size
+    """
+    name: str
+    ip: Optional[str] = None
+    mask: Optional[str] = None
+    enabled: bool = True
+    description: Optional[str] = None
+    mtu: Optional[int] = None
+
+
 # ===== ROUTING SCHEMAS =====
 class UnifiedRoute(BaseModel):
     """Single route entry"""
@@ -72,10 +94,50 @@ class UnifiedSystemInfo(BaseModel):
     cpu_usage: Optional[float] = None     # percentage
 
 
+class RunningConfigInterface(BaseModel):
+    """Interface entry in running config"""
+    name: str                                     # "GigabitEthernet1"
+    type: Optional[str] = None                    # "GigabitEthernet"
+    ip_address: Optional[str] = None              # "10.0.0.1/24"
+    enabled: Optional[bool] = None                # True = no shutdown
+    description: Optional[str] = None
+    mtu: Optional[int] = None
+
+
+class RunningConfigRoute(BaseModel):
+    """Static route entry in running config"""
+    prefix: str                                   # "10.0.0.0/24"
+    next_hop: Optional[str] = None
+    protocol: str = "static"
+
+
+class RunningConfigOspf(BaseModel):
+    """OSPF configuration in running config"""
+    process_id: Optional[int] = None
+    router_id: Optional[str] = None
+    networks: List[Dict[str, Any]] = []           # [{"interface": "Gi1", "area": 0}]
+    passive_interfaces: List[str] = []
+
+
+class RunningConfigSystem(BaseModel):
+    """System services in running config"""
+    hostname: Optional[str] = None
+    domain_name: Optional[str] = None
+    ntp_servers: List[str] = []
+    dns_servers: List[str] = []
+    banner: Optional[str] = None
+
+
 class UnifiedRunningConfig(BaseModel):
-    """Unified running config"""
-    config_text: str
-    last_changed: Optional[str] = None
+    """Unified running config — structured for frontend dashboard"""
+    hostname: Optional[str] = None
+    version: Optional[str] = None
+    vendor: Optional[str] = None
+    interfaces: List[RunningConfigInterface] = []
+    static_routes: List[RunningConfigRoute] = []
+    ospf: Optional[RunningConfigOspf] = None
+    system: Optional[RunningConfigSystem] = None
+    raw_config: Optional[Dict[str, Any]] = None   # raw JSON สำรอง
     section: Optional[str] = None
 
 

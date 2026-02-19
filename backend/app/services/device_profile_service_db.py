@@ -12,6 +12,7 @@ from app.database import get_prisma_client
 from app.core.logging import logger
 
 
+
 class DeviceProfileService:
     """
     Service สำหรับจัดการ Device Profiles
@@ -20,99 +21,50 @@ class DeviceProfileService:
     สำหรับใช้กับ Intent processing
     """
     
-    # Default OpenConfig support by vendor
-    DEFAULT_OC_SUPPORT = {
-        "CISCO": {
-            # Cisco รองรับ OpenConfig ค่อนข้างดี
-            Intents.INTERFACE.SET_IPV4: True,
-            Intents.INTERFACE.SET_IPV6: True,
-            Intents.INTERFACE.ENABLE: True,
-            Intents.INTERFACE.DISABLE: True,
-            Intents.INTERFACE.SET_DESCRIPTION: True,
-            Intents.INTERFACE.SET_MTU: True,
-            Intents.SHOW.INTERFACE: True,
-            Intents.SHOW.INTERFACES: True,
-            Intents.SHOW.VERSION: False,
-            Intents.SHOW.IP_ROUTE: False,
-            Intents.ROUTING.STATIC_ADD: False,
-            Intents.ROUTING.STATIC_DELETE: False,
-            Intents.SYSTEM.SET_HOSTNAME: False,
-            Intents.SYSTEM.SET_NTP: False,
-        },
-        "HUAWEI": {
-            # Huawei มักไม่รองรับ OpenConfig เต็มที่
-            Intents.INTERFACE.SET_IPV4: False,
-            Intents.INTERFACE.SET_IPV6: False,
-            Intents.INTERFACE.ENABLE: False,
-            Intents.INTERFACE.DISABLE: False,
-            Intents.SHOW.INTERFACE: False,
-            Intents.SHOW.INTERFACES: False,
-        },
-        "JUNIPER": {
-            # Juniper รองรับ OpenConfig ดี
-            Intents.INTERFACE.SET_IPV4: True,
-            Intents.INTERFACE.ENABLE: True,
-            Intents.INTERFACE.DISABLE: True,
-            Intents.SHOW.INTERFACE: True,
-            Intents.SHOW.INTERFACES: True,
-        },
-        "ARISTA": {
-            # Arista รองรับ OpenConfig ดีมาก
-            Intents.INTERFACE.SET_IPV4: True,
-            Intents.INTERFACE.SET_IPV6: True,
-            Intents.INTERFACE.ENABLE: True,
-            Intents.INTERFACE.DISABLE: True,
-            Intents.SHOW.INTERFACE: True,
-            Intents.SHOW.INTERFACES: True,
-        },
-        "OTHER": {
-            # Default: ไม่รองรับ OC
-        }
-    }
     
-    # Strategy mapping
-    STRATEGY_MAP = {
-        "OPERATION_BASED": "operation-based",  # NEW DEFAULT: GET→OC, PUT→Vendor
-        "OC_FIRST": "oc-first",
-        "VENDOR_FIRST": "vendor-first",
-        "OC_ONLY": "oc-only",
-        "VENDOR_ONLY": "vendor-only"
-    }
+
+    
     
     def __init__(self):
         self._cache: Dict[str, DeviceProfile] = {}  # Optional caching
+
+    async def _fetch_os_map(self, devices: List[Any]) -> Dict[str, str]:
+        """Fetch os_type for devices using raw SQL to bypass stale schema"""
+        os_ids = {d.os_id for d in devices if d.os_id}
+        if not os_ids:
+            return {}
+        
+        prisma = get_prisma_client()
+        try:
+            # Postgres specific: WHERE id = ANY($1)
+            rows = await prisma.query_raw(
+                'SELECT id, os_type FROM "OperatingSystem" WHERE id = ANY($1)',
+                list(os_ids)
+            )
+            return {row['id']: row['os_type'] for row in rows}
+        except Exception as e:
+            logger.error(f"Error fetching OS types: {e}")
+            return {}
     
-    def _db_to_profile(self, db_device) -> DeviceProfile:
+    def _db_to_profile(self, db_device, os_type: Optional[str] = None) -> DeviceProfile:
         """
         แปลง DeviceNetwork (DB model) เป็น DeviceProfile
         """
-        # Get OC support from DB or use default based on vendor
-        oc_support = {}
-        if db_device.oc_supported_intents:
-            # ใช้ค่าจาก DB ถ้ามี
-            oc_support = db_device.oc_supported_intents
-        else:
-            # ใช้ default ตาม vendor
-            vendor = db_device.vendor if db_device.vendor else "OTHER"
-            oc_support = self.DEFAULT_OC_SUPPORT.get(vendor, {})
-        
-        # Map strategy - default to operation-based
-        strategy = self.STRATEGY_MAP.get(
-            db_device.default_strategy if db_device.default_strategy else "OPERATION_BASED",
-            "operation-based"  # Fallback to operation-based
-        )
-        
         # Map type to role
         role = "router" if db_device.type == "ROUTER" else "switch"
         
+        final_os_type = os_type
+        # Fallback if no explicit os_type passed but relation exists (unlikely in this fix)
+        if not final_os_type and getattr(db_device, 'operatingSystem', None):
+             final_os_type = db_device.operatingSystem.os_type
+
         return DeviceProfile(
             device_id=db_device.id,
             node_id=db_device.node_id or db_device.device_name,  # fallback to device_name
             vendor=(db_device.vendor or "OTHER").lower(),
+            os_type=final_os_type,
             model=db_device.device_model,
             role=role,
-            default_strategy=strategy,
-            oc_supported_intents=oc_support
         )
     
     async def get(self, device_id: str) -> DeviceProfile:
@@ -147,7 +99,8 @@ class DeviceProfileService:
         if not device:
             raise DeviceNotFound(device_id)
         
-        return self._db_to_profile(device)
+        os_map = await self._fetch_os_map([device])
+        return self._db_to_profile(device, os_type=os_map.get(device.os_id))
     
     async def get_by_node_id(self, node_id: str) -> DeviceProfile:
         """Get device profile by ODL node_id"""
@@ -160,7 +113,8 @@ class DeviceProfileService:
         if not device:
             raise DeviceNotFound(f"node_id: {node_id}")
         
-        return self._db_to_profile(device)
+        os_map = await self._fetch_os_map([device])
+        return self._db_to_profile(device, os_type=os_map.get(device.os_id))
     
     async def list_all(self) -> List[DeviceProfile]:
         """Get all device profiles"""
@@ -170,7 +124,8 @@ class DeviceProfileService:
             order={"device_name": "asc"}
         )
         
-        return [self._db_to_profile(d) for d in devices]
+        os_map = await self._fetch_os_map(devices)
+        return [self._db_to_profile(d, os_type=os_map.get(d.os_id)) for d in devices]
     
     async def list_mounted(self) -> List[DeviceProfile]:
         """Get only devices that are mounted in ODL"""
@@ -184,7 +139,8 @@ class DeviceProfileService:
             order={"device_name": "asc"}
         )
         
-        return [self._db_to_profile(d) for d in devices]
+        os_map = await self._fetch_os_map(devices)
+        return [self._db_to_profile(d, os_type=os_map.get(d.os_id)) for d in devices]
     
     async def list_by_vendor(self, vendor: str) -> List[DeviceProfile]:
         """Get devices filtered by vendor"""
@@ -198,7 +154,8 @@ class DeviceProfileService:
             order={"device_name": "asc"}
         )
         
-        return [self._db_to_profile(d) for d in devices]
+        os_map = await self._fetch_os_map(devices)
+        return [self._db_to_profile(d, os_type=os_map.get(d.os_id)) for d in devices]
     
     async def list_by_role(self, role: str) -> List[DeviceProfile]:
         """Get devices filtered by role (router/switch)"""
@@ -212,42 +169,12 @@ class DeviceProfileService:
             order={"device_name": "asc"}
         )
         
-        return [self._db_to_profile(d) for d in devices]
-    
-    async def update_oc_support(self, device_id: str, oc_support: Dict[str, bool]) -> DeviceProfile:
-        """
-        Update OpenConfig support mapping for a device
-        
-        Args:
-            device_id: Device ID (node_id or database ID)
-            oc_support: Dict mapping intent name -> bool (supports OC or not)
-        """
-        prisma = get_prisma_client()
-        
-        # Find device
-        device = await prisma.devicenetwork.find_first(
-            where={"node_id": device_id}
-        )
-        if not device:
-            device = await prisma.devicenetwork.find_unique(
-                where={"id": device_id}
-            )
-        
-        if not device:
-            raise DeviceNotFound(device_id)
-        
-        # Update OC support
-        updated = await prisma.devicenetwork.update(
-            where={"id": device.id},
-            data={"oc_supported_intents": oc_support}
-        )
-        
-        return self._db_to_profile(updated)
+        os_map = await self._fetch_os_map(devices)
+        return [self._db_to_profile(d, os_type=os_map.get(d.os_id)) for d in devices]
     
     async def check_intent_support(self, device_id: str, intent: str) -> bool:
-        """Check if device supports specific intent via OpenConfig"""
-        profile = await self.get(device_id)
-        return profile.oc_supported_intents.get(intent, False)
+        """Check if device supports specific intent (OpenConfig removed, always returns False)"""
+        return False
     
     async def check_mount_status(self, device_id: str) -> Dict[str, Any]:
         """
@@ -276,7 +203,8 @@ class DeviceProfileService:
         if not device:
             try:
                 device = await prisma.devicenetwork.find_unique(
-                    where={"id": device_id}
+                    where={"id": device_id},
+                    select=None
                 )
             except Exception:
                 pass

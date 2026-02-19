@@ -14,11 +14,12 @@ from app.core.intent_registry import Intents
 class CiscoVlanDriver(BaseDriver):
     name = "cisco"
 
-    # Intents ที่ driver นี้รองรับ
     SUPPORTED_INTENTS = {
         Intents.VLAN.CREATE,
         Intents.VLAN.DELETE,
+        Intents.VLAN.UPDATE,
         Intents.VLAN.ASSIGN_PORT,
+        Intents.SHOW.VLANS,
     }
 
     def build(self, device: DeviceProfile, intent: str, params: Dict[str, Any]) -> RequestSpec:
@@ -32,9 +33,17 @@ class CiscoVlanDriver(BaseDriver):
         if intent == Intents.VLAN.DELETE:
             return self._build_delete_vlan(mount, params)
         
+        # ===== VLAN UPDATE =====
+        if intent == Intents.VLAN.UPDATE:
+            return self._build_update_vlan(mount, params)
+        
         # ===== VLAN ASSIGN PORT =====
         if intent == Intents.VLAN.ASSIGN_PORT:
             return self._build_assign_port(mount, params)
+        
+        # ===== SHOW VLANS =====
+        if intent == Intents.SHOW.VLANS:
+            return self._build_show_vlans(mount)
 
         raise UnsupportedIntent(intent)
 
@@ -43,8 +52,7 @@ class CiscoVlanDriver(BaseDriver):
     def _build_create_vlan(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
         """
         Create VLAN using Cisco IOS-XE native YANG model
-        
-        Path: /native/vlan/vlan-list={vlan_id}
+        Uses PATCH to safely merge (creates parent container if needed)
         """
         vlan_id = params.get("vlan_id")
         name = params.get("name", f"VLAN{vlan_id}")
@@ -52,17 +60,19 @@ class CiscoVlanDriver(BaseDriver):
         if not vlan_id:
             raise DriverBuildError("params require vlan_id")
 
-        path = f"{mount}/Cisco-IOS-XE-native:native/vlan/Cisco-IOS-XE-vlan:vlan-list={vlan_id}"
+        path = f"{mount}/Cisco-IOS-XE-native:native/vlan"
 
         payload = {
-            "Cisco-IOS-XE-vlan:vlan-list": {
-                "id": int(vlan_id),
-                "name": name
+            "Cisco-IOS-XE-native:vlan": {
+                "Cisco-IOS-XE-vlan:vlan-list": [{
+                    "id": int(vlan_id),
+                    "name": name
+                }]
             }
         }
 
         return RequestSpec(
-            method="PUT",
+            method="PATCH",
             datastore="config",
             path=path,
             payload=payload,
@@ -91,6 +101,51 @@ class CiscoVlanDriver(BaseDriver):
             payload=None,
             headers={"Accept": "application/yang-data+json"},
             intent=Intents.VLAN.DELETE,
+            driver=self.name
+        )
+
+    def _build_update_vlan(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """
+        Update VLAN name/description using PATCH
+        Uses parent container for consistency with create operation
+        """
+        vlan_id = params.get("vlan_id")
+        if not vlan_id:
+            raise DriverBuildError("params require vlan_id")
+
+        path = f"{mount}/Cisco-IOS-XE-native:native/vlan"
+
+        vlan_data = {"id": int(vlan_id)}
+        if params.get("name"):
+            vlan_data["name"] = params["name"]
+
+        payload = {
+            "Cisco-IOS-XE-native:vlan": {
+                "Cisco-IOS-XE-vlan:vlan-list": [vlan_data]
+            }
+        }
+
+        return RequestSpec(
+            method="PATCH",
+            datastore="config",
+            path=path,
+            payload=payload,
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
+            intent=Intents.VLAN.UPDATE,
+            driver=self.name
+        )
+
+    def _build_show_vlans(self, mount: str) -> RequestSpec:
+        """Get all VLANs from device"""
+        path = f"{mount}/Cisco-IOS-XE-native:native/vlan"
+
+        return RequestSpec(
+            method="GET",
+            datastore="operational",
+            path=path,
+            payload=None,
+            headers={"accept": "application/yang-data+json"},
+            intent=Intents.SHOW.VLANS,
             driver=self.name
         )
 

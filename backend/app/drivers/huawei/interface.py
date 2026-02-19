@@ -1,11 +1,18 @@
 """
 Huawei Interface Driver
-รองรับ Huawei YANG models สำหรับ Interface operations
+Support Huawei YANG models for Interface operations
+
+Refactored to support:
+- configure_interface(): Unified InterfaceConfig -> huawei-ifm payload
+- get_interface(): Read interface for Normalizer
+- PATCH method for safe config merge (RFC-8040)
 """
 from typing import Any, Dict
+import urllib.parse
 from app.drivers.base import BaseDriver
 from app.schemas.device_profile import DeviceProfile
 from app.schemas.request_spec import RequestSpec
+from app.schemas.unified import InterfaceConfig
 from app.builders.odl_paths import odl_mount_base
 from app.core.errors import UnsupportedIntent, DriverBuildError
 from app.core.intent_registry import Intents
@@ -14,10 +21,12 @@ from app.core.intent_registry import Intents
 class HuaweiInterfaceDriver(BaseDriver):
     name = "huawei"
 
-    # Intents ที่ driver นี้รองรับ
+    # Intents supported by this driver
     SUPPORTED_INTENTS = {
         Intents.INTERFACE.SET_IPV4,
+        Intents.INTERFACE.REMOVE_IPV4,
         Intents.INTERFACE.SET_IPV6,
+        Intents.INTERFACE.REMOVE_IPV6,
         Intents.INTERFACE.ENABLE,
         Intents.INTERFACE.DISABLE,
         Intents.INTERFACE.SET_DESCRIPTION,
@@ -33,9 +42,17 @@ class HuaweiInterfaceDriver(BaseDriver):
         if intent == Intents.INTERFACE.SET_IPV4:
             return self._build_set_ipv4(mount, params)
         
+        # ===== INTERFACE REMOVE IPv4 =====
+        if intent == Intents.INTERFACE.REMOVE_IPV4:
+            return self._build_remove_ipv4(mount, params)
+        
         # ===== INTERFACE SET IPv6 =====
         if intent == Intents.INTERFACE.SET_IPV6:
             return self._build_set_ipv6(mount, params)
+        
+        # ===== INTERFACE REMOVE IPv6 =====
+        if intent == Intents.INTERFACE.REMOVE_IPV6:
+            return self._build_remove_ipv6(mount, params)
         
         # ===== INTERFACE ENABLE =====
         if intent == Intents.INTERFACE.ENABLE:
@@ -62,6 +79,46 @@ class HuaweiInterfaceDriver(BaseDriver):
             return self._build_show_interfaces(mount)
 
         raise UnsupportedIntent(intent)
+
+    # ===== Remove IP Methods =====
+    
+    def _build_remove_ipv4(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """Remove IPv4 address from interface (undo ip address)"""
+        ifname = params.get("interface")
+        if not ifname:
+            raise DriverBuildError("params require interface")
+
+        encoded_ifname = urllib.parse.quote(ifname, safe='')
+        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}/huawei-ip:ipv4Config"
+
+        return RequestSpec(
+            method="DELETE",
+            datastore="config",
+            path=path,
+            payload=None,
+            headers={"Accept": "application/yang-data+json"},
+            intent=Intents.INTERFACE.REMOVE_IPV4,
+            driver=self.name
+        )
+    
+    def _build_remove_ipv6(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """Remove IPv6 address from interface (undo ipv6 address)"""
+        ifname = params.get("interface")
+        if not ifname:
+            raise DriverBuildError("params require interface")
+
+        encoded_ifname = urllib.parse.quote(ifname, safe='')
+        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}/huawei-ip:ipv6Config"
+
+        return RequestSpec(
+            method="DELETE",
+            datastore="config",
+            path=path,
+            payload=None,
+            headers={"Accept": "application/yang-data+json"},
+            intent=Intents.INTERFACE.REMOVE_IPV6,
+            driver=self.name
+        )
 
     # ===== Builder Methods =====
     
@@ -140,7 +197,7 @@ class HuaweiInterfaceDriver(BaseDriver):
         }
 
         return RequestSpec(
-            method="PUT",
+            method="PATCH",  # Use PATCH for safe merge
             datastore="config",
             path=path,
             payload=payload,
@@ -245,6 +302,95 @@ class HuaweiInterfaceDriver(BaseDriver):
             payload=None,
             headers={"accept": "application/yang-data+json"},
             intent=Intents.SHOW.INTERFACES,
+            driver=self.name
+        )
+
+
+    # ===== New Unified Methods (Driver Factory Pattern) =====
+    
+    def configure_interface(self, device: DeviceProfile, config: InterfaceConfig) -> RequestSpec:
+        """
+        Configure interface from Unified InterfaceConfig -> huawei-ifm payload
+        Uses PATCH method for safe config merge (RFC-8040 compliant)
+        
+        Args:
+            device: Device profile
+            config: Unified interface configuration
+            
+        Returns:
+            RequestSpec with Huawei-native payload
+        """
+        mount = odl_mount_base(device.node_id)
+        encoded_ifname = urllib.parse.quote(config.name, safe='')
+        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}"
+        
+        # Build base payload
+        interface_payload = {
+            "ifName": config.name,
+            "adminStatus": "up" if config.enabled else "down",
+        }
+        
+        # Add IPv4 if specified (VRP8 huawei-ip:ipv4Config structure)
+        if config.ip and config.mask:
+            # แปลง mask: ถ้าเป็นตัวเลข (CIDR) ให้แปลงเป็น dotted decimal
+            if config.mask.isdigit():
+                netmask = _prefix_to_netmask(int(config.mask))
+            else:
+                netmask = config.mask
+            
+            interface_payload["huawei-ip:ipv4Config"] = {
+                "addrCfgType": "config",
+                "am4CfgAddrs": {
+                    "am4CfgAddr": [{
+                        "ifIpAddr": config.ip,
+                        "subnetMask": netmask,
+                        "addrType": "main"
+                    }]
+                }
+            }
+        
+        # Add description if specified
+        if config.description:
+            interface_payload["description"] = config.description
+        
+        # Add MTU if specified
+        if config.mtu:
+            interface_payload["mtu"] = config.mtu
+        
+        payload = {"huawei-ifm:interface": [interface_payload]}
+        
+        return RequestSpec(
+            method="PATCH",  # Use PATCH for safe merge
+            datastore="config",
+            path=path,
+            payload=payload,
+            headers={"Content-Type": "application/yang-data+json"},
+            intent="interface.configure",
+            driver=self.name
+        )
+    
+    def get_interface(self, device: DeviceProfile, name: str) -> RequestSpec:
+        """
+        Get interface configuration for Normalizer to process
+        
+        Args:
+            device: Device profile
+            name: Interface name
+            
+        Returns:
+            RequestSpec for GET operation
+        """
+        mount = odl_mount_base(device.node_id)
+        encoded_ifname = urllib.parse.quote(name, safe='')
+        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}"
+        
+        return RequestSpec(
+            method="GET",
+            datastore="operational",
+            path=path,
+            payload=None,
+            headers={"Accept": "application/yang-data+json"},
+            intent="show.interface",
             driver=self.name
         )
 

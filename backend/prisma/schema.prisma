@@ -314,7 +314,7 @@ enum TypeDevice {
 
 model OperatingSystem {
   id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  os_type     OsType  @default(OTHER)
+  os_type     OsType  @unique @default(OTHER)
   description String?
 
   deviceNetworks DeviceNetwork[]

@@ -58,12 +58,15 @@ services:
       start_period: 40s
     networks:
       - default
-      - php-ipam
+      - phpipam
+
+volumes:
+  postgres_data:
 
 volumes:
   postgres_data:
 
 networks:
-  php-ipam:
+  phpipam:
     external: true
     name: php-ipam_default

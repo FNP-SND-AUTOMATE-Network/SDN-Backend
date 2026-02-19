@@ -17,6 +17,14 @@ class OperatingSystemService:
     async def create_operating_system(self, os_data: OperatingSystemCreate) -> Optional[OperatingSystemResponse]:
         #สร้าง Operating System ใหม่
         try:
+            #ตรวจสอบว่า os_type ซ้ำหรือไม่
+            existing_os = await self.prisma.operatingsystem.find_unique(
+                where={"os_type": os_data.os_type.value}
+            )
+            if existing_os:
+                raise ValueError(f"OS Type '{os_data.os_type.value}' มีอยู่ในระบบแล้ว")
+
+
             #สร้าง Operating System ใหม่
             os = await self.prisma.operatingsystem.create(
                 data={
@@ -244,8 +252,15 @@ class OperatingSystemService:
 
             # เตรียมข้อมูลสำหรับอัปเดต
             update_dict: Dict[str, Any] = {}
-            
+
             if update_data.os_type is not None:
+                # ตรวจสอบว่า os_type ซ้ำหรือไม่
+                if update_data.os_type.value != existing_os.os_type:
+                    duplicate = await self.prisma.operatingsystem.find_unique(
+                        where={"os_type": update_data.os_type.value}
+                    )
+                    if duplicate:
+                        raise ValueError(f"OS Type '{update_data.os_type.value}' มีอยู่ในระบบแล้ว")
                 update_dict["os_type"] = update_data.os_type.value
 
             if update_data.description is not None:
@@ -282,7 +297,6 @@ class OperatingSystemService:
 
             return OperatingSystemResponse(
                 id=updated_os.id,
-                os_name=updated_os.os_name,
                 os_type=updated_os.os_type,
                 description=updated_os.description,
                 created_at=updated_os.createdAt,
@@ -459,4 +473,3 @@ class OperatingSystemService:
             if "ไม่พบ" in str(e):
                 raise e
             return None
-

@@ -40,15 +40,13 @@ class IntentResponse(BaseModel):
         success: True if intent executed successfully
         intent: The executed intent
         node_id: ODL device identifier (same as request)
-        strategy_used: Strategy that was used (operation-based, oc-first, vendor-first)
-        driver_used: Driver that was used (openconfig, cisco, huawei, etc.)
+        driver_used: Driver that was used (cisco, huawei, etc.)
         result: Intent execution result
         error: Error details if success=False
     """
     success: bool
     intent: str
     node_id: str = Field(description="ODL device identifier")
-    strategy_used: str
     driver_used: str
     result: Dict[str, Any] = Field(default_factory=dict)
     error: Optional[Dict[str, Any]] = None

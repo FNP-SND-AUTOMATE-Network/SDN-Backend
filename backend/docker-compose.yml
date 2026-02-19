@@ -6,7 +6,7 @@ services:
     image: postgres:16-alpine
     container_name: sdn-postgres
     ports:
-      - "5435:5432"
+      - "5432:5432"
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
@@ -59,6 +59,9 @@ services:
     networks:
       - default
       - phpipam
+
+volumes:
+  postgres_data:
 
 volumes:
   postgres_data:

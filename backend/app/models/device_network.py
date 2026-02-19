@@ -63,6 +63,7 @@ class DeviceNetworkBase(BaseModel):
     ip_address: Optional[str] = Field(None, description="IP Address (สามารถเว้นว่างได้)", max_length=50)
     mac_address: str = Field(..., description="MAC Address (ต้องไม่ซ้ำ)", min_length=1, max_length=50)
     description: Optional[str] = Field(None, description="คำอธิบายอุปกรณ์", max_length=1000)
+    phpipam_address_id: Optional[str] = Field(None, description="phpIPAM Address ID")
     
     # Foreign Keys
     policy_id: Optional[str] = Field(None, description="Policy ID")
@@ -103,6 +104,7 @@ class DeviceNetworkUpdate(BaseModel):
     ip_address: Optional[str] = Field(None, description="IP Address (สามารถเว้นว่างได้)", max_length=50)
     mac_address: Optional[str] = Field(None, description="MAC Address (ต้องไม่ซ้ำ)", min_length=1, max_length=50)
     description: Optional[str] = Field(None, description="คำอธิบายอุปกรณ์", max_length=1000)
+    phpipam_address_id: Optional[str] = Field(None, description="phpIPAM Address ID")
     
     # Foreign Keys
     policy_id: Optional[str] = Field(None, description="Policy ID")
@@ -171,6 +173,7 @@ class DeviceNetworkResponse(BaseModel):
     ip_address: Optional[str] = None
     mac_address: str
     description: Optional[str] = None
+    phpipam_address_id: Optional[str] = None
     
     # Foreign Keys
     policy_id: Optional[str] = None

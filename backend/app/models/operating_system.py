@@ -4,7 +4,12 @@ from datetime import datetime
 from enum import Enum
 
 class OsType(str, Enum):
-    IOS_XE = "IOS_XE"
+    CISCO_IOS = "CISCO_IOS"
+    CISCO_NXOS = "CISCO_NXOS"
+    CISCO_ASA = "CISCO_ASA"
+    CISCO_Nexus = "CISCO_Nexus"
+    CISCO_IOS_XR = "CISCO_IOS_XR"
+    CISCO_IOS_XE = "CISCO_IOS_XE"
     HUAWEI_VRP = "HUAWEI_VRP"
     OTHER = "OTHER"
 

@@ -79,40 +79,68 @@ class DeviceNetworkService:
                 if existing_node:
                     raise ValueError(f"node_id '{device_data.node_id}' มีอยู่ในระบบแล้ว")
 
-            #สร้าง Device
-            device = await self.prisma.devicenetwork.create(
-                data={
+            #สร้าง Device — only include required fields, add optional fields conditionally
+            create_data = {
                     "serial_number": device_data.serial_number,
                     "device_name": device_data.device_name,
                     "device_model": device_data.device_model,
                     "type": device_data.type.value,
                     "status": device_data.status.value,
-                    "ip_address": device_data.ip_address,
                     "mac_address": device_data.mac_address,
-                    "description": device_data.description,
-                    "policy_id": device_data.policy_id,
-                    "os_id": device_data.os_id,
-                    "backup_id": device_data.backup_id,
-                    "local_site_id": device_data.local_site_id,
-                    "configuration_template_id": device_data.configuration_template_id,
-                    # NBI/ODL Fields
-                    "node_id": device_data.node_id,
-                    "vendor": device_data.vendor.value if device_data.vendor else "OTHER",
-                    # NETCONF Connection Fields
-                    "netconf_host": device_data.netconf_host or device_data.ip_address,
-                    "netconf_port": device_data.netconf_port or 830,
-                    "netconf_username": device_data.netconf_username,
-                    "netconf_password": device_data.netconf_password,
-                    # Default ODL status
-                    "odl_mounted": False,
-                    "odl_connection_status": "UNABLE_TO_CONNECT"
-                },
+            }
+
+            # Optional fields — only include if they have values
+            if device_data.ip_address:
+                create_data["ip_address"] = device_data.ip_address
+            if device_data.description:
+                create_data["description"] = device_data.description
+            if device_data.policy_id:
+                create_data["policy_id"] = device_data.policy_id
+            # Optional fields — only include if they have values
+            # Prepare manual dictionary for Prisma create to avoid Pydantic serialization issues
+            create_data_dict = {
+                "serial_number": device_data.serial_number,
+                "device_name": device_data.device_name,
+                "device_model": device_data.device_model,
+                "type": device_data.type.value if hasattr(device_data.type, 'value') else device_data.type,
+                "status": device_data.status.value if hasattr(device_data.status, 'value') else device_data.status,
+                "ip_address": device_data.ip_address,
+                "mac_address": device_data.mac_address,
+                "description": device_data.description,
+                "phpipam_address_id": device_data.phpipam_address_id,
+                "policy_id": device_data.policy_id,
+                "os_id": device_data.os_id,
+                "backup_id": device_data.backup_id,
+                "local_site_id": device_data.local_site_id,
+                "configuration_template_id": device_data.configuration_template_id,
+                
+                # NBI fields
+                "node_id": device_data.node_id,
+                "vendor": device_data.vendor.value if hasattr(device_data.vendor, 'value') else device_data.vendor,
+                
+                # NETCONF fields (from input or defaults)
+                "netconf_host": device_data.netconf_host or device_data.ip_address,
+                "netconf_port": device_data.netconf_port,
+                "netconf_username": device_data.netconf_username,
+                "netconf_password": device_data.netconf_password,
+                
+                "odl_mounted": False,
+                "odl_connection_status": "UNABLE_TO_CONNECT"
+            }
+
+            # Filter out None values to prevent "Could not find field" errors if engine is strict or schema mismatch
+            # This ensures we only send fields that actually have values
+            final_create_data = {k: v for k, v in create_data_dict.items() if v is not None}
+            
+            # DEBUG: Print create payload
+            print(f"DEBUG CREATE DEVICE PAYLOAD (FILTERED): {final_create_data}")
+            
+            device = await self.prisma.devicenetwork.create(
+                data=final_create_data,
                 include={
                     "tags": True,
                     "operatingSystem": True,
                     "localSite": True,
-                    "policy": True,
-                    "backup": True,
                     "configuration_template": True
                 }
             )
@@ -125,11 +153,6 @@ class DeviceNetworkService:
 
     def _build_device_response(self, device) -> DeviceNetworkResponse:
         #สร้าง DeviceNetworkResponse จาก Prisma object
-        
-        # คำนวณ ready_for_intent จาก odl_mounted และ odl_connection_status
-        is_mounted = getattr(device, 'odl_mounted', False) or False
-        connection_status = getattr(device, 'odl_connection_status', 'UNABLE_TO_CONNECT')
-        ready_for_intent = is_mounted and connection_status == 'CONNECTED'
         
         #Tags info (many-to-many)
         tags_info = []
@@ -144,7 +167,7 @@ class DeviceNetworkService:
 
         #OS info
         os_info = None
-        if device.operatingSystem:
+        if hasattr(device, 'operatingSystem') and device.operatingSystem:
             os_info = RelatedOSInfo(
                 id=device.operatingSystem.id,
                 os_type=device.operatingSystem.os_type
@@ -152,7 +175,7 @@ class DeviceNetworkService:
 
         #Site info
         site_info = None
-        if device.localSite:
+        if hasattr(device, 'localSite') and device.localSite:
             site_info = RelatedSiteInfo(
                 id=device.localSite.id,
                 site_code=device.localSite.site_code,
@@ -161,7 +184,7 @@ class DeviceNetworkService:
 
         #Policy info
         policy_info = None
-        if device.policy:
+        if hasattr(device, 'policy') and device.policy:
             policy_info = RelatedPolicyInfo(
                 id=device.policy.id,
                 policy_name=device.policy.policy_name
@@ -169,7 +192,7 @@ class DeviceNetworkService:
 
         #Backup info
         backup_info = None
-        if device.backup:
+        if hasattr(device, 'backup') and device.backup:
             backup_info = RelatedBackupInfo(
                 id=device.backup.id,
                 backup_name=device.backup.backup_name,
@@ -178,12 +201,19 @@ class DeviceNetworkService:
 
         #Template info
         template_info = None
-        if device.configuration_template:
+        if hasattr(device, 'configuration_template') and device.configuration_template:
             template_info = RelatedTemplateInfo(
                 id=device.configuration_template.id,
                 template_name=device.configuration_template.template_name,
                 template_type=device.configuration_template.template_type
             )
+
+        # Determine ready_for_intent status
+        ready_for_intent = (
+            getattr(device, 'odl_mounted', False) and 
+            getattr(device, 'odl_connection_status', 'UNABLE_TO_CONNECT') == 'CONNECTED' and
+            getattr(device, 'node_id', None) is not None
+        )
 
         return DeviceNetworkResponse(
             id=device.id,
@@ -192,18 +222,16 @@ class DeviceNetworkService:
             device_model=device.device_model,
             type=device.type,
             status=device.status,
-            ip_address=device.ip_address,
+            ip_address=getattr(device, 'ip_address', None),
             mac_address=device.mac_address,
-            description=device.description,
-            policy_id=device.policy_id,
-            os_id=device.os_id,
-            backup_id=device.backup_id,
-            local_site_id=device.local_site_id,
-            configuration_template_id=device.configuration_template_id,
-            created_at=device.createdAt,
-            updated_at=device.updatedAt,
+            description=getattr(device, 'description', None),
+            policy_id=getattr(device, 'policy_id', None),
+            os_id=getattr(device, 'os_id', None),
+            backup_id=getattr(device, 'backup_id', None),
+            local_site_id=getattr(device, 'local_site_id', None),
+            configuration_template_id=getattr(device, 'configuration_template_id', None),
             # NBI/ODL Fields
-            node_id=getattr(device, 'node_id', None) or '',
+            node_id=getattr(device, 'node_id', None),
             vendor=getattr(device, 'vendor', 'OTHER'),
             netconf_host=getattr(device, 'netconf_host', None),
             netconf_port=getattr(device, 'netconf_port', 830) or 830,
@@ -214,7 +242,14 @@ class DeviceNetworkService:
             odl_connection_status=connection_status,
             last_synced_at=getattr(device, 'last_synced_at', None),
             ready_for_intent=ready_for_intent,
-            # Relations
+            # NETCONF Connection Fields
+            netconf_host=getattr(device, 'netconf_host', None),
+            netconf_port=getattr(device, 'netconf_port', 830),
+            netconf_username=getattr(device, 'netconf_username', None),
+            netconf_password=None,  # Don't return password for security
+            # Timestamps and Relations
+            created_at=device.createdAt,
+            updated_at=device.updatedAt,
             tags=tags_info,
             operatingSystem=os_info,
             localSite=site_info,
@@ -274,8 +309,6 @@ class DeviceNetworkService:
                     "tags": True,
                     "operatingSystem": True,
                     "localSite": True,
-                    "policy": True,
-                    "backup": True,
                     "configuration_template": True
                 }
             )
@@ -296,8 +329,6 @@ class DeviceNetworkService:
                     "tags": True,
                     "operatingSystem": True,
                     "localSite": True,
-                    "policy": True,
-                    "backup": True,
                     "configuration_template": True
                 }
             )
@@ -360,6 +391,7 @@ class DeviceNetworkService:
             # Foreign keys - ตรวจสอบก่อนอัปเดต
             foreign_keys_to_validate = {}
             
+            # Uncommented fields (requires 'prisma generate')
             if update_data.os_id is not None:
                 foreign_keys_to_validate['os_id'] = update_data.os_id
                 update_dict["os_id"] = update_data.os_id
@@ -423,8 +455,6 @@ class DeviceNetworkService:
                     "tags": True,
                     "operatingSystem": True,
                     "localSite": True,
-                    "policy": True,
-                    "backup": True,
                     "configuration_template": True
                 }
             )
@@ -478,8 +508,6 @@ class DeviceNetworkService:
                     "tags": True,
                     "operatingSystem": True,
                     "localSite": True,
-                    "policy": True,
-                    "backup": True,
                     "configuration_template": True
                 }
             )
@@ -510,8 +538,6 @@ class DeviceNetworkService:
                     "tags": True,
                     "operatingSystem": True,
                     "localSite": True,
-                    "policy": True,
-                    "backup": True,
                     "configuration_template": True
                 }
             )

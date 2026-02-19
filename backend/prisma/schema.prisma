@@ -211,10 +211,8 @@ model DeviceNetwork {
   // ========= NBI/ODL Fields =========
   node_id               String?             @unique // ODL node-id ใน topology-netconf (ใช้สำหรับ Intent API)
   vendor                DeviceVendor        @default(OTHER) // Vendor สำหรับเลือก driver
-  default_strategy      IntentStrategy      @default(VENDOR_ONLY) // Strategy สำหรับ Intent execution (OpenConfig removed)
   odl_mounted           Boolean             @default(false) // Mount status ใน ODL
   odl_connection_status OdlConnectionStatus @default(UNABLE_TO_CONNECT)
-  oc_supported_intents  Json? // JSON map ของ intent -> boolean (รองรับ OpenConfig หรือไม่)
   last_synced_at        DateTime? // เวลาที่ sync ล่าสุดจาก ODL
 
   // ========= NETCONF Connection Fields (สำหรับ Mount) =========
@@ -249,13 +247,6 @@ enum DeviceVendor {
   JUNIPER
   ARISTA
   OTHER
-}
-
-enum IntentStrategy {
-  OC_FIRST // ลอง OpenConfig ก่อน fallback เป็น vendor-specific
-  VENDOR_FIRST // ลอง vendor-specific ก่อน fallback เป็น OpenConfig
-  OC_ONLY // ใช้ OpenConfig อย่างเดียว
-  VENDOR_ONLY // ใช้ vendor-specific อย่างเดียว
 }
 
 enum OdlConnectionStatus {
@@ -385,7 +376,12 @@ enum TypeTag {
 }
 
 enum OsType {
-  IOS_XE
+  CISCO_IOS
+  CISCO_NXOS
+  CISCO_ASA
+  CISCO_Nexus
+  CISCO_IOS_XR
+  CISCO_IOS_XE
   HUAWEI_VRP
   OTHER
 }

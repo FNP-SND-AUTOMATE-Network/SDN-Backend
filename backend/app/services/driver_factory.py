@@ -37,7 +37,7 @@ class DriverFactory:
         
         # Interface Drivers
         from app.drivers.cisco.ios_xe.interface import CiscoInterfaceDriver
-        from app.drivers.huawei.interface import HuaweiInterfaceDriver
+        from app.drivers.huawei.vrp8.interface import HuaweiInterfaceDriver
         cls._interface_drivers = {
             "cisco": CiscoInterfaceDriver,
             "huawei": HuaweiInterfaceDriver,
@@ -47,7 +47,7 @@ class DriverFactory:
         
         # Routing Drivers
         from app.drivers.cisco.ios_xe.routing import CiscoRoutingDriver
-        from app.drivers.huawei.routing import HuaweiRoutingDriver
+        from app.drivers.huawei.vrp8.routing import HuaweiRoutingDriver
         cls._routing_drivers = {
             "cisco": CiscoRoutingDriver,
             "huawei": HuaweiRoutingDriver,
@@ -57,7 +57,7 @@ class DriverFactory:
         
         # System Drivers
         from app.drivers.cisco.ios_xe.system import CiscoSystemDriver
-        from app.drivers.huawei.system import HuaweiSystemDriver
+        from app.drivers.huawei.vrp8.system import HuaweiSystemDriver
         cls._system_drivers = {
             "cisco": CiscoSystemDriver,
             "huawei": HuaweiSystemDriver,
@@ -67,7 +67,7 @@ class DriverFactory:
         
         # VLAN Drivers
         from app.drivers.cisco.ios_xe.vlan import CiscoVlanDriver
-        from app.drivers.huawei.vlan import HuaweiVlanDriver
+        from app.drivers.huawei.vrp8.vlan import HuaweiVlanDriver
         cls._vlan_drivers = {
             "cisco": CiscoVlanDriver,
             "huawei": HuaweiVlanDriver,
@@ -76,7 +76,7 @@ class DriverFactory:
         }
         
         # DHCP Drivers (Huawei only for now)
-        from app.drivers.huawei.dhcp import HuaweiDhcpDriver
+        from app.drivers.huawei.vrp8.dhcp import HuaweiDhcpDriver
         
         cls._dhcp_drivers = {
             "huawei": HuaweiDhcpDriver,
@@ -159,3 +159,65 @@ class DriverFactory:
         """
         registry = cls._get_registry(category)
         return vendor in registry or vendor.lower() in registry
+
+    @classmethod
+    def get_intents_by_os(cls) -> dict:
+        """
+        Get all supported intents grouped by OS type.
+        
+        Returns dict like:
+        {
+            "cisco_ios_xe": {
+                "interface": ["interface.set_ipv4", ...],
+                "routing": ["routing.static_add", ...],
+                ...
+            },
+            "huawei_vrp8": {
+                "interface": ["interface.set_ipv4", ...],
+                ...
+            }
+        }
+        """
+        cls._load_drivers()
+        
+        # Map OS label -> list of (category_name, driver_class)
+        os_drivers = {
+            "cisco_ios_xe": [],
+            "huawei_vrp8": [],
+        }
+        
+        # Collect unique driver classes per OS
+        category_map = {
+            "interface": cls._interface_drivers,
+            "routing": cls._routing_drivers,
+            "system": cls._system_drivers,
+            "vlan": cls._vlan_drivers,
+            "dhcp": cls._dhcp_drivers,
+        }
+        
+        for cat_name, registry in category_map.items():
+            for key, driver_class in registry.items():
+                if key in ("cisco", "IOS_XE"):
+                    os_drivers["cisco_ios_xe"].append((cat_name, driver_class))
+                elif key in ("huawei", "HUAWEI_VRP"):
+                    os_drivers["huawei_vrp8"].append((cat_name, driver_class))
+        
+        # Build result: deduplicate and collect intents
+        result = {}
+        for os_label, entries in os_drivers.items():
+            seen_classes = set()
+            os_intents = {}
+            for cat_name, driver_class in entries:
+                if driver_class in seen_classes:
+                    continue
+                seen_classes.add(driver_class)
+                intents = sorted(driver_class.SUPPORTED_INTENTS)
+                if intents:
+                    os_intents[cat_name] = intents
+            if os_intents:
+                result[os_label] = {
+                    "categories": os_intents,
+                    "total": sum(len(v) for v in os_intents.values())
+                }
+        
+        return result

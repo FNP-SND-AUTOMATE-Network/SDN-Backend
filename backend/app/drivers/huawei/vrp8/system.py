@@ -4,10 +4,12 @@ System operations using Huawei native YANG models
 
 YANG Models:
 - huawei-system
+- ietf-netconf (copy-config RPC)
 
 Operations:
 - Set hostname
 - Show version/system info
+- Save config (copy running → startup)
 """
 from typing import Any, Dict
 from app.drivers.base import BaseDriver
@@ -28,6 +30,7 @@ class HuaweiSystemDriver(BaseDriver):
 
     SUPPORTED_INTENTS = {
         Intents.SYSTEM.SET_HOSTNAME,
+        Intents.SYSTEM.SAVE_CONFIG,
         Intents.SHOW.VERSION,
     }
 
@@ -36,6 +39,9 @@ class HuaweiSystemDriver(BaseDriver):
 
         if intent == Intents.SYSTEM.SET_HOSTNAME:
             return self._build_set_hostname(mount, params)
+        
+        if intent == Intents.SYSTEM.SAVE_CONFIG:
+            return self._build_save_config(mount)
         
         if intent == Intents.SHOW.VERSION:
             return self._build_show_version(mount)
@@ -53,7 +59,9 @@ class HuaweiSystemDriver(BaseDriver):
         
         payload = {
             "huawei-system:system": {
-                "sysName": hostname
+                "systemInfo": {
+                    "sysName": hostname
+                }
             }
         }
 
@@ -62,8 +70,37 @@ class HuaweiSystemDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.SYSTEM.SET_HOSTNAME,
+            driver=self.name
+        )
+    
+    def _build_save_config(self, mount: str) -> RequestSpec:
+        """
+        Save config: copy running-config → startup-config
+        
+        Uses ietf-netconf:copy-config RPC via /rests/operations/
+        """
+        path = f"{mount}/ietf-netconf:copy-config"
+        
+        payload = {
+            "input": {
+                "target": {
+                    "startup": [None]
+                },
+                "source": {
+                    "running": [None]
+                }
+            }
+        }
+
+        return RequestSpec(
+            method="POST",
+            datastore="operations",
+            path=path,
+            payload=payload,
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
+            intent=Intents.SYSTEM.SAVE_CONFIG,
             driver=self.name
         )
     
@@ -77,7 +114,7 @@ class HuaweiSystemDriver(BaseDriver):
             datastore="operational",
             path=path,
             payload=None,
-            headers={"accept": "application/yang-data+json"},
+            headers={"Accept": "application/yang-data+json"},
             intent=Intents.SHOW.VERSION,
             driver=self.name
         )

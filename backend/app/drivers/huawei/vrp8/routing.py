@@ -94,27 +94,29 @@ class HuaweiRoutingDriver(BaseDriver):
         """
         process_id = params.get("process_id", 1)
         router_id = params.get("router_id")
-        description = params.get("description", f"OSPF_Process_{process_id}")
+        vrf_name = params.get("vrf_name", "_public_")
         
         path = f"{mount}/huawei-ospfv2:ospfv2/ospfv2comm/ospfSites/ospfSite={process_id}"
         
-        payload = {
-            "huawei-ospfv2:ospfSite": [{
-                "processId": int(process_id),
-                "description": description
-            }]
+        site_data = {
+            "processId": int(process_id),
+            "vrfName": vrf_name,
         }
         
         # Add router ID if provided
         if router_id:
-            payload["huawei-ospfv2:ospfSite"][0]["routerId"] = router_id
+            site_data["routerId"] = router_id
+        
+        payload = {
+            "huawei-ospfv2:ospfSite": [site_data]
+        }
 
         return RequestSpec(
             method="PATCH",
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.ROUTING.OSPF_ENABLE,
             driver=self.name
         )
@@ -130,47 +132,41 @@ class HuaweiRoutingDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=None,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Accept": "application/yang-data+json", "Content-Type": "application/yang-data+json"},
             intent=Intents.ROUTING.OSPF_DISABLE,
             driver=self.name
         )
     
     def _build_ospf_add_network_interface(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
         """
-        Add network command to OSPF area.
+        Add interface to OSPF area.
         
-        Path: .../ospfSite={processId}/areas/area={areaId}
+        Path: .../ospfSite={processId}/areas/area={areaId}/interfaces
         
         Params:
             process_id: OSPF process ID (default: 1)
-            area: Area ID in dotted format (e.g., "0.0.0.0")
-            network: Network address (e.g., "192.168.1.0")
-            wildcard: Wildcard mask (e.g., "0.0.0.255")
+            area: Area ID - accepts integer (0, 1, 10) or dotted format ("0.0.0.0")
+            interface: Interface name (e.g., "Ethernet1/0/4")
         """
         process_id = params.get("process_id", 1)
         area_id = params.get("area", "0.0.0.0")
-        network = params.get("network")
-        wildcard = params.get("wildcard")
+        ifname = params.get("interface")
         
-        if not network or not wildcard:
-            raise DriverBuildError("params require network, wildcard")
+        if not ifname:
+            raise DriverBuildError("params require interface")
         
-        # URL encode area ID (contains dots)
-        encoded_area = urllib.parse.quote(str(area_id), safe='')
+        # Convert area ID: integer -> dotted format (e.g., 0 -> "0.0.0.0", 1 -> "0.0.0.1")
+        area_dotted = _area_to_dotted(area_id)
+        encoded_area = urllib.parse.quote(area_dotted, safe='')
         
-        path = f"{mount}/huawei-ospfv2:ospfv2/ospfv2comm/ospfSites/ospfSite={process_id}/areas/area={encoded_area}"
+        path = f"{mount}/huawei-ospfv2:ospfv2/ospfv2comm/ospfSites/ospfSite={process_id}/areas/area={encoded_area}/interfaces"
         
         payload = {
-            "huawei-ospfv2:area": [{
-                "areaId": str(area_id),
-                "authenticationMode": "none",
-                "networks": {
-                    "network": [{
-                        "ipAddress": network,
-                        "wildcardMask": wildcard
-                    }]
-                }
-            }]
+            "huawei-ospfv2:interfaces": {
+                "interface": [{
+                    "ifName": ifname
+                }]
+            }
         }
 
         return RequestSpec(
@@ -178,31 +174,32 @@ class HuaweiRoutingDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.ROUTING.OSPF_ADD_NETWORK_INTERFACE,
             driver=self.name
         )
     
     def _build_ospf_remove_network_interface(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
-        """Remove network from OSPF area"""
+        """Remove interface from OSPF area"""
         process_id = params.get("process_id", 1)
         area_id = params.get("area", "0.0.0.0")
-        network = params.get("network")
+        ifname = params.get("interface")
         
-        if not network:
-            raise DriverBuildError("params require network")
+        if not ifname:
+            raise DriverBuildError("params require interface")
         
-        encoded_area = urllib.parse.quote(str(area_id), safe='')
-        encoded_network = urllib.parse.quote(network, safe='')
+        area_dotted = _area_to_dotted(area_id)
+        encoded_area = urllib.parse.quote(area_dotted, safe='')
+        encoded_ifname = urllib.parse.quote(ifname, safe='')
         
-        path = f"{mount}/huawei-ospfv2:ospfv2/ospfv2comm/ospfSites/ospfSite={process_id}/areas/area={encoded_area}/networks/network={encoded_network}"
+        path = f"{mount}/huawei-ospfv2:ospfv2/ospfv2comm/ospfSites/ospfSite={process_id}/areas/area={encoded_area}/interfaces/interface={encoded_ifname}"
 
         return RequestSpec(
             method="DELETE",
             datastore="config",
             path=path,
             payload=None,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Accept": "application/yang-data+json", "Content-Type": "application/yang-data+json"},
             intent=Intents.ROUTING.OSPF_REMOVE_NETWORK_INTERFACE,
             driver=self.name
         )
@@ -211,6 +208,7 @@ class HuaweiRoutingDriver(BaseDriver):
         """Set OSPF router ID"""
         process_id = params.get("process_id", 1)
         router_id = params.get("router_id")
+        vrf_name = params.get("vrf_name", "_public_")
         
         if not router_id:
             raise DriverBuildError("params require router_id")
@@ -220,6 +218,7 @@ class HuaweiRoutingDriver(BaseDriver):
         payload = {
             "huawei-ospfv2:ospfSite": [{
                 "processId": int(process_id),
+                "vrfName": vrf_name,
                 "routerId": router_id
             }]
         }
@@ -229,7 +228,7 @@ class HuaweiRoutingDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.ROUTING.OSPF_SET_ROUTER_ID,
             driver=self.name
         )
@@ -240,33 +239,28 @@ class HuaweiRoutingDriver(BaseDriver):
         
         Note: Append ?content=config if 500 error occurs due to ODL codec bugs.
         """
-        process_id = params.get("process_id", 1)
-        
-        # Use config content to avoid ODL codec issues with operational data
-        path = f"{mount}/huawei-ospfv2:ospfv2/ospfv2comm/ospfSites/ospfSite={process_id}?content=config"
+        path = f"{mount}/huawei-ospfv2:ospfv2?content=config"
 
         return RequestSpec(
             method="GET",
             datastore="operational",
             path=path,
             payload=None,
-            headers={"accept": "application/yang-data+json"},
+            headers={"Accept": "application/yang-data+json"},
             intent=Intents.SHOW.OSPF_NEIGHBORS,
             driver=self.name
         )
     
     def _build_show_ospf_database(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
         """Get OSPF LSDB"""
-        process_id = params.get("process_id", 1)
-        
-        path = f"{mount}/huawei-ospfv2:ospfv2/ospfv2comm/ospfSites/ospfSite={process_id}?content=config"
+        path = f"{mount}/huawei-ospfv2:ospfv2?content=config"
 
         return RequestSpec(
             method="GET",
             datastore="operational",
             path=path,
             payload=None,
-            headers={"accept": "application/yang-data+json"},
+            headers={"Accept": "application/yang-data+json"},
             intent=Intents.SHOW.OSPF_DATABASE,
             driver=self.name
         )
@@ -277,18 +271,20 @@ class HuaweiRoutingDriver(BaseDriver):
     
     def _build_static_add(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
         """
-        Add static route using huawei-routing module.
+        Add static route using huawei-staticrt module.
         
-        VRP8 YANG Path: /huawei-routing:routing/static-routes/ipv4-static-route
+        VRP8 YANG Path: /huawei-staticrt:staticrt/staticrtbase/srRoutes
         
         Params:
-            prefix: Destination prefix (e.g., "10.0.0.0/24")
+            prefix: Destination prefix (e.g., "10.0.0.0/24" or "0.0.0.0/0" for default)
             next_hop: Next-hop IP address
             vrf_name: VRF name (default: "_public_" for global)
+            description: Route description (optional)
         """
         prefix = params.get("prefix")  # e.g., "10.0.0.0/24"
         next_hop = params.get("next_hop")
         vrf_name = params.get("vrf_name", "_public_")
+        description = params.get("description")
         
         if not prefix or not next_hop:
             raise DriverBuildError("params require prefix, next_hop")
@@ -296,15 +292,26 @@ class HuaweiRoutingDriver(BaseDriver):
         # Parse prefix
         network, mask_len = prefix.split("/")
         
-        path = f"{mount}/huawei-routing:routing/static-routes/ipv4-static-route"
+        path = f"{mount}/huawei-staticrt:staticrt/staticrtbase/srRoutes"
+        
+        route_data = {
+            "vrfName": vrf_name,
+            "afType": "ipv4unicast",
+            "topologyName": "base",
+            "prefix": network,
+            "maskLength": int(mask_len),
+            "ifName": "",
+            "nexthop": next_hop,
+            "destVrfName": vrf_name,
+        }
+        
+        if description:
+            route_data["description"] = description
         
         payload = {
-            "huawei-routing:ipv4-static-route": [{
-                "vrf-name": vrf_name,
-                "destination-ip": network,
-                "mask-length": int(mask_len),
-                "nexthop-address": next_hop
-            }]
+            "huawei-staticrt:srRoutes": {
+                "srRoute": [route_data]
+            }
         }
 
         return RequestSpec(
@@ -312,54 +319,82 @@ class HuaweiRoutingDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.ROUTING.STATIC_ADD,
             driver=self.name
         )
     
     def _build_static_delete(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
-        """Delete static route"""
+        """
+        Delete static route.
+        
+        Path keys: vrfName, afType, topologyName, prefix, maskLength, ifName, nexthop, destVrfName
+        """
         prefix = params.get("prefix")
-        next_hop = params.get("next_hop")
+        next_hop = params.get("next_hop", "")
         vrf_name = params.get("vrf_name", "_public_")
         
         if not prefix:
             raise DriverBuildError("params require prefix")
         
         network, mask_len = prefix.split("/")
-        encoded_network = urllib.parse.quote(network, safe='')
-        encoded_nexthop = urllib.parse.quote(next_hop, safe='') if next_hop else ""
-        encoded_vrf = urllib.parse.quote(vrf_name, safe='')
         
-        # Build path with key components
-        path = f"{mount}/huawei-routing:routing/static-routes/ipv4-static-route={encoded_vrf},{encoded_network},{mask_len},{encoded_nexthop}"
+        # URL encode key components
+        encoded_vrf = urllib.parse.quote(vrf_name, safe='')
+        encoded_prefix = urllib.parse.quote(network, safe='')
+        encoded_nexthop = urllib.parse.quote(next_hop, safe='')
+        encoded_dest_vrf = urllib.parse.quote(vrf_name, safe='')
+        
+        # Build path with all list keys
+        path = (
+            f"{mount}/huawei-staticrt:staticrt/staticrtbase/srRoutes"
+            f"/srRoute={encoded_vrf},ipv4unicast,base,{encoded_prefix},{mask_len},,{encoded_dest_vrf},{encoded_nexthop}"
+        )
 
         return RequestSpec(
             method="DELETE",
             datastore="config",
             path=path,
             payload=None,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Accept": "application/yang-data+json"},
             intent=Intents.ROUTING.STATIC_DELETE,
             driver=self.name
         )
     
     def _build_show_ip_route(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
         """Get static routing table"""
-        path = f"{mount}/huawei-routing:routing/static-routes?content=config"
+        path = f"{mount}/huawei-staticrt:staticrt?content=config"
 
         return RequestSpec(
             method="GET",
             datastore="operational",
             path=path,
             payload=None,
-            headers={"accept": "application/yang-data+json"},
+            headers={"Accept": "application/yang-data+json"},
             intent=Intents.SHOW.IP_ROUTE,
             driver=self.name
         )
 
 
 # ===== Utility Functions =====
+def _area_to_dotted(area_id) -> str:
+    """
+    Convert area ID to dotted decimal format.
+    
+    Examples:
+        0       -> "0.0.0.0"
+        1       -> "0.0.0.1"
+        10      -> "0.0.0.10"
+        255     -> "0.0.0.255"
+        "0.0.0.0" -> "0.0.0.0" (pass-through)
+    """
+    area_str = str(area_id)
+    if "." in area_str:
+        return area_str  # Already dotted format
+    area_int = int(area_str)
+    return f"0.0.0.{area_int}"
+
+
 def _prefix_to_netmask(prefix: int) -> str:
     """Convert CIDR prefix to dotted decimal netmask"""
     if prefix < 0 or prefix > 32:

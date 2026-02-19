@@ -9,6 +9,7 @@ from app.services.intent_service import IntentService
 from app.core.intent_registry import IntentRegistry
 from app.core.logging import logger
 from app.core.errors import DeviceNotMounted
+from app.services.driver_factory import DriverFactory
 
 from .models import ErrorCode, IntentListResponse
 
@@ -108,17 +109,20 @@ async def handle_intent(req: IntentRequest):
 @router.get("/intents", response_model=IntentListResponse)
 async def list_supported_intents():
     """
-    Get all supported intents grouped by category
+    Get all supported intents grouped by category and by OS
     
     **Always returns 200**
     """
     try:
         intents = IntentRegistry.get_supported_intents()
+        intents_by_os = DriverFactory.get_intents_by_os()
+        
         return IntentListResponse(
             success=True,
             code=ErrorCode.SUCCESS.value,
             message=f"Found {sum(len(v) for v in intents.values())} intents",
-            intents=intents
+            intents=intents,
+            intents_by_os=intents_by_os,
         )
     except Exception as e:
         logger.error(f"Failed to get intents: {e}")

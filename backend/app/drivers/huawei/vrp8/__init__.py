@@ -1,7 +1,7 @@
 """
-Huawei Drivers Package
+Huawei VRP8 Drivers Package
 
-Re-exports all VRP8 drivers from the vrp8 subpackage for backward compatibility.
+This package contains all Huawei VRP8-specific drivers for RESTCONF via ODL.
 """
 from app.drivers.huawei.vrp8.interface import HuaweiInterfaceDriver
 from app.drivers.huawei.vrp8.routing import HuaweiRoutingDriver

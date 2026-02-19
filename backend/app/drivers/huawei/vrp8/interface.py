@@ -89,7 +89,7 @@ class HuaweiInterfaceDriver(BaseDriver):
             raise DriverBuildError("params require interface")
 
         encoded_ifname = urllib.parse.quote(ifname, safe='')
-        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}/huawei-ip:ipv4Config"
+        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}/ipv4Config/am4CfgAddrs"
 
         return RequestSpec(
             method="DELETE",
@@ -108,7 +108,7 @@ class HuaweiInterfaceDriver(BaseDriver):
             raise DriverBuildError("params require interface")
 
         encoded_ifname = urllib.parse.quote(ifname, safe='')
-        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}/huawei-ip:ipv6Config"
+        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}/ipv6Config"
 
         return RequestSpec(
             method="DELETE",
@@ -139,27 +139,33 @@ class HuaweiInterfaceDriver(BaseDriver):
             raise DriverBuildError("params require interface, ip, prefix")
 
         # URL encode interface name (e.g., Ethernet1/0/3 -> Ethernet1%2F0%2F3)
-        import urllib.parse
         encoded_ifname = urllib.parse.quote(ifname, safe='')
         
         # VRP8 path structure
         path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}"
         
-        # VRP8 huawei-ip:ipv4Config augmentation structure
-        payload = {
-            "huawei-ifm:interface": [{
-                "ifName": ifname,
-                "huawei-ip:ipv4Config": {
-                    "addrCfgType": "config",
-                    "am4CfgAddrs": {
-                        "am4CfgAddr": [{
-                            "ifIpAddr": ip,
-                            "subnetMask": _prefix_to_netmask(int(prefix)),
-                            "addrType": "main"
-                        }]
-                    }
+        # VRP8 ipv4Config structure (no namespace prefix - confirmed working)
+        interface_data = {
+            "ifName": ifname,
+            "ipv4Config": {
+                "addrCfgType": "config",
+                "am4CfgAddrs": {
+                    "am4CfgAddr": [{
+                        "ifIpAddr": ip,
+                        "subnetMask": _prefix_to_netmask(int(prefix)),
+                        "addrType": "main"
+                    }]
                 }
-            }]
+            }
+        }
+
+        # Add description if provided
+        description = params.get("description")
+        if description:
+            interface_data["ifDescr"] = description
+
+        payload = {
+            "huawei-ifm:interface": [interface_data]
         }
 
         return RequestSpec(
@@ -167,7 +173,7 @@ class HuaweiInterfaceDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.INTERFACE.SET_IPV4,
             driver=self.name
         )
@@ -179,29 +185,29 @@ class HuaweiInterfaceDriver(BaseDriver):
         if not ifname or not ip or prefix is None:
             raise DriverBuildError("params require interface, ip, prefix")
 
-        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={ifname}"
+        encoded_ifname = urllib.parse.quote(ifname, safe='')
+        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}"
         payload = {
-            "huawei-ifm:interface": {
+            "huawei-ifm:interface": [{
                 "ifName": ifname,
-                "adminStatus": "up",
-                "ipv6": {
-                    "addresses": {
-                        "address": [{
-                            "ip": ip,
-                            "prefix-length": int(prefix),
-                            "type": "global"
+                "ipv6Config": {
+                    "enableFlag": True,
+                    "am6CfgAddrs": {
+                        "am6CfgAddr": [{
+                            "ifIp6Addr": f"{ip}/{prefix}",
+                            "addrType6": "global"
                         }]
                     }
                 }
-            }
+            }]
         }
 
         return RequestSpec(
-            method="PATCH",  # Use PATCH for safe merge
+            method="PATCH",
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.INTERFACE.SET_IPV6,
             driver=self.name
         )
@@ -211,12 +217,13 @@ class HuaweiInterfaceDriver(BaseDriver):
         if not ifname:
             raise DriverBuildError("params require interface")
 
-        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={ifname}"
+        encoded_ifname = urllib.parse.quote(ifname, safe='')
+        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}"
         payload = {
-            "huawei-ifm:interface": {
+            "huawei-ifm:interface": [{
                 "ifName": ifname,
-                "adminStatus": "up" if enabled else "down"
-            }
+                "ifAdminStatus": "up" if enabled else "down"
+            }]
         }
 
         return RequestSpec(
@@ -224,7 +231,7 @@ class HuaweiInterfaceDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.INTERFACE.ENABLE if enabled else Intents.INTERFACE.DISABLE,
             driver=self.name
         )
@@ -235,12 +242,13 @@ class HuaweiInterfaceDriver(BaseDriver):
         if not ifname:
             raise DriverBuildError("params require interface")
 
-        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={ifname}"
+        encoded_ifname = urllib.parse.quote(ifname, safe='')
+        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}"
         payload = {
-            "huawei-ifm:interface": {
+            "huawei-ifm:interface": [{
                 "ifName": ifname,
-                "description": description
-            }
+                "ifDescr": description
+            }]
         }
 
         return RequestSpec(
@@ -248,7 +256,7 @@ class HuaweiInterfaceDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.INTERFACE.SET_DESCRIPTION,
             driver=self.name
         )
@@ -259,12 +267,13 @@ class HuaweiInterfaceDriver(BaseDriver):
         if not ifname or mtu is None:
             raise DriverBuildError("params require interface, mtu")
 
-        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={ifname}"
+        encoded_ifname = urllib.parse.quote(ifname, safe='')
+        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}"
         payload = {
-            "huawei-ifm:interface": {
+            "huawei-ifm:interface": [{
                 "ifName": ifname,
-                "mtu": int(mtu)
-            }
+                "ifMtu": int(mtu)
+            }]
         }
 
         return RequestSpec(
@@ -272,7 +281,7 @@ class HuaweiInterfaceDriver(BaseDriver):
             datastore="config",
             path=path,
             payload=payload,
-            headers={"content-type": "application/yang-data+json"},
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.INTERFACE.SET_MTU,
             driver=self.name
         )
@@ -282,25 +291,26 @@ class HuaweiInterfaceDriver(BaseDriver):
         if not ifname:
             raise DriverBuildError("params require interface")
 
-        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={ifname}"
+        encoded_ifname = urllib.parse.quote(ifname, safe='')
+        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}"
         return RequestSpec(
             method="GET",
             datastore="operational",
             path=path,
             payload=None,
-            headers={"accept": "application/yang-data+json"},
+            headers={"Accept": "application/yang-data+json"},
             intent=Intents.SHOW.INTERFACE,
             driver=self.name
         )
     
     def _build_show_interfaces(self, mount: str) -> RequestSpec:
-        path = f"{mount}/huawei-ifm:ifm/interfaces"
+        path = f"{mount}/huawei-ifm:ifm/interfaces?content=config"
         return RequestSpec(
             method="GET",
             datastore="operational",
             path=path,
             payload=None,
-            headers={"accept": "application/yang-data+json"},
+            headers={"Accept": "application/yang-data+json"},
             intent=Intents.SHOW.INTERFACES,
             driver=self.name
         )
@@ -327,7 +337,7 @@ class HuaweiInterfaceDriver(BaseDriver):
         # Build base payload
         interface_payload = {
             "ifName": config.name,
-            "adminStatus": "up" if config.enabled else "down",
+            "ifAdminStatus": "up" if config.enabled else "down",
         }
         
         # Add IPv4 if specified (VRP8 huawei-ip:ipv4Config structure)
@@ -338,7 +348,7 @@ class HuaweiInterfaceDriver(BaseDriver):
             else:
                 netmask = config.mask
             
-            interface_payload["huawei-ip:ipv4Config"] = {
+            interface_payload["ipv4Config"] = {
                 "addrCfgType": "config",
                 "am4CfgAddrs": {
                     "am4CfgAddr": [{

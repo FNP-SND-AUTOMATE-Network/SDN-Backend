@@ -3,6 +3,7 @@ Intent Service - Core service for handling Intent requests
 
 Refactored from Strategy Resolver to Deterministic Driver Factory Pattern:
 - No fallback mechanism (reduces latency)
+- Post-error diagnosis via DeviceManager (capability check on failure)
 - Direct driver selection based on vendor
 - All write operations use PATCH method
 
@@ -22,6 +23,7 @@ Flow:
 6. Normalize response if needed
 7. Return unified response
 """
+import asyncio
 from typing import Dict, Any, Optional
 from app.schemas.intent import IntentRequest, IntentResponse
 from app.services.device_profile_service_db import DeviceProfileService
@@ -37,28 +39,29 @@ from app.normalizers.config import ConfigNormalizer
 from app.core.errors import OdlRequestError, UnsupportedIntent, DeviceNotMounted
 from app.core.intent_registry import IntentRegistry, Intents, IntentCategory
 from app.core.logging import logger
+from app.services.device_manager import DeviceManager
 
 # Interface Drivers
 from app.drivers.cisco.ios_xe.interface import CiscoInterfaceDriver
-from app.drivers.huawei.interface import HuaweiInterfaceDriver
+from app.drivers.huawei.vrp8.interface import HuaweiInterfaceDriver
 
 # System Drivers
 # System Drivers
 from app.drivers.cisco.ios_xe.system import CiscoSystemDriver
-from app.drivers.huawei.system import HuaweiSystemDriver
+from app.drivers.huawei.vrp8.system import HuaweiSystemDriver
 
 # Routing Drivers
 # Routing Drivers
 from app.drivers.cisco.ios_xe.routing import CiscoRoutingDriver
-from app.drivers.huawei.routing import HuaweiRoutingDriver
+from app.drivers.huawei.vrp8.routing import HuaweiRoutingDriver
 
 # VLAN Drivers
 # VLAN Drivers
 from app.drivers.cisco.ios_xe.vlan import CiscoVlanDriver
-from app.drivers.huawei.vlan import HuaweiVlanDriver
+from app.drivers.huawei.vrp8.vlan import HuaweiVlanDriver
 
 # DHCP Drivers
-from app.drivers.huawei.dhcp import HuaweiDhcpDriver
+from app.drivers.huawei.vrp8.dhcp import HuaweiDhcpDriver
 
 # Device Driver (mount/unmount)
 from app.drivers.device import DeviceDriver
@@ -262,6 +265,16 @@ class IntentService:
         
         return raw
 
+    # ── Shared DeviceManager singleton (lazy init) ──
+    _device_manager: Optional[DeviceManager] = None
+
+    @classmethod
+    def _get_device_manager(cls) -> DeviceManager:
+        """Lazy-init DeviceManager singleton"""
+        if cls._device_manager is None:
+            cls._device_manager = DeviceManager()
+        return cls._device_manager
+
     async def _execute(self, req: IntentRequest, device, driver_name: str, os_type: Optional[str] = None) -> IntentResponse:
         """Execute intent with specific driver"""
         driver = self._get_driver(req.intent, driver_name, os_type)
@@ -273,8 +286,29 @@ class IntentService:
         spec = driver.build(device, req.intent, req.params)
         logger.debug(f"RequestSpec: {spec.method} {spec.path}")
 
-        # Send to ODL
-        raw = await self.client.send(spec)
+        try:
+            # Send to ODL
+            raw = await self.client.send(spec)
+        except OdlRequestError as e:
+            # ── Post-error diagnosis (non-blocking) ──
+            diagnosis = await self._diagnose_odl_error(
+                node_id=req.node_id,
+                intent=req.intent,
+                vendor=driver_name,
+                odl_error=str(e),
+            )
+            # Re-raise with enhanced error message
+            enhanced_msg = f"ODL request failed: {e}"
+            if diagnosis and diagnosis.get("suggestion"):
+                enhanced_msg += f" | Diagnosis: {diagnosis['suggestion']}"
+            raise OdlRequestError(
+                status_code=getattr(e, 'status_code', 502),
+                message=enhanced_msg,
+                details={
+                    "original_error": str(e),
+                    "diagnosis": diagnosis,
+                },
+            ) from e
 
         # Normalize response if needed (pass node_id for routing normalizers)
         result = self._normalize_response(req.intent, driver_name, raw, req.node_id, req.params)
@@ -286,6 +320,28 @@ class IntentService:
             driver_used=driver_name,
             result=result
         )
+
+    async def _diagnose_odl_error(
+        self, node_id: str, intent: str, vendor: str, odl_error: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Run DeviceManager diagnosis in a thread (non-blocking)
+        ใช้ asyncio.to_thread() เพื่อไม่ block event loop
+        """
+        try:
+            dm = self._get_device_manager()
+            # Run sync diagnose_error in thread pool (5s timeout inside)
+            diagnosis = await asyncio.to_thread(
+                dm.diagnose_error, node_id, intent, vendor, odl_error
+            )
+            if diagnosis and diagnosis.get("diagnosed"):
+                logger.info(
+                    f"[Diagnosis] {node_id}/{intent}: {diagnosis.get('suggestion', '')}"
+                )
+            return diagnosis
+        except Exception as diag_err:
+            logger.warning(f"[Diagnosis] Failed for {node_id}: {diag_err}")
+            return None
     
     def _normalize_response(self, intent: str, driver_name: str, raw: Dict[str, Any], device_id: str = "", params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Normalize response based on intent type"""

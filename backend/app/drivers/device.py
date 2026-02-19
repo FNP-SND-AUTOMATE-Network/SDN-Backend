@@ -48,15 +48,16 @@ class DeviceDriver:
         
         # Optional params with defaults
         tcp_only = params.get("tcp_only", False)
-        keepalive_delay = params.get("keepalive_delay", 10)
+        schemaless = params.get("schemaless", False)
         connection_timeout = params.get("connection_timeout", 20000)
         default_request_timeout = params.get("default_request_timeout", 60000)
-        reconnect_on_changed_schema = params.get("reconnect_on_changed_schema", False)
+        keepalive_delay = params.get("keepalive_delay", 120)
+        reconnect_on_changed_schema = params.get("reconnect_on_changed_schema", True)
         
         path = f"/network-topology:network-topology/topology=topology-netconf/node={node_id}"
         
         payload = {
-            "node": [
+            "network-topology:node": [
                 {
                     "node-id": node_id,
                     "netconf-node-topology:host": host,
@@ -64,9 +65,10 @@ class DeviceDriver:
                     "netconf-node-topology:username": username,
                     "netconf-node-topology:password": password,
                     "netconf-node-topology:tcp-only": tcp_only,
-                    "netconf-node-topology:keepalive-delay": keepalive_delay,
+                    "netconf-node-topology:schemaless": schemaless,
                     "netconf-node-topology:connection-timeout-millis": connection_timeout,
                     "netconf-node-topology:default-request-timeout-millis": default_request_timeout,
+                    "netconf-node-topology:keepalive-delay": keepalive_delay,
                     "netconf-node-topology:reconnect-on-changed-schema": reconnect_on_changed_schema
                 }
             ]

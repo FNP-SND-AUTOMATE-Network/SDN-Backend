@@ -39,9 +39,7 @@ class DriverFactory:
         from app.drivers.cisco.ios_xe.interface import CiscoInterfaceDriver
         from app.drivers.huawei.vrp8.interface import HuaweiInterfaceDriver
         cls._interface_drivers = {
-            "cisco": CiscoInterfaceDriver,
-            "huawei": HuaweiInterfaceDriver,
-            "IOS_XE": CiscoInterfaceDriver,
+            "CISCO_IOS_XE": CiscoInterfaceDriver,
             "HUAWEI_VRP": HuaweiInterfaceDriver,
         }
         
@@ -49,9 +47,7 @@ class DriverFactory:
         from app.drivers.cisco.ios_xe.routing import CiscoRoutingDriver
         from app.drivers.huawei.vrp8.routing import HuaweiRoutingDriver
         cls._routing_drivers = {
-            "cisco": CiscoRoutingDriver,
-            "huawei": HuaweiRoutingDriver,
-            "IOS_XE": CiscoRoutingDriver,
+            "CISCO_IOS_XE": CiscoRoutingDriver,
             "HUAWEI_VRP": HuaweiRoutingDriver,
         }
         
@@ -59,9 +55,7 @@ class DriverFactory:
         from app.drivers.cisco.ios_xe.system import CiscoSystemDriver
         from app.drivers.huawei.vrp8.system import HuaweiSystemDriver
         cls._system_drivers = {
-            "cisco": CiscoSystemDriver,
-            "huawei": HuaweiSystemDriver,
-            "IOS_XE": CiscoSystemDriver,
+            "CISCO_IOS_XE": CiscoSystemDriver,
             "HUAWEI_VRP": HuaweiSystemDriver,
         }
         
@@ -69,9 +63,7 @@ class DriverFactory:
         from app.drivers.cisco.ios_xe.vlan import CiscoVlanDriver
         from app.drivers.huawei.vrp8.vlan import HuaweiVlanDriver
         cls._vlan_drivers = {
-            "cisco": CiscoVlanDriver,
-            "huawei": HuaweiVlanDriver,
-            "IOS_XE": CiscoVlanDriver,
+            "CISCO_IOS_XE": CiscoVlanDriver,
             "HUAWEI_VRP": HuaweiVlanDriver,
         }
         
@@ -79,7 +71,6 @@ class DriverFactory:
         from app.drivers.huawei.vrp8.dhcp import HuaweiDhcpDriver
         
         cls._dhcp_drivers = {
-            "huawei": HuaweiDhcpDriver,
             "HUAWEI_VRP": HuaweiDhcpDriver,
         }
         
@@ -115,7 +106,7 @@ class DriverFactory:
         Args:
             node_id: Device node identifier (for logging/context)
             vendor: Vendor name ("cisco", "huawei") - Legacy fallback
-            os_type: OS Type ("IOS_XE", "HUAWEI_VRP") - Preferred
+            os_type: OS Type ("CISCO_IOS_XE", "HUAWEI_VRP") - Preferred
             category: Intent category to select driver type
             
         Returns:
@@ -197,9 +188,9 @@ class DriverFactory:
         
         for cat_name, registry in category_map.items():
             for key, driver_class in registry.items():
-                if key in ("cisco", "IOS_XE"):
+                if key == "CISCO_IOS_XE":
                     os_drivers["cisco_ios_xe"].append((cat_name, driver_class))
-                elif key in ("huawei", "HUAWEI_VRP"):
+                elif key == "HUAWEI_VRP":
                     os_drivers["huawei_vrp8"].append((cat_name, driver_class))
         
         # Build result: deduplicate and collect intents

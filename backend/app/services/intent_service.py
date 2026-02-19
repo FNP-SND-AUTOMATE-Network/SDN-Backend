@@ -192,11 +192,11 @@ class IntentService:
         
         # Step 4: Get driver directly from factory (deterministic - no fallback)
         intent_def = IntentRegistry.get(req.intent)
-        driver_name = device.vendor  # Use vendor directly (legacy fallback)
-        os_type = device.os_type     # Use OsType (preferred)
+        os_type = device.os_type     # Use OsType (preferred: "CISCO_IOS_XE", "HUAWEI_VRP")
+        driver_name = os_type or device.vendor  # Fallback to vendor if os_type not set
         
         logger.info(f"Intent: {req.intent}, Device: {req.node_id}, "
-                   f"Vendor: {driver_name}, OS: {os_type} (deterministic)")
+                   f"Driver: {driver_name}, OS: {os_type} (deterministic)")
         
         # Step 5: Execute with native driver (no fallback mechanism)
         return await self._execute(req, device, driver_name, os_type)

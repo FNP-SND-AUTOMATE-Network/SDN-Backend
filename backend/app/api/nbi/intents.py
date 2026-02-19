@@ -106,24 +106,23 @@ async def handle_intent(req: IntentRequest):
         )
 
 
-@router.get("/intents", response_model=IntentListResponse)
+@router.get("/intents")
 async def list_supported_intents():
     """
-    Get all supported intents grouped by category and by OS
-    
+    Get all supported intents grouped by OS
+
     **Always returns 200**
     """
     try:
-        intents = IntentRegistry.get_supported_intents()
         intents_by_os = DriverFactory.get_intents_by_os()
-        
-        return IntentListResponse(
-            success=True,
-            code=ErrorCode.SUCCESS.value,
-            message=f"Found {sum(len(v) for v in intents.values())} intents",
-            intents=intents,
-            intents_by_os=intents_by_os,
-        )
+        total = sum(v.get("total", 0) for v in intents_by_os.values())
+
+        return {
+            "success": True,
+            "code": ErrorCode.SUCCESS.value,
+            "message": f"Found {total} intents across {len(intents_by_os)} OS types",
+            "intents_by_os": intents_by_os,
+        }
     except Exception as e:
         logger.error(f"Failed to get intents: {e}")
         raise HTTPException(

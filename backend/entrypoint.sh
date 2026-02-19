@@ -6,6 +6,22 @@ echo "Cleaning up Prisma client..."
 python -m prisma_cleanup || true
 
 # Generate Prisma client first (doesn't need DB connection)
+echo "Force removing old Prisma client and cache..."
+rm -rf /usr/local/lib/python3.12/site-packages/prisma
+rm -rf /app/prisma_client
+rm -rf /root/.cache/prisma-python
+rm -rf /root/.cache/prisma
+
+# Generate Prisma client first (doesn't need DB connection)
+echo "Force removing old Prisma client and cache..."
+rm -rf /usr/local/lib/python3.12/site-packages/prisma
+rm -rf /app/prisma_client
+rm -rf /root/.cache/prisma-python
+rm -rf /root/.cache/prisma
+
+echo "Re-installing prisma to ensure clean state..."
+pip install --force-reinstall "prisma>=0.15.0"
+
 echo "Generating Prisma client..."
 python -m prisma generate
 
@@ -29,5 +45,8 @@ else
 fi
 
 # Start the application with hot reload
+echo "Cleaning __pycache__..."
+find . -type d -name "__pycache__" -exec rm -rf {} +
+
 echo "Starting FastAPI application with hot reload..."
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

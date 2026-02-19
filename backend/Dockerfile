@@ -9,6 +9,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     curl \
     libatomic1 \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies

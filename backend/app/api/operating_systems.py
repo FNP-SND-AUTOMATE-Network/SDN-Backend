@@ -37,7 +37,7 @@ async def get_operating_systems(
     page: int = Query(1, ge=1, description="หน้าที่ต้องการ"),
     page_size: int = Query(20, ge=1, le=100, description="จำนวนรายการต่อหน้า"),
     os_type: Optional[str] = Query(None, description="กรองตามประเภท OS"),
-    search: Optional[str] = Query(None, description="ค้นหาจาก os_name, description"),
+    search: Optional[str] = Query(None, description="ค้นหาจาก description"),
     include_usage: bool = Query(False, description="รวมจำนวนการใช้งาน"),
     current_user: Dict[str, Any] = Depends(get_current_user),
     os_svc: OperatingSystemService = Depends(get_os_service)

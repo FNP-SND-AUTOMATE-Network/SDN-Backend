@@ -21,7 +21,6 @@ class RelatedUserInfoFile(BaseModel):
 
 class RelatedOSInfoFile(BaseModel):
     id: str
-    os_name: str
     os_type: str
 
 class OSFileResponse(BaseModel):

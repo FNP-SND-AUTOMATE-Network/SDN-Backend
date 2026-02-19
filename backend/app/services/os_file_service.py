@@ -95,7 +95,6 @@ class OSFileService:
         if os_file.operatingSystem:
             operating_system = RelatedOSInfoFile(
                 id=os_file.operatingSystem.id,
-                os_name=os_file.operatingSystem.os_name,
                 os_type=os_file.operatingSystem.os_type
             )
 

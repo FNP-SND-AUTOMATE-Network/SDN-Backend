@@ -210,7 +210,6 @@ class TagService:
                     "operatingSystems": {
                         "select": {
                             "id": True,
-                            "os_name": True,
                             "os_type": True,
                             "description": True
                         }

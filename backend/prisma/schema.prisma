@@ -385,7 +385,12 @@ enum TypeTag {
 }
 
 enum OsType {
-  IOS_XE
+  CISCO_IOS
+  CISCO_NXOS
+  CISCO_ASA
+  CISCO_Nexus
+  CISCO_IOS_XR
+  CISCO_IOS_XE
   HUAWEI_VRP
   OTHER
 }

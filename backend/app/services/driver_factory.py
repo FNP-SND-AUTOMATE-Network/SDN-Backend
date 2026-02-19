@@ -118,25 +118,16 @@ class DriverFactory:
         registry = cls._get_registry(category)
         driver_class = None
 
-        # 1. Try OS Type first
+        # Try OS Type (only valid selector)
         if os_type:
             driver_class = registry.get(os_type)
-        
-        # 2. Fallback: map legacy vendor name → OsType
-        if not driver_class:
-            VENDOR_TO_OS = {
-                "cisco": "CISCO_IOS_XE",
-                "huawei": "HUAWEI_VRP",
-            }
-            mapped = VENDOR_TO_OS.get(vendor.lower())
-            if mapped:
-                driver_class = registry.get(mapped)
             
         if not driver_class:
             msg = f"No driver found for category '{category.value}'."
             if os_type:
-                msg += f" os_type='{os_type}'"
-            msg += f" vendor='{vendor}'"
+                msg += f" os_type='{os_type}' is not supported."
+            else:
+                msg += f" Device has no os_type set. Please assign an OS type in the database."
             
             raise UnsupportedVendor(msg)
         

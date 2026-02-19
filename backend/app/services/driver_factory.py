@@ -122,10 +122,15 @@ class DriverFactory:
         if os_type:
             driver_class = registry.get(os_type)
         
-        # 2. Fallback to Vendor
+        # 2. Fallback: map legacy vendor name → OsType
         if not driver_class:
-            vendor_lower = vendor.lower()
-            driver_class = registry.get(vendor_lower)
+            VENDOR_TO_OS = {
+                "cisco": "CISCO_IOS_XE",
+                "huawei": "HUAWEI_VRP",
+            }
+            mapped = VENDOR_TO_OS.get(vendor.lower())
+            if mapped:
+                driver_class = registry.get(mapped)
             
         if not driver_class:
             msg = f"No driver found for category '{category.value}'."

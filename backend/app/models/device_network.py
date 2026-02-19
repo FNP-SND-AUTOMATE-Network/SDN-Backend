@@ -52,13 +52,7 @@ class DeviceVendor(str, Enum):
     ARISTA = "ARISTA"
     OTHER = "OTHER"
 
-class IntentStrategy(str, Enum):
-    """Strategy สำหรับ Intent execution"""
-    OPERATION_BASED = "OPERATION_BASED"  # GET→OpenConfig, PUT/POST→Vendor (NEW DEFAULT)
-    OC_FIRST = "OC_FIRST"          # ลอง OpenConfig ก่อน fallback เป็น vendor-specific
-    VENDOR_FIRST = "VENDOR_FIRST"  # ลอง vendor-specific ก่อน fallback เป็น OpenConfig
-    OC_ONLY = "OC_ONLY"            # ใช้ OpenConfig อย่างเดียว
-    VENDOR_ONLY = "VENDOR_ONLY"    # ใช้ vendor-specific อย่างเดียว
+
 
 class DeviceNetworkBase(BaseModel):
     serial_number: str = Field(..., description="Serial Number (ต้องไม่ซ้ำ)", min_length=1, max_length=100)
@@ -69,6 +63,7 @@ class DeviceNetworkBase(BaseModel):
     ip_address: Optional[str] = Field(None, description="IP Address (สามารถเว้นว่างได้)", max_length=50)
     mac_address: str = Field(..., description="MAC Address (ต้องไม่ซ้ำ)", min_length=1, max_length=50)
     description: Optional[str] = Field(None, description="คำอธิบายอุปกรณ์", max_length=1000)
+    phpipam_address_id: Optional[str] = Field(None, description="phpIPAM Address ID")
     
     # Foreign Keys
     policy_id: Optional[str] = Field(None, description="Policy ID")
@@ -85,7 +80,6 @@ class DeviceNetworkBase(BaseModel):
         max_length=63
     )
     vendor: DeviceVendor = Field(default=DeviceVendor.OTHER, description="Vendor สำหรับเลือก driver")
-    default_strategy: IntentStrategy = Field(default=IntentStrategy.OPERATION_BASED, description="Strategy สำหรับ Intent")
     
     # NETCONF Connection Fields (สำหรับ Mount)
     netconf_host: Optional[str] = Field(None, description="IP/Hostname สำหรับ NETCONF connection")
@@ -110,6 +104,7 @@ class DeviceNetworkUpdate(BaseModel):
     ip_address: Optional[str] = Field(None, description="IP Address (สามารถเว้นว่างได้)", max_length=50)
     mac_address: Optional[str] = Field(None, description="MAC Address (ต้องไม่ซ้ำ)", min_length=1, max_length=50)
     description: Optional[str] = Field(None, description="คำอธิบายอุปกรณ์", max_length=1000)
+    phpipam_address_id: Optional[str] = Field(None, description="phpIPAM Address ID")
     
     # Foreign Keys
     policy_id: Optional[str] = Field(None, description="Policy ID")
@@ -122,7 +117,6 @@ class DeviceNetworkUpdate(BaseModel):
     # NBI/ODL Fields
     node_id: Optional[str] = Field(None, description="ODL node-id สำหรับ topology-netconf", max_length=63)
     vendor: Optional[DeviceVendor] = Field(None, description="Vendor สำหรับเลือก driver")
-    default_strategy: Optional[IntentStrategy] = Field(None, description="Strategy สำหรับ Intent")
     
     # NETCONF Connection Fields
     netconf_host: Optional[str] = Field(None, description="IP/Hostname สำหรับ NETCONF connection")
@@ -147,7 +141,6 @@ class RelatedTagInfo(BaseModel):
 
 class RelatedOSInfo(BaseModel):
     id: str
-    os_name: str
     os_type: str
 
 class RelatedSiteInfo(BaseModel):
@@ -180,6 +173,7 @@ class DeviceNetworkResponse(BaseModel):
     ip_address: Optional[str] = None
     mac_address: str
     description: Optional[str] = None
+    phpipam_address_id: Optional[str] = None
     
     # Foreign Keys
     policy_id: Optional[str] = None
@@ -191,7 +185,6 @@ class DeviceNetworkResponse(BaseModel):
     # NBI/ODL Fields - node_id is OPTIONAL in response (for backward compatibility)
     node_id: Optional[str] = Field(None, description="ODL node-id (unique, URL-safe)")
     vendor: Optional[str] = Field(None, description="Vendor สำหรับเลือก driver")
-    default_strategy: Optional[str] = Field(None, description="Strategy สำหรับ Intent")
     
     # NETCONF Connection Fields
     netconf_host: Optional[str] = Field(None, description="IP/Hostname สำหรับ NETCONF")
@@ -205,7 +198,6 @@ class DeviceNetworkResponse(BaseModel):
     # NBI/ODL Status Fields
     odl_mounted: bool = Field(default=False, description="Mount status ใน ODL")
     odl_connection_status: Optional[str] = Field(None, description="ODL connection status")
-    oc_supported_intents: Optional[Dict[str, bool]] = Field(None, description="OpenConfig support mapping")
     last_synced_at: Optional[datetime] = Field(None, description="Last sync time from ODL")
     ready_for_intent: bool = Field(default=False, description="พร้อมใช้งาน Intent API หรือไม่")
     

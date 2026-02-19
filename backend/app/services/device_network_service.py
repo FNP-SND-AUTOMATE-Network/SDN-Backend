@@ -208,10 +208,14 @@ class DeviceNetworkService:
                 template_type=device.configuration_template.template_type
             )
 
+        # Determine ODL status
+        is_mounted = getattr(device, 'odl_mounted', False)
+        connection_status = getattr(device, 'odl_connection_status', 'UNABLE_TO_CONNECT')
+        
         # Determine ready_for_intent status
         ready_for_intent = (
-            getattr(device, 'odl_mounted', False) and 
-            getattr(device, 'odl_connection_status', 'UNABLE_TO_CONNECT') == 'CONNECTED' and
+            is_mounted and 
+            connection_status == 'CONNECTED' and
             getattr(device, 'node_id', None) is not None
         )
 
@@ -242,11 +246,6 @@ class DeviceNetworkService:
             odl_connection_status=connection_status,
             last_synced_at=getattr(device, 'last_synced_at', None),
             ready_for_intent=ready_for_intent,
-            # NETCONF Connection Fields
-            netconf_host=getattr(device, 'netconf_host', None),
-            netconf_port=getattr(device, 'netconf_port', 830),
-            netconf_username=getattr(device, 'netconf_username', None),
-            netconf_password=None,  # Don't return password for security
             # Timestamps and Relations
             created_at=device.createdAt,
             updated_at=device.updatedAt,

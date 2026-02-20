@@ -112,8 +112,9 @@ class HuaweiInterfaceDriver(BaseDriver):
         if not ifname:
             raise DriverBuildError("params require interface")
 
+        # We delete just the addresses array. The post-step will disable the flag.
         encoded_ifname = urllib.parse.quote(ifname, safe='')
-        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}/ipv6Config"
+        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}/ipv6Config/am6CfgAddrs"
 
         return RequestSpec(
             method="DELETE",
@@ -216,7 +217,8 @@ class HuaweiInterfaceDriver(BaseDriver):
                     "enableFlag": True,
                     "am6CfgAddrs": {
                         "am6CfgAddr": [{
-                            "ifIp6Addr": f"{ip}/{prefix_len}",
+                            "ifIp6Addr": ip,
+                            "addrPrefixLen": int(prefix_len),
                             "addrType6": "global"
                         }]
                     }

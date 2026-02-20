@@ -320,6 +320,10 @@ class IntentService:
         if req.intent == Intents.INTERFACE.CREATE_SUBINTERFACE and is_huawei:
             await self._post_huawei_encap_vlan(req.node_id, req.params)
 
+        # ── Huawei post-step: disable IPv6 หลังจากลบ address ──
+        if req.intent == Intents.INTERFACE.REMOVE_IPV6 and is_huawei:
+            await self._post_huawei_disable_ipv6(req.node_id, req.params)
+
         # Normalize response if needed (pass node_id for routing normalizers)
         result = self._normalize_response(req.intent, driver_name, raw, req.node_id, req.params)
 
@@ -379,6 +383,48 @@ class IntentService:
         await self.client.send(encap_spec)
         logger.info(
             f"[PostStep] VLAN encap {vlan_id} set successfully on {sub_ifname}"
+        )
+
+    async def _post_huawei_disable_ipv6(
+        self, node_id: str, params: Dict[str, Any]
+    ) -> None:
+        """
+        Post-step: ปิด IPv6 (enableFlag: false) บน interface หลังจากลบ address ออก
+        """
+        import urllib.parse
+        from app.builders.odl_paths import odl_mount_base
+        from app.schemas.request_spec import RequestSpec
+
+        ifname = params.get("interface", "")
+        if not ifname:
+            return
+
+        encoded_ifname = urllib.parse.quote(ifname, safe='')
+        mount = odl_mount_base(node_id)
+
+        disable_spec = RequestSpec(
+            method="PATCH",
+            datastore="config",
+            path=f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}/ipv6Config",
+            payload={
+                "ipv6Config": {
+                    "enableFlag": False
+                }
+            },
+            headers={
+                "Content-Type": "application/yang-data+json",
+                "Accept": "application/yang-data+json"
+            },
+            intent="post_step.disable_ipv6",
+            driver="huawei",
+        )
+
+        logger.info(
+            f"[PostStep] Disabling IPv6 on {ifname} ({node_id})"
+        )
+        await self.client.send(disable_spec)
+        logger.info(
+            f"[PostStep] IPv6 disabled successfully on {ifname}"
         )
 
     async def _diagnose_odl_error(

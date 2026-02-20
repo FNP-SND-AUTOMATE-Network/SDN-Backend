@@ -13,7 +13,6 @@ class IntentCategory(str, Enum):
     ROUTING = "routing"
     SYSTEM = "system"
     SHOW = "show"
-    VLAN = "vlan"
     ACL = "acl"
     DEVICE = "device"  # Device management (mount/unmount)
     DHCP = "dhcp"      # DHCP server configuration
@@ -319,45 +318,6 @@ class IntentRegistry:
         is_read_only=True,
     )
     
-    # ===== VLAN INTENTS (Future) =====
-    VLAN_CREATE = IntentDefinition(
-        name="vlan.create",
-        category=IntentCategory.VLAN,
-        description="Create VLAN",
-        required_params=["vlan_id"],
-        optional_params=["name", "description"],
-    )
-    
-    VLAN_DELETE = IntentDefinition(
-        name="vlan.delete",
-        category=IntentCategory.VLAN,
-        description="Delete VLAN",
-        required_params=["vlan_id"],
-    )
-    
-    VLAN_UPDATE = IntentDefinition(
-        name="vlan.update",
-        category=IntentCategory.VLAN,
-        description="Update VLAN attributes",
-        required_params=["vlan_id"],
-        optional_params=["name", "description"],
-    )
-    
-    VLAN_ASSIGN_PORT = IntentDefinition(
-        name="vlan.assign_port",
-        category=IntentCategory.VLAN,
-        description="Assign port to VLAN",
-        required_params=["interface", "vlan_id"],
-        optional_params=["mode"],  # access | trunk
-    )
-    
-    SHOW_VLANS = IntentDefinition(
-        name="show.vlans",
-        category=IntentCategory.SHOW,
-        description="Show all VLANs",
-        required_params=[],
-        is_read_only=True,
-    )
     
     # ===== DHCP INTENTS =====
     DHCP_CREATE_POOL = IntentDefinition(
@@ -482,8 +442,7 @@ class Intents:
         # OSPF
         OSPF_NEIGHBORS = "show.ospf.neighbors"
         OSPF_DATABASE = "show.ospf.database"
-        # VLAN & DHCP
-        VLANS = "show.vlans"
+        # DHCP
         DHCP_POOLS = "show.dhcp_pools"
     
     class ROUTING:
@@ -512,11 +471,6 @@ class Intents:
         STATUS = "device.status"
         LIST = "device.list"
     
-    class VLAN:
-        CREATE = "vlan.create"
-        DELETE = "vlan.delete"
-        UPDATE = "vlan.update"
-        ASSIGN_PORT = "vlan.assign_port"
     
     class DHCP:
         CREATE_POOL = "dhcp.create_pool"

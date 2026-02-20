@@ -26,7 +26,6 @@ class DriverFactory:
     _interface_drivers: Dict[str, Type[BaseDriver]] = {}
     _routing_drivers: Dict[str, Type[BaseDriver]] = {}
     _system_drivers: Dict[str, Type[BaseDriver]] = {}
-    _vlan_drivers: Dict[str, Type[BaseDriver]] = {}
     _dhcp_drivers: Dict[str, Type[BaseDriver]] = {}
     
     @classmethod
@@ -59,14 +58,6 @@ class DriverFactory:
             "HUAWEI_VRP": HuaweiSystemDriver,
         }
         
-        # VLAN Drivers
-        from app.drivers.cisco.ios_xe.vlan import CiscoVlanDriver
-        from app.drivers.huawei.vrp8.vlan import HuaweiVlanDriver
-        cls._vlan_drivers = {
-            "CISCO_IOS_XE": CiscoVlanDriver,
-            "HUAWEI_VRP": HuaweiVlanDriver,
-        }
-        
         # DHCP Drivers (Huawei only for now)
         from app.drivers.huawei.vrp8.dhcp import HuaweiDhcpDriver
         
@@ -85,7 +76,6 @@ class DriverFactory:
             IntentCategory.INTERFACE: cls._interface_drivers,
             IntentCategory.ROUTING: cls._routing_drivers,
             IntentCategory.SYSTEM: cls._system_drivers,
-            IntentCategory.VLAN: cls._vlan_drivers,
             IntentCategory.DHCP: cls._dhcp_drivers,
             IntentCategory.SHOW: cls._interface_drivers,  # Default for show operations
         }
@@ -178,7 +168,6 @@ class DriverFactory:
             "interface": cls._interface_drivers,
             "routing": cls._routing_drivers,
             "system": cls._system_drivers,
-            "vlan": cls._vlan_drivers,
             "dhcp": cls._dhcp_drivers,
         }
         

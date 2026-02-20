@@ -31,6 +31,7 @@ class HuaweiInterfaceDriver(BaseDriver):
         Intents.INTERFACE.DISABLE,
         Intents.INTERFACE.SET_DESCRIPTION,
         Intents.INTERFACE.SET_MTU,
+        Intents.INTERFACE.CREATE_SUBINTERFACE,
         Intents.SHOW.INTERFACE,
         Intents.SHOW.INTERFACES,
     }
@@ -77,6 +78,10 @@ class HuaweiInterfaceDriver(BaseDriver):
         # ===== SHOW INTERFACES (all) =====
         if intent == Intents.SHOW.INTERFACES:
             return self._build_show_interfaces(mount)
+
+        # ===== CREATE SUB-INTERFACE =====
+        if intent == Intents.INTERFACE.CREATE_SUBINTERFACE:
+            return self._build_create_subinterface(mount, params)
 
         raise UnsupportedIntent(intent)
 
@@ -283,6 +288,71 @@ class HuaweiInterfaceDriver(BaseDriver):
             payload=payload,
             headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
             intent=Intents.INTERFACE.SET_MTU,
+            driver=self.name
+        )
+
+    def _build_create_subinterface(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """
+        Create sub-interface on Huawei VRP8
+
+        RESTCONF PATCH: huawei-ifm:ifm/interfaces/interface={parent}.{vlan_id}
+
+        YANG fields:
+          - ifName:         "{parent}.{vlan_id}"  (e.g. Ethernet1/0/2.50)
+          - ifClass:        "subInterface"
+          - ifParentIfName: parent interface name
+          - ifNumber:       sub-interface number (string)
+          - ipv4Config:     optional IPv4 address
+        """
+        ifname = params.get("interface")
+        vlan_id = params.get("vlan_id")
+        if not ifname or vlan_id is None:
+            raise DriverBuildError("params require interface, vlan_id")
+
+        vlan_id = str(vlan_id)
+        sub_ifname = f"{ifname}.{vlan_id}"  # e.g. Ethernet1/0/2.50
+        encoded_sub = urllib.parse.quote(sub_ifname, safe='')
+        path = f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_sub}"
+
+        interface_data = {
+            "ifName": sub_ifname,
+            "ifAdminStatus": "up",
+            "ifClass": "subInterface",
+            "ifParentIfName": ifname,
+            "ifNumber": vlan_id,
+        }
+
+        # Optional: IPv4 address
+        ip = params.get("ip")
+        prefix = params.get("prefix")
+        if ip and prefix is not None:
+            interface_data["ipv4Config"] = {
+                "addrCfgType": "config",
+                "am4CfgAddrs": {
+                    "am4CfgAddr": [{
+                        "ifIpAddr": ip,
+                        "subnetMask": _prefix_to_netmask(int(prefix)),
+                        "addrType": "main"
+                    }]
+                }
+            }
+
+        # Optional: description
+        description = params.get("description")
+        if description:
+            interface_data["ifDescr"] = description
+
+        payload = {
+            "huawei-ifm:interface": [interface_data]
+        }
+
+        return RequestSpec(
+            method="PATCH",
+            datastore="config",
+            path=path,
+            payload=payload,
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
+            intent=Intents.INTERFACE.CREATE_SUBINTERFACE,
             driver=self.name
         )
     

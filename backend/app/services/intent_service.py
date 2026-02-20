@@ -33,8 +33,6 @@ from app.clients.odl_restconf_client import OdlRestconfClient
 from app.normalizers.interface import InterfaceNormalizer
 from app.normalizers.system import SystemNormalizer
 from app.normalizers.routing import RoutingNormalizer, InterfaceBriefNormalizer, OspfNormalizer
-from app.normalizers.vlan import VlanNormalizer
-from app.normalizers.vlan import VlanNormalizer
 from app.normalizers.dhcp import DhcpNormalizer
 from app.normalizers.config import ConfigNormalizer
 from app.core.errors import OdlRequestError, UnsupportedIntent, DeviceNotMounted
@@ -56,10 +54,6 @@ from app.drivers.huawei.vrp8.system import HuaweiSystemDriver
 from app.drivers.cisco.ios_xe.routing import CiscoRoutingDriver
 from app.drivers.huawei.vrp8.routing import HuaweiRoutingDriver
 
-# VLAN Drivers
-# VLAN Drivers
-from app.drivers.cisco.ios_xe.vlan import CiscoVlanDriver
-from app.drivers.huawei.vrp8.vlan import HuaweiVlanDriver
 
 # DHCP Drivers
 from app.drivers.huawei.vrp8.dhcp import HuaweiDhcpDriver
@@ -134,8 +128,6 @@ class IntentService:
             elif intent in [Intents.SHOW.IP_ROUTE, Intents.SHOW.IP_INTERFACE_BRIEF,
                            Intents.SHOW.OSPF_NEIGHBORS, Intents.SHOW.OSPF_DATABASE]:
                 category = IntentCategory.ROUTING
-            elif intent == Intents.SHOW.VLANS:
-                category = IntentCategory.VLAN
             elif intent == Intents.SHOW.DHCP_POOLS:
                 category = IntentCategory.DHCP
             else:
@@ -336,6 +328,10 @@ class IntentService:
                     },
                 ) from e
 
+        # ── Huawei post-step: encap VLAN หลังสร้าง sub-interface ──
+        if req.intent == Intents.INTERFACE.CREATE_SUBINTERFACE and is_huawei:
+            await self._post_huawei_encap_vlan(req.node_id, req.params)
+
         # Normalize response if needed (pass node_id for routing normalizers)
         result = self._normalize_response(req.intent, driver_name, raw, req.node_id, req.params)
 
@@ -345,6 +341,56 @@ class IntentService:
             node_id=req.node_id,
             driver_used=driver_name,
             result=result
+        )
+
+    async def _post_huawei_encap_vlan(
+        self, node_id: str, params: Dict[str, Any]
+    ) -> None:
+        """
+        Post-step: ตั้ง VLAN encapsulation บน sub-interface ที่เพิ่งสร้าง
+
+        ใช้ huawei-ethernet:ethernet/ethSubIfs/ethSubIf YANG path
+        เพื่อ set dot1q VLAN tag (flowType=VlanType)
+        """
+        import urllib.parse
+        from app.builders.odl_paths import odl_mount_base
+        from app.schemas.request_spec import RequestSpec
+
+        ifname = params.get("interface", "")
+        vlan_id = params.get("vlan_id")
+        if not ifname or vlan_id is None:
+            return
+
+        vlan_id_str = str(vlan_id)
+        sub_ifname = f"{ifname}.{vlan_id_str}"  # e.g. Ethernet1/0/2.50
+        encoded_sub = urllib.parse.quote(sub_ifname, safe='')
+        mount = odl_mount_base(node_id)
+
+        encap_spec = RequestSpec(
+            method="PATCH",
+            datastore="config",
+            path=f"{mount}/huawei-ethernet:ethernet/ethSubIfs/ethSubIf={encoded_sub}",
+            payload={
+                "huawei-ethernet:ethSubIf": [{
+                    "ifName": sub_ifname,
+                    "vlanTypeVid": int(vlan_id),
+                    "flowType": "VlanType"
+                }]
+            },
+            headers={
+                "Content-Type": "application/yang-data+json",
+                "Accept": "application/yang-data+json"
+            },
+            intent="post_step.encap_vlan",
+            driver="huawei",
+        )
+
+        logger.info(
+            f"[PostStep] Setting VLAN encap {vlan_id} on {sub_ifname} ({node_id})"
+        )
+        await self.client.send(encap_spec)
+        logger.info(
+            f"[PostStep] VLAN encap {vlan_id} set successfully on {sub_ifname}"
         )
 
     async def _diagnose_odl_error(
@@ -567,9 +613,6 @@ class IntentService:
         if intent == Intents.SHOW.OSPF_DATABASE:
             return OspfNormalizer.normalize_database(raw, device_id, driver_name).model_dump()
         
-        # VLAN normalization
-        if intent == Intents.SHOW.VLANS:
-            return self.vlan_normalizer.normalize_show_vlans(driver_name, raw)
         
         # DHCP normalization
         if intent == Intents.SHOW.DHCP_POOLS:

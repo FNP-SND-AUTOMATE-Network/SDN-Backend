@@ -45,7 +45,7 @@ class CiscoVlanDriver(BaseDriver):
         if intent == Intents.SHOW.VLANS:
             return self._build_show_vlans(mount)
 
-        raise UnsupportedIntent(intent)
+        raise UnsupportedIntent(intent, os_type=device.os_type)
 
     # ===== Builder Methods =====
     

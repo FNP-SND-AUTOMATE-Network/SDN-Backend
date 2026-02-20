@@ -219,7 +219,7 @@ class DeviceManager:
         - unavailable-capabilities → filter ออก, ไม่ include ใน available
         """
         # ── available capabilities ──
-        available_raw: List[str] = node_data.get(
+        available_raw = node_data.get(
             "netconf-node-topology:available-capabilities", {}
         ).get("available-capability", [])
 
@@ -228,7 +228,9 @@ class DeviceManager:
         #       หรือ "urn:ietf:params:netconf:base:1.0"
         available_modules = []
         for cap in available_raw:
-            module_name = self._extract_module_name(cap)
+            # Handle list of dicts (ODL newer formats)
+            cap_str = cap.get("capability", "") if isinstance(cap, dict) else cap
+            module_name = self._extract_module_name(cap_str)
             if module_name:
                 available_modules.append(module_name)
 
@@ -486,7 +488,11 @@ class DeviceManager:
         for i in range(len(parts), 0, -1):
             prefix = ".".join(parts[:i])
             if prefix in self.INTENT_MODULE_MAP:
-                return self.INTENT_MODULE_MAP[prefix].get(vendor_key, [])
+                module_dict = self.INTENT_MODULE_MAP[prefix]
+                # Match OS Type (e.g. 'huawei_vrp' contains 'huawei')
+                for k, v in module_dict.items():
+                    if k in vendor_key or vendor_key in k:
+                        return v
         return []
 
     # ── Post-Error Diagnosis ────────────────────────────────
@@ -520,7 +526,7 @@ class DeviceManager:
             "diagnosed": False,
             "intent": intent,
             "node_id": node_id,
-            "odl_error": odl_error[:300],  # Trim error message
+            "odl_error": str(odl_error)[:300],  # str() to handle dict/list input safely
         }
 
         try:

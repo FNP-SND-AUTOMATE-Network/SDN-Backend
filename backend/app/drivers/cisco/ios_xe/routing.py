@@ -102,7 +102,7 @@ class CiscoRoutingDriver(BaseDriver):
         if intent == Intents.SHOW.OSPF_DATABASE:
             return self._build_show_ospf_database(mount, params)
 
-        raise UnsupportedIntent(intent)
+        raise UnsupportedIntent(intent, os_type=device.os_type)
 
     # ===== Builder Methods =====
     

@@ -55,7 +55,7 @@ class CiscoSystemDriver(BaseDriver):
         if intent == Intents.SYSTEM.SAVE_CONFIG:
             return self._build_save_config(mount)
 
-        raise UnsupportedIntent(intent)
+        raise UnsupportedIntent(intent, os_type=device.os_type)
 
     # ===== Builder Methods =====
     

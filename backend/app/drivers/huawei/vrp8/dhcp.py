@@ -45,7 +45,7 @@ class HuaweiDhcpDriver(BaseDriver):
         if intent == Intents.SHOW.DHCP_POOLS:
             return self._build_show_dhcp_pools(mount)
 
-        raise UnsupportedIntent(intent)
+        raise UnsupportedIntent(intent, os_type=device.os_type)
 
     def _build_dhcp_create_pool(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
         """

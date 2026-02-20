@@ -24,6 +24,7 @@ Flow:
 7. Return unified response
 """
 import asyncio
+import ipaddress
 from typing import Dict, Any, Optional
 from app.schemas.intent import IntentRequest, IntentResponse
 from app.services.device_profile_service_db import DeviceProfileService
@@ -282,6 +283,12 @@ class IntentService:
         if not driver:
             raise UnsupportedIntent(f"No driver found for {req.intent} with {driver_name}")
         
+        # ── Huawei-specific pre-flight checks ──
+        # ก่อน set_ipv4 บน Huawei: ตรวจ existing IP และ subnet conflict
+        is_huawei = driver_name and "HUAWEI" in driver_name.upper()
+        if req.intent == Intents.INTERFACE.SET_IPV4 and is_huawei:
+            await self._pre_check_huawei_set_ipv4(req.node_id, device, req.params)
+        
         # Build RESTCONF request spec
         spec = driver.build(device, req.intent, req.params)
         logger.debug(f"RequestSpec: {spec.method} {spec.path}")
@@ -290,25 +297,44 @@ class IntentService:
             # Send to ODL
             raw = await self.client.send(spec)
         except OdlRequestError as e:
-            # ── Post-error diagnosis (non-blocking) ──
-            diagnosis = await self._diagnose_odl_error(
-                node_id=req.node_id,
-                intent=req.intent,
-                vendor=driver_name,
-                odl_error=str(e),
-            )
-            # Re-raise with enhanced error message
-            enhanced_msg = f"ODL request failed: {e}"
-            if diagnosis and diagnosis.get("suggestion"):
-                enhanced_msg += f" | Diagnosis: {diagnosis['suggestion']}"
-            raise OdlRequestError(
-                status_code=getattr(e, 'status_code', 502),
-                message=enhanced_msg,
-                details={
-                    "original_error": str(e),
-                    "diagnosis": diagnosis,
-                },
-            ) from e
+            # ── Idempotent DELETE: ถ้า DELETE แล้วได้ 500/404 with empty body
+            # หมายความว่า resource ไม่มีอยู่แล้ว (NETCONF data-missing)
+            # ถือเป็น success เพราะ state ที่ต้องการคือ "ไม่มี resource นั้น"
+            status_code = getattr(e, 'status_code', 0)
+            # OdlRequestError เก็บ details ใน e.detail (FastAPI HTTPException)
+            # structure: e.detail = {"message": "...", "details": {"url": ..., "body": "..."}}
+            odl_body = ""
+            detail = getattr(e, 'detail', {})
+            if isinstance(detail, dict):
+                inner = detail.get('details', {})
+                if isinstance(inner, dict):
+                    odl_body = inner.get('body', '')
+            if spec.method == "DELETE" and status_code in (404, 500) and not odl_body:
+                logger.info(
+                    f"[Idempotent DELETE] {req.intent} on {req.node_id}: "
+                    f"resource not found (already deleted). Treating as success."
+                )
+                raw = {"ok": True, "message": "Resource already absent (idempotent delete)"}
+            else:
+                # ── Post-error diagnosis (non-blocking) ──
+                diagnosis = await self._diagnose_odl_error(
+                    node_id=req.node_id,
+                    intent=req.intent,
+                    vendor=driver_name,
+                    odl_error=str(e),
+                )
+                # Re-raise with enhanced error message
+                enhanced_msg = f"ODL request failed: {e}"
+                if diagnosis and diagnosis.get("suggestion"):
+                    enhanced_msg += f" | Diagnosis: {diagnosis['suggestion']}"
+                raise OdlRequestError(
+                    status_code=status_code or 502,
+                    message=enhanced_msg,
+                    details={
+                        "original_error": str(e),
+                        "diagnosis": diagnosis,
+                    },
+                ) from e
 
         # Normalize response if needed (pass node_id for routing normalizers)
         result = self._normalize_response(req.intent, driver_name, raw, req.node_id, req.params)
@@ -342,6 +368,165 @@ class IntentService:
         except Exception as diag_err:
             logger.warning(f"[Diagnosis] Failed for {node_id}: {diag_err}")
             return None
+
+    async def _pre_check_huawei_set_ipv4(
+        self, node_id: str, device, params: Dict[str, Any]
+    ) -> None:
+        """
+        Pre-flight check สำหรับ Huawei interface.set_ipv4
+
+        Case 1: Interface มี IP อยู่แล้ว → DELETE ก่อน แล้วค่อย SET ใหม่
+        Case 2: IP ใหม่ซ้ำ subnet กับ interface อื่น → raise error ชัดเจน
+        """
+        import urllib.parse
+        from app.builders.odl_paths import odl_mount_base
+        from app.schemas.request_spec import RequestSpec
+
+        ifname = params.get("interface", "")
+        new_ip = params.get("ip", "")
+        new_prefix = params.get("prefix") or params.get("mask", "")
+        mount = odl_mount_base(node_id)
+        encoded_ifname = urllib.parse.quote(ifname, safe='')
+
+        # ── Step 1: GET current interface config ──
+        logger.info(f"[PreCheck] GET interface {ifname} on {node_id}")
+        get_spec = RequestSpec(
+            method="GET",
+            datastore="config",
+            path=f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}",
+            payload=None,
+            headers={"Accept": "application/yang-data+json"},
+            intent="pre_check.get_interface",
+            driver="huawei",
+        )
+        try:
+            iface_data = await self.client.send(get_spec)
+        except OdlRequestError:
+            iface_data = {}
+
+        # ตรวจว่ามี IP อยู่ใน interface นี้หรือไม่
+        existing_ip = None
+        existing_mask = None
+        try:
+            iface_list = (
+                iface_data.get("huawei-ifm:interface", [{}])
+                if isinstance(iface_data.get("huawei-ifm:interface"), list)
+                else [iface_data.get("huawei-ifm:interface", {})]
+            )
+            addr_list = (
+                iface_list[0]
+                .get("ipv4Config", {})
+                .get("am4CfgAddrs", {})
+                .get("am4CfgAddr", [])
+            )
+            if addr_list:
+                existing_ip = addr_list[0].get("ifIpAddr")
+                existing_mask = addr_list[0].get("subnetMask")
+        except Exception:
+            pass
+
+        # Case 1: มี IP อยู่แล้ว → DELETE ก่อน
+        if existing_ip:
+            logger.info(
+                f"[PreCheck] Interface {ifname} has existing IP {existing_ip}/{existing_mask}, "
+                f"deleting before set new IP {new_ip}"
+            )
+            del_spec = RequestSpec(
+                method="DELETE",
+                datastore="config",
+                path=f"{mount}/huawei-ifm:ifm/interfaces/interface={encoded_ifname}/ipv4Config/am4CfgAddrs",
+                payload=None,
+                headers={"Accept": "application/yang-data+json"},
+                intent="pre_check.delete_ipv4",
+                driver="huawei",
+            )
+            try:
+                await self.client.send(del_spec)
+                logger.info(f"[PreCheck] Existing IP {existing_ip} removed from {ifname}")
+            except OdlRequestError as e:
+                # 500/404 body ว่าง = resource ไม่มีอยู่แล้ว ถือว่าสำเร็จ
+                status_code = getattr(e, 'status_code', 0)
+                detail = getattr(e, 'detail', {})
+                odl_body = ""
+                if isinstance(detail, dict):
+                    inner = detail.get('details', {})
+                    if isinstance(inner, dict):
+                        odl_body = inner.get('body', '')
+                if status_code in (404, 500) and not odl_body:
+                    pass  # already deleted, continue
+                else:
+                    raise
+
+        # ── Step 2: GET all interfaces → ตรวจ subnet conflict ──
+        logger.info(f"[PreCheck] Checking subnet conflict for {new_ip} on {node_id}")
+        all_spec = RequestSpec(
+            method="GET",
+            datastore="config",
+            path=f"{mount}/huawei-ifm:ifm/interfaces",
+            payload=None,
+            headers={"Accept": "application/yang-data+json"},
+            intent="pre_check.get_interfaces",
+            driver="huawei",
+        )
+        try:
+            all_data = await self.client.send(all_spec)
+        except OdlRequestError:
+            all_data = {}
+
+        # แปลง new IP เป็น network object สำหรับเทียบ
+        try:
+            # รองรับทั้ง prefix (24) และ mask (255.255.255.0)
+            if str(new_prefix).isdigit():
+                new_network = ipaddress.IPv4Network(f"{new_ip}/{new_prefix}", strict=False)
+            else:
+                new_network = ipaddress.IPv4Network(f"{new_ip}/{new_prefix}", strict=False)
+        except ValueError:
+            logger.warning(f"[PreCheck] Cannot parse new IP {new_ip}/{new_prefix}, skipping subnet check")
+            return
+
+        # วน loop ทุก interface เพื่อหา subnet ซ้ำ
+        all_ifaces = (
+            all_data.get("huawei-ifm:interfaces", {}).get("interface", [])
+        )
+        for iface in all_ifaces:
+            other_name = iface.get("ifName", "")
+            # ข้ามตัวเอง
+            if other_name == ifname:
+                continue
+            try:
+                other_addrs = (
+                    iface.get("ipv4Config", {})
+                    .get("am4CfgAddrs", {})
+                    .get("am4CfgAddr", [])
+                )
+                for addr in other_addrs:
+                    other_ip = addr.get("ifIpAddr", "")
+                    other_mask = addr.get("subnetMask", "")
+                    if not other_ip or not other_mask:
+                        continue
+                    other_network = ipaddress.IPv4Network(f"{other_ip}/{other_mask}", strict=False)
+                    if new_network.overlaps(other_network):
+                        raise OdlRequestError(
+                            status_code=409,
+                            message=(
+                                f"IP conflict: {new_ip}/{new_prefix} is in the same subnet as "
+                                f"{other_name} ({other_ip}/{other_mask}). "
+                                f"Huawei VRP does not allow two interfaces in the same subnet."
+                            ),
+                            details={
+                                "conflicting_interface": other_name,
+                                "conflicting_ip": other_ip,
+                                "conflicting_mask": other_mask,
+                                "requested_ip": new_ip,
+                                "requested_prefix": str(new_prefix),
+                            }
+                        )
+            except OdlRequestError:
+                raise
+            except Exception:
+                continue
+
+        logger.info(f"[PreCheck] No subnet conflict found for {new_ip}/{new_prefix} on {node_id}")
     
     def _normalize_response(self, intent: str, driver_name: str, raw: Dict[str, Any], device_id: str = "", params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Normalize response based on intent type"""

@@ -273,7 +273,7 @@ class IntentService:
         driver = self._get_driver(req.intent, driver_name, os_type)
         
         if not driver:
-            raise UnsupportedIntent(f"No driver found for {req.intent} with {driver_name}")
+            raise UnsupportedIntent(req.intent, os_type=os_type or driver_name)
         
         # ── Huawei-specific pre-flight checks ──
         # ก่อน set_ipv4 บน Huawei: ตรวจ existing IP และ subnet conflict

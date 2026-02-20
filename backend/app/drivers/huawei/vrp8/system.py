@@ -46,7 +46,7 @@ class HuaweiSystemDriver(BaseDriver):
         if intent == Intents.SHOW.VERSION:
             return self._build_show_version(mount)
 
-        raise UnsupportedIntent(intent)
+        raise UnsupportedIntent(intent, os_type=device.os_type)
 
     def _build_set_hostname(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
         """Set device hostname using huawei-system"""

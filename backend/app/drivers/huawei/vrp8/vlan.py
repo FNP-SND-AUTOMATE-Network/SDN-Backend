@@ -45,7 +45,7 @@ class HuaweiVlanDriver(BaseDriver):
         if intent == Intents.SHOW.VLANS:
             return self._build_show_vlans(mount)
 
-        raise UnsupportedIntent(intent)
+        raise UnsupportedIntent(intent, os_type=device.os_type)
 
     def _build_vlan_create(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
         """

@@ -105,7 +105,7 @@ class CiscoInterfaceDriver(BaseDriver):
         if intent == Intents.SHOW.INTERFACES:
             return self._build_show_interfaces(mount)
 
-        raise UnsupportedIntent(intent)
+        raise UnsupportedIntent(intent, os_type=device.os_type)
 
     # ===== Builder Methods (All Native IOS-XE) =====
     
@@ -119,10 +119,19 @@ class CiscoInterfaceDriver(BaseDriver):
         ifname = params.get("interface")
         ip = params.get("ip")
         prefix = params.get("prefix")
-        if not ifname or not ip or prefix is None:
-            raise DriverBuildError("params require interface, ip, prefix")
+        mask = params.get("mask")
+        
+        if not ifname or not ip:
+            raise DriverBuildError("params require interface, ip")
+        if prefix is None and mask is None:
+            raise DriverBuildError("params require either prefix or mask")
 
-        netmask = _prefix_to_netmask(int(prefix))
+        # Determine netmask string
+        if mask:
+            netmask = mask
+        else:
+            netmask = _prefix_to_netmask(int(prefix))
+            
         iface_type, iface_num = self._parse_interface_name(ifname)
         encoded_num = self._encode_interface_number(iface_num)
         
@@ -190,8 +199,15 @@ class CiscoInterfaceDriver(BaseDriver):
         ifname = params.get("interface")
         ip = params.get("ip")
         prefix = params.get("prefix")
-        if not ifname or not ip or prefix is None:
-            raise DriverBuildError("params require interface, ip, prefix")
+        mask = params.get("mask")
+        
+        if not ifname or not ip:
+            raise DriverBuildError("params require interface, ip")
+        if prefix is None and mask is None:
+            raise DriverBuildError("params require either prefix or mask")
+
+        # In IPv6, we usually use prefix length. If mask is provided, we use it as prefix
+        prefix_len = prefix if prefix is not None else mask
 
         iface_type, iface_num = self._parse_interface_name(ifname)
         encoded_num = self._encode_interface_number(iface_num)
@@ -204,7 +220,7 @@ class CiscoInterfaceDriver(BaseDriver):
                 "ipv6": {
                     "address": {
                         "prefix-list": [{
-                            "prefix": f"{ip}/{prefix}"
+                            "prefix": f"{ip}/{prefix_len}"
                         }]
                     }
                 }

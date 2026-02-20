@@ -32,6 +32,7 @@ class HuaweiRoutingDriver(BaseDriver):
         # OSPF
         Intents.ROUTING.OSPF_ENABLE,
         Intents.ROUTING.OSPF_DISABLE,
+        Intents.ROUTING.OSPF_ADD_NETWORK,
         Intents.ROUTING.OSPF_ADD_NETWORK_INTERFACE,
         Intents.ROUTING.OSPF_REMOVE_NETWORK_INTERFACE,
         Intents.ROUTING.OSPF_SET_ROUTER_ID,
@@ -53,6 +54,9 @@ class HuaweiRoutingDriver(BaseDriver):
         if intent == Intents.ROUTING.OSPF_DISABLE:
             return self._build_ospf_disable(mount, params)
         
+        if intent == Intents.ROUTING.OSPF_ADD_NETWORK:
+            return self._build_ospf_add_network(mount, params)
+            
         if intent == Intents.ROUTING.OSPF_ADD_NETWORK_INTERFACE:
             return self._build_ospf_add_network_interface(mount, params)
         
@@ -78,7 +82,7 @@ class HuaweiRoutingDriver(BaseDriver):
         if intent == Intents.SHOW.IP_ROUTE:
             return self._build_show_ip_route(mount, params)
 
-        raise UnsupportedIntent(intent)
+        raise UnsupportedIntent(intent, os_type=device.os_type)
 
     # =========================================================================
     # OSPF Builder Methods (huawei-ospfv2)
@@ -134,6 +138,60 @@ class HuaweiRoutingDriver(BaseDriver):
             payload=None,
             headers={"Accept": "application/yang-data+json", "Content-Type": "application/yang-data+json"},
             intent=Intents.ROUTING.OSPF_DISABLE,
+            driver=self.name
+        )
+
+    def _build_ospf_add_network(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """
+        Add OSPF network (network <ip> <wildcard> area <area>)
+        """
+        process_id = params.get("process_id", 1)
+        area = params.get("area")
+        network = params.get("network")
+        wildcard_mask = params.get("wildcard_mask")
+        
+        if area is None or not network or not wildcard_mask:
+            raise DriverBuildError("params require area, network, wildcard_mask")
+            
+        # Format area to IPv4 format if it's a simple integer (e.g. 0 -> 0.0.0.0)
+        area_str = str(area)
+        if area_str.isdigit():
+            area_int = int(area_str)
+            area_str = f"{(area_int >> 24) & 0xFF}.{(area_int >> 16) & 0xFF}.{(area_int >> 8) & 0xFF}.{area_int & 0xFF}"
+
+        path = f"{mount}/huawei-ospfv2:ospfv2/ospfv2comm/ospfSites/ospfSite={process_id}"
+        
+        payload = {
+            "huawei-ospfv2:ospfSite": [
+                {
+                    "processId": int(process_id),
+                    "vrfName": "_public_",
+                    "areas": {
+                        "area": [
+                            {
+                                "areaId": area_str,
+                                "networks": {
+                                    "network": [
+                                        {
+                                            "ipAddress": network,
+                                            "wildcardMask": wildcard_mask
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        
+        return RequestSpec(
+            method="PATCH",
+            datastore="config",
+            path=path,
+            payload=payload,
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
+            intent=Intents.ROUTING.OSPF_ADD_NETWORK,
             driver=self.name
         )
     

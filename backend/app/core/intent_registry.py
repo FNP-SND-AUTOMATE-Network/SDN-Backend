@@ -41,8 +41,8 @@ class IntentRegistry:
         name="interface.set_ipv4",
         category=IntentCategory.INTERFACE,
         description="Set IPv4 address on interface",
-        required_params=["interface", "ip", "prefix"],
-        optional_params=["description"],
+        required_params=["interface", "ip"],
+        optional_params=["prefix", "mask", "description"],
     )
     
     INTERFACE_REMOVE_IPV4 = IntentDefinition(
@@ -57,8 +57,8 @@ class IntentRegistry:
         name="interface.set_ipv6",
         category=IntentCategory.INTERFACE,
         description="Set IPv6 address on interface",
-        required_params=["interface", "ip", "prefix"],
-        optional_params=["description"],
+        required_params=["interface", "ip"],
+        optional_params=["prefix", "mask", "description"],
     )
     
     INTERFACE_REMOVE_IPV6 = IntentDefinition(
@@ -203,6 +203,13 @@ class IntentRegistry:
         category=IntentCategory.ROUTING,
         description="Disable/Remove OSPF process",
         required_params=["process_id"],
+    )
+    
+    ROUTING_OSPF_ADD_NETWORK = IntentDefinition(
+        name="routing.ospf.add_network",
+        category=IntentCategory.ROUTING,
+        description="Add OSPF network (network <ip> <wildcard> area <area>)",
+        required_params=["process_id", "area", "network", "wildcard_mask"],
     )
     
     ROUTING_OSPF_ADD_NETWORK_INTERFACE = IntentDefinition(
@@ -453,6 +460,7 @@ class Intents:
         # OSPF
         OSPF_ENABLE = "routing.ospf.enable"
         OSPF_DISABLE = "routing.ospf.disable"
+        OSPF_ADD_NETWORK = "routing.ospf.add_network"
         OSPF_ADD_NETWORK_INTERFACE = "routing.ospf.add_network_interface"
         OSPF_REMOVE_NETWORK_INTERFACE = "routing.ospf.remove_network_interface"
         OSPF_SET_ROUTER_ID = "routing.ospf.set_router_id"

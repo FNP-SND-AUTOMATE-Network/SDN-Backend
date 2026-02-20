@@ -92,18 +92,6 @@ class IntentService:
         # Normalizers
         self.interface_normalizer = InterfaceNormalizer()
         self.system_normalizer = SystemNormalizer()
-        self.vlan_normalizer = VlanNormalizer()
-        self.dhcp_normalizer = DhcpNormalizer()
-        self.config_normalizer = ConfigNormalizer()
-
-    def __init__(self):
-        self.device_profiles = DeviceProfileService()
-        self.client = OdlRestconfClient()
-        
-        # Normalizers
-        self.interface_normalizer = InterfaceNormalizer()
-        self.system_normalizer = SystemNormalizer()
-        self.vlan_normalizer = VlanNormalizer()
         self.dhcp_normalizer = DhcpNormalizer()
         self.config_normalizer = ConfigNormalizer()
         

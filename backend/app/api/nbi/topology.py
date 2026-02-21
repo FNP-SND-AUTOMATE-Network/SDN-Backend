@@ -6,7 +6,7 @@ from app.normalizers.topology import normalize_topology
 
 from app.core.config import settings
 
-router = APIRouter(tags=["Topology"])
+router = APIRouter()
 
 # ==========================================
 # 📦 Pydantic Models (Response Schemas)

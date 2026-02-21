@@ -13,7 +13,6 @@ class IntentCategory(str, Enum):
     ROUTING = "routing"
     SYSTEM = "system"
     SHOW = "show"
-    VLAN = "vlan"
     ACL = "acl"
     DEVICE = "device"  # Device management (mount/unmount)
     DHCP = "dhcp"      # DHCP server configuration
@@ -42,8 +41,8 @@ class IntentRegistry:
         name="interface.set_ipv4",
         category=IntentCategory.INTERFACE,
         description="Set IPv4 address on interface",
-        required_params=["interface", "ip", "prefix"],
-        optional_params=["description"],
+        required_params=["interface", "ip"],
+        optional_params=["prefix", "mask", "description"],
     )
     
     INTERFACE_REMOVE_IPV4 = IntentDefinition(
@@ -58,8 +57,8 @@ class IntentRegistry:
         name="interface.set_ipv6",
         category=IntentCategory.INTERFACE,
         description="Set IPv6 address on interface",
-        required_params=["interface", "ip", "prefix"],
-        optional_params=["description"],
+        required_params=["interface", "ip"],
+        optional_params=["prefix", "mask", "description"],
     )
     
     INTERFACE_REMOVE_IPV6 = IntentDefinition(
@@ -206,6 +205,13 @@ class IntentRegistry:
         required_params=["process_id"],
     )
     
+    ROUTING_OSPF_ADD_NETWORK = IntentDefinition(
+        name="routing.ospf.add_network",
+        category=IntentCategory.ROUTING,
+        description="Add OSPF network (network <ip> <wildcard> area <area>)",
+        required_params=["process_id", "area", "network", "wildcard_mask"],
+    )
+    
     ROUTING_OSPF_ADD_NETWORK_INTERFACE = IntentDefinition(
         name="routing.ospf.add_network_interface",
         category=IntentCategory.ROUTING,
@@ -319,45 +325,6 @@ class IntentRegistry:
         is_read_only=True,
     )
     
-    # ===== VLAN INTENTS (Future) =====
-    VLAN_CREATE = IntentDefinition(
-        name="vlan.create",
-        category=IntentCategory.VLAN,
-        description="Create VLAN",
-        required_params=["vlan_id"],
-        optional_params=["name", "description"],
-    )
-    
-    VLAN_DELETE = IntentDefinition(
-        name="vlan.delete",
-        category=IntentCategory.VLAN,
-        description="Delete VLAN",
-        required_params=["vlan_id"],
-    )
-    
-    VLAN_UPDATE = IntentDefinition(
-        name="vlan.update",
-        category=IntentCategory.VLAN,
-        description="Update VLAN attributes",
-        required_params=["vlan_id"],
-        optional_params=["name", "description"],
-    )
-    
-    VLAN_ASSIGN_PORT = IntentDefinition(
-        name="vlan.assign_port",
-        category=IntentCategory.VLAN,
-        description="Assign port to VLAN",
-        required_params=["interface", "vlan_id"],
-        optional_params=["mode"],  # access | trunk
-    )
-    
-    SHOW_VLANS = IntentDefinition(
-        name="show.vlans",
-        category=IntentCategory.SHOW,
-        description="Show all VLANs",
-        required_params=[],
-        is_read_only=True,
-    )
     
     # ===== DHCP INTENTS =====
     DHCP_CREATE_POOL = IntentDefinition(
@@ -482,8 +449,7 @@ class Intents:
         # OSPF
         OSPF_NEIGHBORS = "show.ospf.neighbors"
         OSPF_DATABASE = "show.ospf.database"
-        # VLAN & DHCP
-        VLANS = "show.vlans"
+        # DHCP
         DHCP_POOLS = "show.dhcp_pools"
     
     class ROUTING:
@@ -494,6 +460,7 @@ class Intents:
         # OSPF
         OSPF_ENABLE = "routing.ospf.enable"
         OSPF_DISABLE = "routing.ospf.disable"
+        OSPF_ADD_NETWORK = "routing.ospf.add_network"
         OSPF_ADD_NETWORK_INTERFACE = "routing.ospf.add_network_interface"
         OSPF_REMOVE_NETWORK_INTERFACE = "routing.ospf.remove_network_interface"
         OSPF_SET_ROUTER_ID = "routing.ospf.set_router_id"
@@ -512,11 +479,6 @@ class Intents:
         STATUS = "device.status"
         LIST = "device.list"
     
-    class VLAN:
-        CREATE = "vlan.create"
-        DELETE = "vlan.delete"
-        UPDATE = "vlan.update"
-        ASSIGN_PORT = "vlan.assign_port"
     
     class DHCP:
         CREATE_POOL = "dhcp.create_pool"

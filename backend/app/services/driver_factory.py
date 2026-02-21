@@ -26,7 +26,6 @@ class DriverFactory:
     _interface_drivers: Dict[str, Type[BaseDriver]] = {}
     _routing_drivers: Dict[str, Type[BaseDriver]] = {}
     _system_drivers: Dict[str, Type[BaseDriver]] = {}
-    _vlan_drivers: Dict[str, Type[BaseDriver]] = {}
     _dhcp_drivers: Dict[str, Type[BaseDriver]] = {}
     
     @classmethod
@@ -37,49 +36,32 @@ class DriverFactory:
         
         # Interface Drivers
         from app.drivers.cisco.ios_xe.interface import CiscoInterfaceDriver
-        from app.drivers.huawei.interface import HuaweiInterfaceDriver
+        from app.drivers.huawei.vrp8.interface import HuaweiInterfaceDriver
         cls._interface_drivers = {
-            "cisco": CiscoInterfaceDriver,
-            "huawei": HuaweiInterfaceDriver,
-            "IOS_XE": CiscoInterfaceDriver,
+            "CISCO_IOS_XE": CiscoInterfaceDriver,
             "HUAWEI_VRP": HuaweiInterfaceDriver,
         }
         
         # Routing Drivers
         from app.drivers.cisco.ios_xe.routing import CiscoRoutingDriver
-        from app.drivers.huawei.routing import HuaweiRoutingDriver
+        from app.drivers.huawei.vrp8.routing import HuaweiRoutingDriver
         cls._routing_drivers = {
-            "cisco": CiscoRoutingDriver,
-            "huawei": HuaweiRoutingDriver,
-            "IOS_XE": CiscoRoutingDriver,
+            "CISCO_IOS_XE": CiscoRoutingDriver,
             "HUAWEI_VRP": HuaweiRoutingDriver,
         }
         
         # System Drivers
         from app.drivers.cisco.ios_xe.system import CiscoSystemDriver
-        from app.drivers.huawei.system import HuaweiSystemDriver
+        from app.drivers.huawei.vrp8.system import HuaweiSystemDriver
         cls._system_drivers = {
-            "cisco": CiscoSystemDriver,
-            "huawei": HuaweiSystemDriver,
-            "IOS_XE": CiscoSystemDriver,
+            "CISCO_IOS_XE": CiscoSystemDriver,
             "HUAWEI_VRP": HuaweiSystemDriver,
         }
         
-        # VLAN Drivers
-        from app.drivers.cisco.ios_xe.vlan import CiscoVlanDriver
-        from app.drivers.huawei.vlan import HuaweiVlanDriver
-        cls._vlan_drivers = {
-            "cisco": CiscoVlanDriver,
-            "huawei": HuaweiVlanDriver,
-            "IOS_XE": CiscoVlanDriver,
-            "HUAWEI_VRP": HuaweiVlanDriver,
-        }
-        
         # DHCP Drivers (Huawei only for now)
-        from app.drivers.huawei.dhcp import HuaweiDhcpDriver
+        from app.drivers.huawei.vrp8.dhcp import HuaweiDhcpDriver
         
         cls._dhcp_drivers = {
-            "huawei": HuaweiDhcpDriver,
             "HUAWEI_VRP": HuaweiDhcpDriver,
         }
         
@@ -94,7 +76,6 @@ class DriverFactory:
             IntentCategory.INTERFACE: cls._interface_drivers,
             IntentCategory.ROUTING: cls._routing_drivers,
             IntentCategory.SYSTEM: cls._system_drivers,
-            IntentCategory.VLAN: cls._vlan_drivers,
             IntentCategory.DHCP: cls._dhcp_drivers,
             IntentCategory.SHOW: cls._interface_drivers,  # Default for show operations
         }
@@ -115,7 +96,7 @@ class DriverFactory:
         Args:
             node_id: Device node identifier (for logging/context)
             vendor: Vendor name ("cisco", "huawei") - Legacy fallback
-            os_type: OS Type ("IOS_XE", "HUAWEI_VRP") - Preferred
+            os_type: OS Type ("CISCO_IOS_XE", "HUAWEI_VRP") - Preferred
             category: Intent category to select driver type
             
         Returns:
@@ -127,20 +108,16 @@ class DriverFactory:
         registry = cls._get_registry(category)
         driver_class = None
 
-        # 1. Try OS Type first
+        # Try OS Type (only valid selector)
         if os_type:
             driver_class = registry.get(os_type)
-        
-        # 2. Fallback to Vendor
-        if not driver_class:
-            vendor_lower = vendor.lower()
-            driver_class = registry.get(vendor_lower)
             
         if not driver_class:
             msg = f"No driver found for category '{category.value}'."
             if os_type:
-                msg += f" os_type='{os_type}'"
-            msg += f" vendor='{vendor}'"
+                msg += f" os_type='{os_type}' is not supported."
+            else:
+                msg += f" Device has no os_type set. Please assign an OS type in the database."
             
             raise UnsupportedVendor(msg)
         
@@ -159,3 +136,64 @@ class DriverFactory:
         """
         registry = cls._get_registry(category)
         return vendor in registry or vendor.lower() in registry
+
+    @classmethod
+    def get_intents_by_os(cls) -> dict:
+        """
+        Get all supported intents grouped by OS type.
+        
+        Returns dict like:
+        {
+            "cisco_ios_xe": {
+                "interface": ["interface.set_ipv4", ...],
+                "routing": ["routing.static_add", ...],
+                ...
+            },
+            "huawei_vrp8": {
+                "interface": ["interface.set_ipv4", ...],
+                ...
+            }
+        }
+        """
+        cls._load_drivers()
+        
+        # Map OS label -> list of (category_name, driver_class)
+        os_drivers = {
+            "cisco_ios_xe": [],
+            "huawei_vrp8": [],
+        }
+        
+        # Collect unique driver classes per OS
+        category_map = {
+            "interface": cls._interface_drivers,
+            "routing": cls._routing_drivers,
+            "system": cls._system_drivers,
+            "dhcp": cls._dhcp_drivers,
+        }
+        
+        for cat_name, registry in category_map.items():
+            for key, driver_class in registry.items():
+                if key == "CISCO_IOS_XE":
+                    os_drivers["cisco_ios_xe"].append((cat_name, driver_class))
+                elif key == "HUAWEI_VRP":
+                    os_drivers["huawei_vrp8"].append((cat_name, driver_class))
+        
+        # Build result: deduplicate and collect intents
+        result = {}
+        for os_label, entries in os_drivers.items():
+            seen_classes = set()
+            os_intents = {}
+            for cat_name, driver_class in entries:
+                if driver_class in seen_classes:
+                    continue
+                seen_classes.add(driver_class)
+                intents = sorted(driver_class.SUPPORTED_INTENTS)
+                if intents:
+                    os_intents[cat_name] = intents
+            if os_intents:
+                result[os_label] = {
+                    "categories": os_intents,
+                    "total": sum(len(v) for v in os_intents.values())
+                }
+        
+        return result

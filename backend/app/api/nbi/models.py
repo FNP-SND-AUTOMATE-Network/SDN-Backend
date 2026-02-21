@@ -120,6 +120,7 @@ class IntentListResponse(BaseModel):
     code: str
     message: str
     intents: Dict[str, List[str]]
+    intents_by_os: Optional[Dict[str, Any]] = None
 
 
 class AutoCreateRequest(BaseModel):

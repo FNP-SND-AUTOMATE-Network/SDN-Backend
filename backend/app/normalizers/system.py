@@ -21,10 +21,10 @@ class SystemNormalizer:
     def normalize_show_version(self, driver_used: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize show version response"""
         
-        if driver_used == "cisco" or driver_used == "IOS_XE":
+        if driver_used == "CISCO_IOS_XE":
             return self._normalize_cisco_version(raw)
         
-        if driver_used == "huawei" or driver_used == "HUAWEI_VRP":
+        if driver_used == "HUAWEI_VRP":
             return self._normalize_huawei_version(raw)
 
         return {"vendor": driver_used, "raw": raw}
@@ -32,10 +32,10 @@ class SystemNormalizer:
     def normalize_show_running_config(self, driver_used: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize running config response → structured JSON for frontend"""
         
-        if driver_used == "cisco" or driver_used == "IOS_XE":
+        if driver_used == "CISCO_IOS_XE":
             return self._normalize_cisco_running_config(raw)
         
-        if driver_used == "huawei" or driver_used == "HUAWEI_VRP":
+        if driver_used == "HUAWEI_VRP":
             return self._normalize_huawei_running_config(raw)
         
         

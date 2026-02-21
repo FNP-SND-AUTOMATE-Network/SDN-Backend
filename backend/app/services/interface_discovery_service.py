@@ -52,10 +52,10 @@ class InterfaceDiscoveryService:
         # Fetch from device
         logger.info(f"InterfaceDiscovery: fetching interfaces from {node_id}")
 
-        if vendor.lower() == "cisco":
+        if vendor == "CISCO_IOS_XE":
             interfaces = await self._discover_cisco(node_id)
-        elif vendor.lower() == "huawei":
-            interfaces = self._parse_huawei({})
+        elif vendor == "HUAWEI_VRP":
+            interfaces = await self._discover_huawei(node_id)
         else:
             interfaces = await self._discover_cisco(node_id)
 
@@ -369,12 +369,105 @@ class InterfaceDiscoveryService:
         }
         return mapping.get(media_str, media_str)
 
-    # ===== Huawei Parser (placeholder) =====
+    async def _discover_huawei(self, node_id: str) -> List[Dict[str, Any]]:
+        """
+        Fetch Huawei VRP8 interfaces. ODL usually returns merged operational + config
+        state for Huawei interfaces if requested without content filter, or we just
+        fetch operational datastore which contains both.
+        """
+        mount = odl_mount_base(node_id)
+        
+        # Fetch interface list from operational datastore (contains status + config)
+        try:
+            raw = await self._fetch_huawei_interfaces(mount)
+            return self._parse_huawei(raw)
+        except Exception as e:
+            logger.error(f"InterfaceDiscovery: Huawei fetch failed: {e}")
+            return []
+
+    async def _fetch_huawei_interfaces(self, mount: str) -> Dict[str, Any]:
+        """GET Huawei interfaces: /huawei-ifm:ifm/interfaces"""
+        spec = RequestSpec(
+            method="GET",
+            datastore="operational",
+            path=f"{mount}/huawei-ifm:ifm/interfaces",
+            payload=None,
+            headers={"Accept": "application/yang-data+json"},
+            intent="discovery.interfaces.huawei",
+            driver="interface_discovery",
+        )
+        return await self.odl.send(spec)
 
     def _parse_huawei(self, raw: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Parse Huawei interface response (placeholder for future)"""
-        logger.warning("Huawei interface parsing not yet implemented")
-        return []
+        """Parse Huawei interface response"""
+        result = []
+        ifm = raw.get("huawei-ifm:interfaces", {}) or raw.get("interfaces", {})
+        iface_list = ifm.get("interface", [])
+        
+        if isinstance(iface_list, dict):
+            iface_list = [iface_list]
+            
+        for entry in iface_list:
+            ifname = entry.get("ifName", "")
+            if not ifname:
+                continue
+                
+            admin_status = entry.get("ifAdminStatus", "down")
+            oper_status = entry.get("ifOperStatus", "down")
+            
+            # Extract IPv4
+            ipv4 = None
+            ipv4_address = None
+            subnet_mask = None
+            ipv4_config = entry.get("huawei-ip:ipv4Config", {}) or entry.get("ipv4Config", {})
+            am4_addrs = ipv4_config.get("am4CfgAddrs", {}).get("am4CfgAddr", [])
+            if isinstance(am4_addrs, dict):
+                am4_addrs = [am4_addrs]
+                
+            if am4_addrs:
+                # Take the main address
+                main_addr = next((addr for addr in am4_addrs if addr.get("addrType") == "main"), am4_addrs[0])
+                ipv4_address = main_addr.get("ifIpAddr")
+                subnet_mask = main_addr.get("subnetMask")
+                if ipv4_address and subnet_mask:
+                    ipv4 = f"{ipv4_address} ({subnet_mask})"
+            
+            # Extract IPv6
+            ipv6 = None
+            ipv6_config = entry.get("huawei-ip:ipv6Config", {}) or entry.get("ipv6Config", {})
+            am6_addrs = ipv6_config.get("am6CfgAddrs", {}).get("am6CfgAddr", [])
+            if isinstance(am6_addrs, dict):
+                am6_addrs = [am6_addrs]
+                
+            if am6_addrs:
+                main_v6 = next((addr for addr in am6_addrs if addr.get("addrType6") == "global"), am6_addrs[0])
+                v6_addr = main_v6.get("ifIp6Addr")
+                v6_len = main_v6.get("addrPrefixLen") or main_v6.get("ifIp6AddrPrefixLen")
+                if v6_addr:
+                    ipv6 = f"{v6_addr}/{v6_len}" if v6_len else v6_addr
+            
+            result.append({
+                "name": ifname,
+                "type": entry.get("ifType", "unknown"),
+                "number": entry.get("ifNumber", "0"),
+                "description": entry.get("ifDescr"),
+                "admin_status": admin_status.lower(),
+                "oper_status": oper_status.lower(),
+                "ipv4": ipv4,
+                "ipv4_address": ipv4_address,
+                "subnet_mask": subnet_mask,
+                "ipv6": ipv6,
+                "mtu": entry.get("ifMtu"),
+                "has_ospf": False, # OSPF discovery can be added later
+                "ospf": None,
+                "mac_address": entry.get("ifMac"),
+                "speed": self._format_speed(entry.get("ifSpeed")),
+                "duplex": self._format_duplex(entry.get("ifDuplex")),
+            })
+            
+        # Sort interfaces
+        result.sort(key=lambda x: x["name"])
+        return result
 
     # ===== Cache Helpers =====
 

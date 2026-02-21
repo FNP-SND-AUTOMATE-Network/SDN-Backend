@@ -30,6 +30,6 @@ class DeviceProfile(BaseModel):
     device_id: str              # Database UUID (internal)
     node_id: str                # ODL node identifier = API 'deviceId'
     vendor: str                 # "cisco" | "huawei" | etc. (Legacy, still used for some logic)
-    os_type: Optional[str] = None # "IOS_XE" | "HUAWEI_VRP" | "OTHER" (New driver selection logic)
+    os_type: Optional[str] = None # "CISCO_IOS_XE" | "HUAWEI_VRP" | "CISCO_IOS" | "CISCO_NXOS" | etc.
     model: Optional[str] = None
     role: str = "router"        # router | switch

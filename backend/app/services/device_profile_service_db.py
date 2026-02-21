@@ -46,23 +46,24 @@ class DeviceProfileService:
             logger.error(f"Error fetching OS types: {e}")
             return {}
     
-    def _db_to_profile(self, db_device, os_type: Optional[str] = None) -> DeviceProfile:
+    def _db_to_profile(self, db_device) -> DeviceProfile:
         """
         แปลง DeviceNetwork (DB model) เป็น DeviceProfile
+        ต้อง include operatingSystem relation ก่อนเรียก
         """
         # Map type to role
         role = "router" if db_device.type == "ROUTER" else "switch"
         
-        final_os_type = os_type
-        # Fallback if no explicit os_type passed but relation exists (unlikely in this fix)
-        if not final_os_type and getattr(db_device, 'operatingSystem', None):
-             final_os_type = db_device.operatingSystem.os_type
+        # Get os_type from included relation
+        os_type = None
+        if getattr(db_device, 'operatingSystem', None):
+            os_type = db_device.operatingSystem.os_type
 
         return DeviceProfile(
             device_id=db_device.id,
-            node_id=db_device.node_id or db_device.device_name,  # fallback to device_name
+            node_id=db_device.node_id or db_device.device_name,
             vendor=(db_device.vendor or "OTHER").lower(),
-            os_type=final_os_type,
+            os_type=os_type,
             model=db_device.device_model,
             role=role,
         )
@@ -76,16 +77,20 @@ class DeviceProfileService:
         """
         prisma = get_prisma_client()
         
+        _include = {"operatingSystem": True}
+        
         # Try to find by node_id first (for NBI compatibility)
         device = await prisma.devicenetwork.find_first(
-            where={"node_id": device_id}
+            where={"node_id": device_id},
+            include=_include,
         )
         
         # If not found, try by database ID
         if not device:
             try:
                 device = await prisma.devicenetwork.find_unique(
-                    where={"id": device_id}
+                    where={"id": device_id},
+                    include=_include,
                 )
             except Exception:
                 pass
@@ -93,39 +98,39 @@ class DeviceProfileService:
         # If still not found, try by device_name
         if not device:
             device = await prisma.devicenetwork.find_first(
-                where={"device_name": device_id}
+                where={"device_name": device_id},
+                include=_include,
             )
         
         if not device:
             raise DeviceNotFound(device_id)
         
-        os_map = await self._fetch_os_map([device])
-        return self._db_to_profile(device, os_type=os_map.get(device.os_id))
+        return self._db_to_profile(device)
     
     async def get_by_node_id(self, node_id: str) -> DeviceProfile:
         """Get device profile by ODL node_id"""
         prisma = get_prisma_client()
         
         device = await prisma.devicenetwork.find_first(
-            where={"node_id": node_id}
+            where={"node_id": node_id},
+            include={"operatingSystem": True},
         )
         
         if not device:
             raise DeviceNotFound(f"node_id: {node_id}")
         
-        os_map = await self._fetch_os_map([device])
-        return self._db_to_profile(device, os_type=os_map.get(device.os_id))
+        return self._db_to_profile(device)
     
     async def list_all(self) -> List[DeviceProfile]:
         """Get all device profiles"""
         prisma = get_prisma_client()
         
         devices = await prisma.devicenetwork.find_many(
-            order={"device_name": "asc"}
+            order={"device_name": "asc"},
+            include={"operatingSystem": True},
         )
         
-        os_map = await self._fetch_os_map(devices)
-        return [self._db_to_profile(d, os_type=os_map.get(d.os_id)) for d in devices]
+        return [self._db_to_profile(d) for d in devices]
     
     async def list_mounted(self) -> List[DeviceProfile]:
         """Get only devices that are mounted in ODL"""
@@ -136,11 +141,11 @@ class DeviceProfileService:
                 "odl_mounted": True,
                 "node_id": {"not": None}
             },
-            order={"device_name": "asc"}
+            order={"device_name": "asc"},
+            include={"operatingSystem": True},
         )
         
-        os_map = await self._fetch_os_map(devices)
-        return [self._db_to_profile(d, os_type=os_map.get(d.os_id)) for d in devices]
+        return [self._db_to_profile(d) for d in devices]
     
     async def list_by_vendor(self, vendor: str) -> List[DeviceProfile]:
         """Get devices filtered by vendor"""
@@ -151,11 +156,11 @@ class DeviceProfileService:
         
         devices = await prisma.devicenetwork.find_many(
             where={"vendor": vendor_enum},
-            order={"device_name": "asc"}
+            order={"device_name": "asc"},
+            include={"operatingSystem": True},
         )
         
-        os_map = await self._fetch_os_map(devices)
-        return [self._db_to_profile(d, os_type=os_map.get(d.os_id)) for d in devices]
+        return [self._db_to_profile(d) for d in devices]
     
     async def list_by_role(self, role: str) -> List[DeviceProfile]:
         """Get devices filtered by role (router/switch)"""
@@ -166,11 +171,11 @@ class DeviceProfileService:
         
         devices = await prisma.devicenetwork.find_many(
             where={"type": type_enum},
-            order={"device_name": "asc"}
+            order={"device_name": "asc"},
+            include={"operatingSystem": True},
         )
         
-        os_map = await self._fetch_os_map(devices)
-        return [self._db_to_profile(d, os_type=os_map.get(d.os_id)) for d in devices]
+        return [self._db_to_profile(d) for d in devices]
     
     async def check_intent_support(self, device_id: str, intent: str) -> bool:
         """Check if device supports specific intent (OpenConfig removed, always returns False)"""

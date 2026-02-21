@@ -38,6 +38,7 @@ from .odl import router as odl_router
 from .mount import router as mount_router
 from .health import router as health_router
 from .discovery import router as discovery_router
+from .topology import router as topology_router
 
 # Re-export models for backward compatibility
 from .models import (
@@ -64,3 +65,4 @@ router.include_router(odl_router)
 router.include_router(mount_router)
 router.include_router(health_router)
 router.include_router(discovery_router)
+router.include_router(topology_router)

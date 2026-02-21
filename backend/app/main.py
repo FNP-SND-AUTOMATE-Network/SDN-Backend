@@ -3,7 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.api import health, auth, audit, users, device_credentials, local_sites, tags, operating_systems, policies, backups, configuration_templates, device_networks, nbi , interfaces,odl_probe ,debug_env, interfaces, ipam
 from app.database import set_prisma_client
-
+import asyncio
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from app.services.odl_sync_service import OdlSyncService
+from app.core.logging import logger
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Connect to database
@@ -11,8 +14,25 @@ async def lifespan(app: FastAPI):
     prisma_client = Prisma()
     await prisma_client.connect()
     set_prisma_client(prisma_client)
+
+    # Startup: Initialize background sync scheduler
+    scheduler = AsyncIOScheduler()
+    sync_service = OdlSyncService()
+    
+    # Run sync every 1 minute
+    scheduler.add_job(
+        sync_service.sync_devices_from_odl, 
+        'interval', 
+        minutes=1,
+        id='sync_odl_devices',
+        replace_existing=True
+    )
+    scheduler.start()
+    logger.info("Background ODL sync scheduler started.")
+
     yield
-    # Shutdown: Disconnect from database
+    # Shutdown: Stop scheduler and disconnect database
+    scheduler.shutdown()
     await prisma_client.disconnect()
 
 app = FastAPI(
@@ -53,4 +73,3 @@ app.include_router(ipam.router)
 app.include_router(nbi.router)
 app.include_router(odl_probe.router)
 app.include_router(debug_env.router)
-

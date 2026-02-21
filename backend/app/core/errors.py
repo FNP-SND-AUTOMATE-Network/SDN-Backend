@@ -17,8 +17,15 @@ class DeviceNotMounted(HTTPException):
         )
 
 class UnsupportedIntent(HTTPException):
-    def __init__(self, intent: str):
-        super().__init__(status_code=400, detail=f"Unsupported intent: {intent}")
+    def __init__(self, message: str, os_type: str = None):
+        if os_type:
+            detail = f"Intent '{message}' is not supported in OS '{os_type}'"
+        else:
+            if " " not in message:
+                detail = f"Unsupported intent: {message}"
+            else:
+                detail = message
+        super().__init__(status_code=400, detail=detail)
 
 class DriverBuildError(HTTPException):
     def __init__(self, msg: str):

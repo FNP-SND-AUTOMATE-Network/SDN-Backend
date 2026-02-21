@@ -102,7 +102,7 @@ class CiscoRoutingDriver(BaseDriver):
         if intent == Intents.SHOW.OSPF_DATABASE:
             return self._build_show_ospf_database(mount, params)
 
-        raise UnsupportedIntent(intent)
+        raise UnsupportedIntent(intent, os_type=device.os_type)
 
     # ===== Builder Methods =====
     
@@ -326,7 +326,7 @@ class CiscoRoutingDriver(BaseDriver):
         interface = params.get("interface")
         area = params.get("area")
         
-        if not all([process_id, interface, area]):
+        if process_id is None or interface is None or area is None:
             raise DriverBuildError("params require process_id, interface, area")
         
         iface_type, iface_num = self._parse_interface_name(interface)

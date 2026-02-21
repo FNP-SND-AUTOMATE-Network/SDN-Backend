@@ -12,10 +12,10 @@ class VlanNormalizer:
     def normalize_show_vlans(self, driver_used: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize show vlans response → unified VLAN list"""
         
-        if driver_used == "cisco" or driver_used == "IOS_XE":
+        if driver_used == "CISCO_IOS_XE":
             return self._normalize_cisco_vlans(raw)
         
-        if driver_used == "huawei" or driver_used == "HUAWEI_VRP":
+        if driver_used == "HUAWEI_VRP":
             return self._normalize_huawei_vlans(raw)
         
         

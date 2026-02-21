@@ -426,6 +426,7 @@ class OdlMountService:
         while elapsed < max_wait_seconds:
             status = await self.get_connection_status(node_id)
             connection_status = status.get("connection_status")
+
             
             if connection_status == "connected":
                 # Update DB and return success
@@ -450,6 +451,16 @@ class OdlMountService:
                 }
             
             elif connection_status == "unable-to-connect":
+                prisma = get_prisma_client()
+                await prisma.devicenetwork.update(
+                    where={"id": device.id},
+                    data={
+                        "odl_connection_status": "UNABLE_TO_CONNECT",
+                        "status": "OFFLINE",
+                        "last_synced_at": datetime.utcnow()
+                    }
+                )
+                
                 return {
                     "success": False,
                     "message": f"Device {node_id} unable to connect",
@@ -465,6 +476,17 @@ class OdlMountService:
         
         # Timeout
         final_status = await self.get_connection_status(node_id)
+        
+        prisma = get_prisma_client()
+        await prisma.devicenetwork.update(
+            where={"id": device.id},
+            data={
+                "odl_connection_status": map_odl_status_to_enum(final_status.get("connection_status", "unknown")),
+                "status": "OFFLINE",
+                "last_synced_at": datetime.utcnow()
+            }
+        )
+        
         return {
             "success": False,
             "message": f"Timeout waiting for connection ({max_wait_seconds}s)",

@@ -66,6 +66,8 @@ class DeviceProfileService:
             os_type=os_type,
             model=db_device.device_model,
             role=role,
+            management_protocol=db_device.management_protocol or "NETCONF",
+            datapath_id=db_device.datapath_id,
         )
     
     async def get(self, device_id: str) -> DeviceProfile:

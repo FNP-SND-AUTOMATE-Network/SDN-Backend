@@ -47,6 +47,8 @@ async def list_devices(
                 "vendor": d.vendor,
                 "model": d.model,
                 "role": d.role,
+                "management_protocol": d.management_protocol,
+                "datapath_id": d.datapath_id,
             }
             for d in devices
         ]
@@ -143,6 +145,8 @@ async def get_device_info(device_id: str):
                 # === NBI/ODL Fields ===
                 "node_id": device.node_id,
                 "vendor": device.vendor,
+                "management_protocol": getattr(device, 'management_protocol', 'NETCONF'),
+                "datapath_id": getattr(device, 'datapath_id', None),
                 "odl_mounted": device.odl_mounted,
                 "odl_connection_status": device.odl_connection_status,
                 "last_synced_at": device.last_synced_at.isoformat() if device.last_synced_at else None,

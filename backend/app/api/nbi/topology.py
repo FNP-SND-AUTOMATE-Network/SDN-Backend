@@ -1,8 +1,9 @@
 import requests
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from typing import List, Any, Dict
+from typing import List, Any, Dict, Optional
 from app.normalizers.topology import normalize_topology
+from app.services.topology_sync import sync_odl_topology_to_db
 
 from app.core.config import settings
 
@@ -21,111 +22,122 @@ class TopologyResponse(BaseModel):
     links: List[Dict[str, Any]]
 
 
+class TopologySyncResponse(BaseModel):
+    success: bool
+    message: str
+    stats: Dict[str, int]
+
+
+@router.post("/topology/sync", response_model=TopologySyncResponse)
+async def trigger_topology_sync():
+    """
+    Trigger a manual synchronization of the Topology from ODL to the Prisma Database.
+    This fetches nodes, interface ports, and links and upserts them.
+    """
+    try:
+        stats = await sync_odl_topology_to_db()
+        return TopologySyncResponse(
+            success=True,
+            message="Topology synchronized successfully.",
+            stats=stats
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to sync topology: {str(e)}")
+
+
 @router.get("/topology", response_model=TopologyResponse)
-def get_hybrid_topology():
+async def get_hybrid_topology(
+    local_site_id: Optional[str] = Query(None, description="Filter topology by local site ID")
+):
+    """
+    ดึงข้อมูล Topology ล่าสุดจาก Database (ที่ Sync ลงมาแล้ว)
+    """
+    from app.database import get_prisma_client
+    prisma = get_prisma_client()
+    
     topology_map = {
-        "nodes": set(),
+        "nodes": [],
         "links": []
     }
 
-    AUTH = (settings.ODL_USERNAME, settings.ODL_PASSWORD)
-    HEADERS = {'Accept': 'application/json'}
-    TIMEOUT = settings.ODL_TIMEOUT_SEC
-
-    # =========================================================
-    # ส่วนที่ 1: ดึงโครงสร้าง Switch (OpenFlow)
-    # =========================================================
-    flow_url = f"{settings.ODL_BASE_URL}/rests/data/network-topology:network-topology/topology=flow:1?content=nonconfig"
-    
     try:
-        res_flow = requests.get(flow_url, auth=AUTH, headers=HEADERS, timeout=TIMEOUT)
-        
-        if res_flow.status_code == 401:
-            raise HTTPException(status_code=500, detail="ODL Authentication Failed")
-        
-        if res_flow.status_code == 200:
-            flow_data = res_flow.json()
-            topo_list = flow_data.get("network-topology:topology", flow_data.get("topology", []))
+        # =========================================================
+        # 1. ค้นหา Devices (Nodes)
+        # =========================================================
+        query_filter = {}
+        if local_site_id:
+            query_filter["local_site_id"] = local_site_id
             
-            if topo_list:
-                topo_obj = topo_list[0]
-                
-                # 1.1 ดึงชื่อโหนด OpenFlow มาเก็บไว้ (เช่น openflow:1, openflow:2)
-                for node in topo_obj.get("node", []):
-                    topology_map["nodes"].add(node["node-id"])
-                
-                # 1.2 ดึงเส้น Link ระหว่าง Switch
-                for link in topo_obj.get("link", []):
-                    source_tp = link.get("source", {}).get("source-tp")
-                    dest_tp = link.get("destination", {}).get("dest-tp")
-                    
-                    if source_tp and dest_tp:
-                        topology_map["links"].append({
-                            "source": source_tp,
-                            "target": dest_tp,
-                            "type": "OpenFlow-L2"
-                        })
-        else:
-            pass # Ignore API error
-            
-    except requests.exceptions.RequestException as e:
-        raise HTTPException(
-            status_code=503, 
-            detail=f"Service Unavailable: Cannot connect to ODL Controller. Details: {e}"
+        devices = await prisma.devicenetwork.find_many(
+            where=query_filter
         )
-
-    # =========================================================
-    # ส่วนที่ 2: ดึงการเชื่อมต่อ Router (OpenConfig LLDP + Fallback)
-    # =========================================================
-    topology_map["nodes"].add("CSR1000vT") 
-    
-    router_links = []
-    openconfig_url = f"{settings.ODL_BASE_URL}/rests/data/network-topology:network-topology/topology=topology-netconf/node=CSR1000vT/yang-ext:mount/openconfig-lldp:lldp/interfaces?content=nonconfig"
-    
-    try:
-        # ลองท่าที่ 1: OpenConfig
-        res_oc = requests.get(openconfig_url, auth=AUTH, headers=HEADERS, timeout=TIMEOUT)
-        if res_oc.status_code == 200:
-            oc_data = res_oc.json()
-            interfaces = oc_data.get("openconfig-lldp:interfaces", {}).get("interface", [])
-            for intf in interfaces:
-                local_port = intf.get("name")
-                for neighbor in intf.get("neighbors", {}).get("neighbor", []):
-                    state = neighbor.get("state", {})
-                    remote_node = state.get("system-name")
-                    remote_port = state.get("port-id")
-                    if remote_node and remote_port:
-                        router_links.append({
-                            "source": f"CSR1000vT:{local_port}",
-                            "target": f"{remote_node}:{remote_port}",
-                            "type": "NETCONF-LLDP (OpenConfig)"
-                        })
-        else:
-            raise Exception(f"Status {res_oc.status_code}")
-            
-    except Exception as e:
-        # ลองท่าที่ 2: Fallback ไป Cisco IOS-XE
-        iosxe_url = f"{settings.ODL_BASE_URL}/rests/data/network-topology:network-topology/topology=topology-netconf/node=CSR1000vT/yang-ext:mount/Cisco-IOS-XE-lldp-oper:lldp-entries?content=nonconfig"
-        try:
-            res_ios = requests.get(iosxe_url, auth=AUTH, headers=HEADERS, timeout=TIMEOUT)
-            if res_ios.status_code == 200:
-                ios_data = res_ios.json()
-                entries = ios_data.get("Cisco-IOS-XE-lldp-oper:lldp-entries", {}).get("lldp-entry", [])
-                for entry in entries:
-                    router_links.append({
-                        "source": f"CSR1000vT:{entry.get('local-interface')}",
-                        "target": f"{entry.get('device-id')}:{entry.get('connecting-interface')}",
-                        "type": "NETCONF-LLDP (Cisco Native)"
+        
+        valid_node_ids = set()
+        for d in devices:
+            if d.node_id:
+                valid_node_ids.add(d.node_id)
+                
+                # Fetch interfaces for this device to show as standalone nodes if needed
+                interfaces = await prisma.interface.find_many(where={"device_id": d.id})
+                
+                # Add the device itself to the nodes list
+                topology_map["nodes"].append({
+                    "id": d.node_id,
+                    "label": d.device_name or d.node_id,
+                    "type": "router" if d.type in ["ROUTER", "FIREWALL"] else "switch"
+                })
+                
+                # Optionally add interfaces as sub-nodes or isolated nodes
+                for intf in interfaces:
+                    intf_id = intf.tp_id or f"{d.node_id}:{intf.name}"
+                    topology_map["nodes"].append({
+                        "id": intf_id,
+                        "label": intf.name,
+                        "type": "interface",
+                        "parent": d.node_id
                     })
-        except Exception as ex:
-            pass # Ignore Router LLDP entirely
+                
+        # =========================================================
+        # 2. ค้นหา Links ที่เกี่ยวข้อง
+        # =========================================================
+        # ดึง Link ทั้งหมดที่มี Source/Target Interface ผูกกับ Device เหล่านี้
+        links = await prisma.link.find_many(
+            include={
+                "source": { "include": { "device": True } },
+                "target": { "include": { "device": True } }
+            }
+        )
+        
+        for link in links:
+            src_node_id = link.source.device.node_id
+            tgt_node_id = link.target.device.node_id
+            
+            # กรอง Link: จะต้องมี Node_id ครบ และต้องอยู่ในเงื่อนไข site ของเรา (ถ้ามีการส่ง local_site_id มา)
+            if not src_node_id or not tgt_node_id:
+                continue
+                
+            if local_site_id:
+                if src_node_id not in valid_node_ids or tgt_node_id not in valid_node_ids:
+                    continue
+            
+            # เตรียม Source/Target TP ID (หากไม่มี ใช้ port name เป็น Fallback สำหรับวาดกราฟ)
+            src_tp = link.source.tp_id or f"{src_node_id}:{link.source.name}"
+            tgt_tp = link.target.tp_id or f"{tgt_node_id}:{link.target.name}"
+            protocol_type = f"{link.source.device.management_protocol}-L2"
+                
+            topology_map["links"].append({
+                "source": src_tp,
+                "target": tgt_tp,
+                "type": protocol_type
+            })
 
-    # นำเส้น Link ของ Router ไปต่อท้ายเส้น Link ของ Switch
-    topology_map["links"].extend(router_links)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
-    # แปลง Set ให้เป็น List เพื่อให้ Pydantic/FastAPI แปลงเป็น JSON ได้ (Set จะไม่ถูกรองรับแบบ Default)
-    topology_map["nodes"] = list(topology_map["nodes"])
-    
     # Normalize data for frontend
     normalized_data = normalize_topology(topology_map)
     

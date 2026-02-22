@@ -37,16 +37,27 @@ def normalize_topology(raw_topology: Dict[str, Any]) -> Dict[str, Any]:
     normalized_links: List[Dict[str, Any]] = []
     
     # 1. Normalize Nodes
-    for node_id in raw_topology.get("nodes", []):
-        node_type = "switch"
-        if "CSR" in node_id or "Router" in node_id or "R" in node_id:
-            node_type = "router"
-            
-        normalized_nodes.append({
-            "id": node_id,
-            "label": node_id,
-            "type": node_type
-        })
+    for node in raw_topology.get("nodes", []):
+        if isinstance(node, dict):
+            # Already a dictionary structure
+            normalized_nodes.append({
+                "id": node.get("id"),
+                "label": node.get("label", node.get("id")),
+                "type": node.get("type", "switch"),
+                "parent": node.get("parent")
+            })
+        else:
+            # String parsing legacy structure
+            node_id = str(node)
+            node_type = "switch"
+            if "CSR" in node_id or "Router" in node_id or "R" in node_id:
+                node_type = "router"
+                
+            normalized_nodes.append({
+                "id": node_id,
+                "label": node_id,
+                "type": node_type
+            })
         
     # 2. Normalize Links
     for link in raw_topology.get("links", []):

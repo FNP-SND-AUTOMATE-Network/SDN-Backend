@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from app.services.interface_discovery_service import InterfaceDiscoveryService
 from app.services.device_profile_service_db import DeviceProfileService
 from app.core.logging import logger
+from app.database import get_prisma_client
 
 router = APIRouter()
 discovery_service = InterfaceDiscoveryService()
@@ -65,6 +66,83 @@ async def discover_interfaces(
             vendor=vendor,
             force_refresh=force_refresh,
         )
+
+        # ==========================================
+        # Sync discovered interfaces into Prisma DB
+        # ==========================================
+        prisma = get_prisma_client()
+        try:
+            db_device_id = device.device_id
+            for intf in interfaces:
+                intf_name = intf.get("name")
+                if intf_name:
+                    tp_id = f"{node_id}:{intf_name}"
+                    description = intf.get("description") or ""
+                    admin_status = "UP" if intf.get("admin_status") == "up" else "DOWN"
+                    
+                    ipv4_addr = intf.get("ipv4_address")
+                    subnet_mask = intf.get("subnet_mask")
+                    mac_address = intf.get("mac_address")
+                    
+                    # Parse port number
+                    port_num_str = intf.get("number")
+                    port_number = None
+                    if port_num_str and str(port_num_str).isdigit():
+                        port_number = int(port_num_str)
+                    
+                    # Parse InterfaceType Enum
+                    raw_type = intf.get("type", "").lower()
+                    if "loopback" in raw_type:
+                        intf_type = "LOOPBACK"
+                    elif "vlan" in raw_type:
+                        intf_type = "VLAN"
+                    elif "tunnel" in raw_type:
+                        intf_type = "TUNNEL"
+                    elif "virtual" in raw_type:
+                        intf_type = "VIRTUAL"
+                    elif "ethernet" in raw_type or "fast" in raw_type or "gigabit" in raw_type or "port-channel" in raw_type:
+                        intf_type = "PHYSICAL"
+                    else:
+                        intf_type = "OTHER"
+
+                    # Handle Interface Upsert
+                    intf_record = await prisma.interface.find_first(
+                        where={"device_id": db_device_id, "name": intf_name}
+                    )
+                    
+                    if intf_record:
+                        await prisma.interface.update(
+                            where={"id": intf_record.id},
+                            data={
+                                "tp_id": tp_id,
+                                "description": description,
+                                "status": admin_status,
+                                "ip_address": ipv4_addr,
+                                "subnet_mask": subnet_mask,
+                                "mac_address": mac_address,
+                                "port_number": port_number,
+                                "type": intf_type
+                            }
+                        )
+                    else:
+                        await prisma.interface.create(
+                            data={
+                                "device_id": db_device_id,
+                                "name": intf_name,
+                                "tp_id": tp_id,
+                                "description": description,
+                                "status": admin_status,
+                                "ip_address": ipv4_addr,
+                                "subnet_mask": subnet_mask,
+                                "mac_address": mac_address,
+                                "port_number": port_number,
+                                "type": intf_type
+                            }
+                        )
+        except Exception as db_e:
+            import traceback
+            traceback.print_exc()
+            logger.error(f"Failed to sync discovered interfaces to DB for {node_id}: {db_e}")
 
         return {
             "success": True,

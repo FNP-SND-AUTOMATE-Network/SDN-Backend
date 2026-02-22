@@ -40,7 +40,10 @@ class InterfaceService:
                     "label": interface_data.label,
                     "status": interface_data.status.value,
                     "type": interface_data.type.value,
-                    "description": interface_data.description
+                    "description": interface_data.description,
+                    "tp_id": interface_data.tp_id,
+                    "port_number": interface_data.port_number,
+                    "mac_address": interface_data.mac_address
                 },
                 include={"device": True}
             )
@@ -74,6 +77,9 @@ class InterfaceService:
             status=interface.status,
             type=interface.type,
             description=interface.description,
+            tp_id=interface.tp_id,
+            port_number=interface.port_number,
+            mac_address=interface.mac_address,
             created_at=interface.createdAt,
             updated_at=interface.updatedAt,
             device=device_info
@@ -179,6 +185,15 @@ class InterfaceService:
 
             if update_data.description is not None:
                 update_dict["description"] = update_data.description
+
+            if update_data.tp_id is not None:
+                update_dict["tp_id"] = update_data.tp_id
+
+            if update_data.port_number is not None:
+                update_dict["port_number"] = update_data.port_number
+
+            if update_data.mac_address is not None:
+                update_dict["mac_address"] = update_data.mac_address
 
             if not update_dict:
                 raise ValueError("ไม่มีข้อมูลที่จะอัปเดต")

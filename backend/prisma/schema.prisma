@@ -209,13 +209,19 @@ model DeviceNetwork {
   configuration_template_id String?      @db.Uuid
 
   // ========= NBI/ODL Fields =========
-  node_id               String?             @unique // ODL node-id ใน topology-netconf (ใช้สำหรับ Intent API)
-  vendor                DeviceVendor        @default(OTHER) // Vendor สำหรับเลือก driver
+  node_id String?      @unique // ODL node-id (เช่น "openflow:1" หรือ "CSR1000vT")
+  vendor  DeviceVendor @default(OTHER) // Vendor สำหรับเลือก driver
+
+  // ฟิลด์ใหม่สำหรับการแยกประเภท SDN
+  management_protocol ManagementProtocol @default(NETCONF)
+  datapath_id         String?            @unique // สำหรับ OpenFlow (เช่น "0000000000000001") กรณี NETCONF ปล่อยเป็น Null
+
   odl_mounted           Boolean             @default(false) // Mount status ใน ODL
   odl_connection_status OdlConnectionStatus @default(UNABLE_TO_CONNECT)
   last_synced_at        DateTime? // เวลาที่ sync ล่าสุดจาก ODL
 
   // ========= NETCONF Connection Fields (สำหรับ Mount) =========
+  // (สำหรับอุปกรณ์ OpenFlow ฟิลด์เหล่านี้จะเป็น Null)
   netconf_host     String? // IP/Hostname สำหรับ NETCONF connection
   netconf_port     Int     @default(830) // NETCONF port (default: 830, SSH)
   netconf_username String? // Username สำหรับ NETCONF
@@ -255,6 +261,11 @@ enum OdlConnectionStatus {
   UNABLE_TO_CONNECT
 }
 
+enum ManagementProtocol {
+  NETCONF
+  OPENFLOW
+}
+
 // ========= Interface (Network Interfaces) =========
 model Interface {
   id          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -262,9 +273,14 @@ model Interface {
   device_id   String          @db.Uuid
   device      DeviceNetwork   @relation(fields: [device_id], references: [id], onDelete: Cascade)
   label       String? // ชื่อย่อหรือป้ายกำกับ
-  status      InterfaceStatus @default(DOWN)
+  status      InterfaceStatus @default(DOWN) // ยังคงใช้ Enum เดิมของระบบ
   type        InterfaceType   @default(PHYSICAL)
   description String?
+
+  // ODL Fields สำหรับทำ Flow Rule
+  tp_id       String? @unique // Termination Point ID จาก ODL (เช่น "openflow:2:1")
+  port_number Int? // หมายเลขพอร์ตที่ใช้เขียน rule (เช่น 1, 2, 3)
+  mac_address String? // MAC address ของ Interface (ถ้าจำเป็น)
 
   // phpIPAM Integration
   phpipam_address_id String? // phpIPAM address ID
@@ -272,12 +288,35 @@ model Interface {
   subnet_mask        String? // e.g., "255.255.255.0" or "/24"
   gateway            String? // Default gateway
 
+  // Relations สำหรับ Topology L2
+  links_source Link[] @relation("SourceInterface")
+  links_target Link[] @relation("TargetInterface")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([device_id, name])
   @@index([device_id])
   @@index([status])
+  @@index([tp_id])
+}
+
+//  โมเดลใหม่: สำหรับเก็บเส้นทางการเชื่อมต่อ (Topology Link)
+model Link {
+  id      String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  link_id String @unique // ID สายเชื่อมจาก ODL (เช่น "openflow:2:2")
+
+  source_interface_id String @db.Uuid
+  target_interface_id String @db.Uuid
+
+  source Interface @relation("SourceInterface", fields: [source_interface_id], references: [id], onDelete: Cascade)
+  target Interface @relation("TargetInterface", fields: [target_interface_id], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([source_interface_id])
+  @@index([target_interface_id])
 }
 
 enum InterfaceStatus {

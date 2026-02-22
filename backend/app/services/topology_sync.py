@@ -81,11 +81,26 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
                             state = neighbor.get("state", {})
                             remote_node = state.get("system-name")
                             remote_port = state.get("port-id")
+                            
                             if remote_node and remote_port:
+                                # Clean domain from system-name (e.g., CSR1000vT.lab.local -> CSR1000vT)
+                                remote_node_clean = remote_node.split('.')[0]
+                                
+                                # Expand interface name abbreviations
+                                remote_port_clean = remote_port
+                                if remote_port_clean.startswith("Gi") and not remote_port_clean.startswith("Gigabit"):
+                                    remote_port_clean = remote_port_clean.replace("Gi", "GigabitEthernet", 1)
+                                elif remote_port_clean.startswith("Te") and not remote_port_clean.startswith("Ten"):
+                                    remote_port_clean = remote_port_clean.replace("Te", "TenGigabitEthernet", 1)
+                                elif remote_port_clean.startswith("Fa") and not remote_port_clean.startswith("Fast"):
+                                    remote_port_clean = remote_port_clean.replace("Fa", "FastEthernet", 1)
+                                elif remote_port_clean.startswith("Eth") and not remote_port_clean.startswith("Ethernet"):
+                                    remote_port_clean = remote_port_clean.replace("Eth", "Ethernet", 1)
+
                                 raw_links.append({
-                                    "link_id": f"{node_id}:{local_port}-to-{remote_node}:{remote_port}",
+                                    "link_id": f"{node_id}:{local_port}-to-{remote_node_clean}:{remote_port_clean}",
                                     "source": f"{node_id}:{local_port}",
-                                    "target": f"{remote_node}:{remote_port}",
+                                    "target": f"{remote_node_clean}:{remote_port_clean}",
                                     "type": "NETCONF"
                                 })
                 else:

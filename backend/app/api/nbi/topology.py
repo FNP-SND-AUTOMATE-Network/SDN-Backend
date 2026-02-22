@@ -85,7 +85,7 @@ async def get_hybrid_topology(
                 # Add the device itself to the nodes list
                 topology_map["nodes"].append({
                     "id": d.node_id,
-                    "label": d.node_name or d.node_id,
+                    "label": d.device_name or d.node_id,
                     "type": "router" if d.type in ["ROUTER", "FIREWALL"] else "switch"
                 })
                 

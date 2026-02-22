@@ -72,44 +72,45 @@ async def discover_interfaces(
         # ==========================================
         prisma = get_prisma_client()
         try:
-            db_device = await prisma.devicenetwork.find_unique(where={"node_id": node_id})
-            if db_device:
-                for intf in interfaces:
-                    intf_name = intf.get("name")
-                    if intf_name:
-                        tp_id = f"{node_id}:{intf_name}"
-                        description = intf.get("description", "")
-                        admin_status = "UP" if intf.get("admin_status") == "up" else "DOWN"
-                        ipv4 = intf.get("ipv4")
+            db_device_id = device.device_id
+            for intf in interfaces:
+                intf_name = intf.get("name")
+                if intf_name:
+                    tp_id = f"{node_id}:{intf_name}"
+                    description = intf.get("description", "")
+                    admin_status = "UP" if intf.get("admin_status") == "up" else "DOWN"
+                    ipv4 = intf.get("ipv4")
 
-                        # Handle Interface Upsert
-                        intf_record = await prisma.interface.find_first(
-                            where={"device_id": db_device.id, "name": intf_name}
+                    # Handle Interface Upsert
+                    intf_record = await prisma.interface.find_first(
+                        where={"device_id": db_device_id, "name": intf_name}
+                    )
+                    
+                    if intf_record:
+                        await prisma.interface.update(
+                            where={"id": intf_record.id},
+                            data={
+                                "tp_id": tp_id,
+                                "description": description,
+                                "status": admin_status,
+                                "ip_address": ipv4
+                            }
                         )
-                        
-                        if intf_record:
-                            await prisma.interface.update(
-                                where={"id": intf_record.id},
-                                data={
-                                    "tp_id": tp_id,
-                                    "description": description,
-                                    "status": admin_status,
-                                    "ip_address": ipv4
-                                }
-                            )
-                        else:
-                            await prisma.interface.create(
-                                data={
-                                    "device_id": db_device.id,
-                                    "name": intf_name,
-                                    "tp_id": tp_id,
-                                    "description": description,
-                                    "status": admin_status,
-                                    "ip_address": ipv4,
-                                    "type": "OTHER" # Mapping to explicit type could be added later
-                                }
-                            )
+                    else:
+                        await prisma.interface.create(
+                            data={
+                                "device_id": db_device_id,
+                                "name": intf_name,
+                                "tp_id": tp_id,
+                                "description": description,
+                                "status": admin_status,
+                                "ip_address": ipv4,
+                                "type": "OTHER" # Mapping to explicit type could be added later
+                            }
+                        )
         except Exception as db_e:
+            import traceback
+            traceback.print_exc()
             logger.error(f"Failed to sync discovered interfaces to DB for {node_id}: {db_e}")
 
         return {

@@ -245,6 +245,7 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
             logger.error(f"Failed to upsert interface {tp_id}: {e}")
 
     # 2.3) Upsert Links
+    active_link_ids = set()
     for ln in raw_links:
         src_uuid = interface_id_map.get(ln["source"])
         tgt_uuid = interface_id_map.get(ln["target"])
@@ -266,8 +267,31 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
                         }
                     }
                 )
+                active_link_ids.add(link_id)
                 stats["links_synced"] += 1
             except Exception as e:
                 logger.error(f"Failed to upsert link {link_id}: {e}")
+
+    # =========================================================
+    # 3. Clean up stale Links and Interfaces from Database
+    # =========================================================
+    try:
+        # 3.1) Remove Links that no longer exist in ODL topology
+        db_links = await prisma.link.find_many()
+        stale_link_ids = []
+        for db_link in db_links:
+            # We don't delete manual links (assuming they start with "MANUAL:")
+            if not db_link.link_id.startswith("MANUAL:") and db_link.link_id not in active_link_ids:
+                stale_link_ids.append(db_link.id)
+                
+        if stale_link_ids:
+            deleted_links = await prisma.link.delete_many(
+                where={"id": {"in": stale_link_ids}}
+            )
+            stats["links_deleted"] = deleted_links.count
+            logger.info(f"Deleted {deleted_links.count} stale links from topology.")
+            
+    except Exception as e:
+        logger.error(f"Failed to clean up stale links: {e}")
 
     return stats

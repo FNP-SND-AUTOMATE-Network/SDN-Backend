@@ -117,6 +117,8 @@ class DeviceNetworkService:
                 # NBI fields
                 "node_id": device_data.node_id,
                 "vendor": device_data.vendor.value if hasattr(device_data.vendor, 'value') else device_data.vendor,
+                "management_protocol": device_data.management_protocol.value if hasattr(device_data.management_protocol, 'value') else device_data.management_protocol,
+                "datapath_id": device_data.datapath_id,
                 
                 # NETCONF fields (from input or defaults)
                 "netconf_host": device_data.netconf_host or device_data.ip_address,
@@ -237,6 +239,8 @@ class DeviceNetworkService:
             # NBI/ODL Fields
             node_id=getattr(device, 'node_id', None),
             vendor=getattr(device, 'vendor', 'OTHER'),
+            management_protocol=getattr(device, 'management_protocol', 'NETCONF'),
+            datapath_id=getattr(device, 'datapath_id', None),
             netconf_host=getattr(device, 'netconf_host', None),
             netconf_port=getattr(device, 'netconf_port', 830) or 830,
             netconf_username=getattr(device, 'netconf_username', None),
@@ -425,6 +429,11 @@ class DeviceNetworkService:
             if update_data.vendor is not None:
                 update_dict["vendor"] = update_data.vendor.value
 
+            if update_data.management_protocol is not None:
+                update_dict["management_protocol"] = update_data.management_protocol.value
+
+            if update_data.datapath_id is not None:
+                update_dict["datapath_id"] = update_data.datapath_id
 
             # NETCONF Connection Fields
             if update_data.netconf_host is not None:

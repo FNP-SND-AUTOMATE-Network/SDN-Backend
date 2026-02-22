@@ -52,7 +52,9 @@ class DeviceVendor(str, Enum):
     ARISTA = "ARISTA"
     OTHER = "OTHER"
 
-
+class ManagementProtocol(str, Enum):
+    NETCONF = "NETCONF"
+    OPENFLOW = "OPENFLOW"
 
 class DeviceNetworkBase(BaseModel):
     serial_number: str = Field(..., description="Serial Number (ต้องไม่ซ้ำ)", min_length=1, max_length=100)
@@ -80,6 +82,10 @@ class DeviceNetworkBase(BaseModel):
         max_length=63
     )
     vendor: DeviceVendor = Field(default=DeviceVendor.OTHER, description="Vendor สำหรับเลือก driver")
+    
+    # Management Protocol Fields
+    management_protocol: ManagementProtocol = Field(default=ManagementProtocol.NETCONF, description="Protocol สำหรับจัดการ (NETCONF หรือ OPENFLOW)")
+    datapath_id: Optional[str] = Field(None, description="OpenFlow datapath_id (เช่น 0000000000000001)")
     
     # NETCONF Connection Fields (สำหรับ Mount)
     netconf_host: Optional[str] = Field(None, description="IP/Hostname สำหรับ NETCONF connection")
@@ -117,6 +123,10 @@ class DeviceNetworkUpdate(BaseModel):
     # NBI/ODL Fields
     node_id: Optional[str] = Field(None, description="ODL node-id สำหรับ topology-netconf", max_length=63)
     vendor: Optional[DeviceVendor] = Field(None, description="Vendor สำหรับเลือก driver")
+    
+    # Management Protocol Fields
+    management_protocol: Optional[ManagementProtocol] = Field(None, description="Protocol สำหรับจัดการ (NETCONF หรือ OPENFLOW)")
+    datapath_id: Optional[str] = Field(None, description="OpenFlow datapath_id")
     
     # NETCONF Connection Fields
     netconf_host: Optional[str] = Field(None, description="IP/Hostname สำหรับ NETCONF connection")
@@ -185,6 +195,8 @@ class DeviceNetworkResponse(BaseModel):
     # NBI/ODL Fields - node_id is OPTIONAL in response (for backward compatibility)
     node_id: Optional[str] = Field(None, description="ODL node-id (unique, URL-safe)")
     vendor: Optional[str] = Field(None, description="Vendor สำหรับเลือก driver")
+    management_protocol: Optional[str] = Field(None, description="Protocol สำหรับจัดการ")
+    datapath_id: Optional[str] = Field(None, description="OpenFlow datapath_id")
     
     # NETCONF Connection Fields
     netconf_host: Optional[str] = Field(None, description="IP/Hostname สำหรับ NETCONF")

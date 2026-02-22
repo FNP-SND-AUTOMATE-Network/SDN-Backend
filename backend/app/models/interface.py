@@ -25,6 +25,10 @@ class InterfaceBase(BaseModel):
     status: InterfaceStatus = Field(default=InterfaceStatus.DOWN, description="สถานะของ Interface")
     type: InterfaceType = Field(default=InterfaceType.PHYSICAL, description="ประเภทของ Interface")
     description: Optional[str] = Field(None, description="คำอธิบาย Interface", max_length=1000)
+    
+    tp_id: Optional[str] = Field(None, description="Termination Point ID จาก ODL สำหรัยใส่ข้อมูล topology", max_length=255)
+    port_number: Optional[int] = Field(None, description="หมายเลขพอร์ตที่ใช้เขียน rule (เช่น 1, 2, 3)")
+    mac_address: Optional[str] = Field(None, description="MAC address ของ Interface")
 
 class InterfaceCreate(InterfaceBase):
     pass
@@ -35,6 +39,10 @@ class InterfaceUpdate(BaseModel):
     status: Optional[InterfaceStatus] = Field(None, description="สถานะของ Interface")
     type: Optional[InterfaceType] = Field(None, description="ประเภทของ Interface")
     description: Optional[str] = Field(None, description="คำอธิบาย Interface", max_length=1000)
+    
+    tp_id: Optional[str] = Field(None, description="Termination Point ID จาก ODL", max_length=255)
+    port_number: Optional[int] = Field(None, description="หมายเลขพอร์ต")
+    mac_address: Optional[str] = Field(None, description="MAC address ของ Interface")
 
 class RelatedDeviceInfo(BaseModel):
     id: str
@@ -51,6 +59,11 @@ class InterfaceResponse(BaseModel):
     status: InterfaceStatus
     type: InterfaceType
     description: Optional[str]
+    
+    tp_id: Optional[str]
+    port_number: Optional[int]
+    mac_address: Optional[str]
+    
     created_at: datetime
     updated_at: datetime
     

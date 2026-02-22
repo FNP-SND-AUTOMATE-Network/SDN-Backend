@@ -78,7 +78,26 @@ async def get_hybrid_topology(
         for d in devices:
             if d.node_id:
                 valid_node_ids.add(d.node_id)
-                topology_map["nodes"].append(d.node_id)
+                
+                # Fetch interfaces for this device to show as standalone nodes if needed
+                interfaces = await prisma.interface.find_many(where={"device_id": d.id})
+                
+                # Add the device itself to the nodes list
+                topology_map["nodes"].append({
+                    "id": d.node_id,
+                    "label": d.node_name or d.node_id,
+                    "type": "router" if d.type in ["ROUTER", "FIREWALL"] else "switch"
+                })
+                
+                # Optionally add interfaces as sub-nodes or isolated nodes
+                for intf in interfaces:
+                    intf_id = intf.tp_id or f"{d.node_id}:{intf.name}"
+                    topology_map["nodes"].append({
+                        "id": intf_id,
+                        "label": intf.name,
+                        "type": "interface",
+                        "parent": d.node_id
+                    })
                 
         # =========================================================
         # 2. ค้นหา Links ที่เกี่ยวข้อง

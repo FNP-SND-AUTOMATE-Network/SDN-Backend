@@ -59,10 +59,10 @@ async def discover_interfaces(
                 detail={"error": "DEVICE_NOT_FOUND", "message": f"Device '{node_id}' not found"},
             )
 
-        vendor = device.vendor or "cisco"
+        vendor = device.os_type or device.vendor or "cisco"
 
         interfaces = await discovery_service.discover(
-            node_id=node_id,
+            node_id=device.node_id,
             vendor=vendor,
             force_refresh=force_refresh,
         )
@@ -189,10 +189,10 @@ async def get_interface_names(
                 detail={"error": "DEVICE_NOT_FOUND", "message": f"Device '{node_id}' not found"},
             )
 
-        vendor = device.vendor or "cisco"
+        vendor = device.os_type or device.vendor or "cisco"
 
         names = await discovery_service.get_interface_names(
-            node_id=node_id,
+            node_id=device.node_id,
             vendor=vendor,
             force_refresh=force_refresh,
         )

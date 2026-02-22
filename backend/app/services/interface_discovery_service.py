@@ -52,10 +52,11 @@ class InterfaceDiscoveryService:
         # Fetch from device
         logger.info(f"InterfaceDiscovery: fetching interfaces from {node_id}")
 
-        if vendor == "CISCO_IOS_XE":
-            interfaces = await self._discover_cisco(node_id)
-        elif vendor == "HUAWEI_VRP":
+        vendor_upper = str(vendor).upper()
+        if vendor_upper in ("HUAWEI_VRP", "HUAWEI"):
             interfaces = await self._discover_huawei(node_id)
+        elif vendor_upper in ("CISCO_IOS_XE", "CISCO", "CISCO_IOS", "CISCO_NXOS", "CISCO_ASA", "CISCO_NEXUS", "CISCO_IOS_XR"):
+            interfaces = await self._discover_cisco(node_id)
         else:
             interfaces = await self._discover_cisco(node_id)
 

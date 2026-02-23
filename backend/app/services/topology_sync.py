@@ -6,6 +6,7 @@ from typing import Dict, Any, List, Set, Tuple
 from app.core.config import settings
 from app.core.logging import logger
 from app.database import get_prisma_client
+from app.services.settings_service import SettingsService
 
 async def sync_odl_topology_to_db() -> Dict[str, Any]:
     """
@@ -15,9 +16,11 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
     prisma = get_prisma_client()
     
     # Credentials ODL
-    AUTH = (settings.ODL_USERNAME, settings.ODL_PASSWORD)
+    odl_config = await SettingsService.get_odl_config()
+    AUTH = (odl_config["ODL_USERNAME"], odl_config["ODL_PASSWORD"])
     HEADERS = {'Accept': 'application/json'}
-    TIMEOUT = settings.ODL_TIMEOUT_SEC
+    TIMEOUT = odl_config["ODL_TIMEOUT_SEC"]
+    ODL_BASE = odl_config["ODL_BASE_URL"]
     
     # ---------------------------------------------------------
     # 1. รวบรวมข้อมูลดิบ (Raw Data) จาก ODL ก่อน
@@ -26,7 +29,7 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
     raw_links: List[Dict[str, str]] = []
     
     # 1.1) ดึง Switch (OpenFlow)
-    flow_url = f"{settings.ODL_BASE_URL}/rests/data/network-topology:network-topology/topology=flow:1?content=nonconfig"
+    flow_url = f"{ODL_BASE}/rests/data/network-topology:network-topology/topology=flow:1?content=nonconfig"
     try:
         res_flow = requests.get(flow_url, auth=AUTH, headers=HEADERS, timeout=TIMEOUT)
         if res_flow.status_code == 200:
@@ -67,7 +70,7 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
             if not node_id: continue
             
             # ลองดึง LLDP ผ่าน OpenConfig
-            oc_url = f"{settings.ODL_BASE_URL}/rests/data/network-topology:network-topology/topology=topology-netconf/node={node_id}/yang-ext:mount/openconfig-lldp:lldp/interfaces?content=nonconfig"
+            oc_url = f"{ODL_BASE}/rests/data/network-topology:network-topology/topology=topology-netconf/node={node_id}/yang-ext:mount/openconfig-lldp:lldp/interfaces?content=nonconfig"
             
             try:
                 res_oc = requests.get(oc_url, auth=AUTH, headers=HEADERS, timeout=TIMEOUT)
@@ -107,7 +110,7 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
                     # Fallback ไป Cisco IOS-XE ทันทีถ้าไม่ได้
                     raise Exception("Try Cisco IOS-XE")
             except Exception:
-                iosxe_url = f"{settings.ODL_BASE_URL}/rests/data/network-topology:network-topology/topology=topology-netconf/node={node_id}/yang-ext:mount/Cisco-IOS-XE-lldp-oper:lldp-entries?content=nonconfig"
+                iosxe_url = f"{ODL_BASE}/rests/data/network-topology:network-topology/topology=topology-netconf/node={node_id}/yang-ext:mount/Cisco-IOS-XE-lldp-oper:lldp-entries?content=nonconfig"
                 try:
                     res_ios = requests.get(iosxe_url, auth=AUTH, headers=HEADERS, timeout=TIMEOUT)
                     if res_ios.status_code == 200:

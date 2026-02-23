@@ -15,6 +15,7 @@ class OdlRestconfClient:
     """
     
     def __init__(self):
+        # Initial values (will be updated dynamically on each request)
         self.base_url = settings.ODL_BASE_URL.rstrip("/")
         self.auth = (settings.ODL_USERNAME, settings.ODL_PASSWORD)
         self.timeout = settings.ODL_TIMEOUT_SEC
@@ -35,6 +36,13 @@ class OdlRestconfClient:
             return f"{self.base_url}/rests/data{spec.path}"
 
     async def send(self, spec: RequestSpec) -> Dict[str, Any]:
+        from app.services.settings_service import SettingsService
+        odl_config = await SettingsService.get_odl_config()
+        self.base_url = odl_config.get("ODL_BASE_URL", self.base_url).rstrip("/")
+        self.auth = (odl_config.get("ODL_USERNAME", self.auth[0]), odl_config.get("ODL_PASSWORD", self.auth[1]))
+        self.timeout = odl_config.get("ODL_TIMEOUT_SEC", self.timeout)
+        self.retry = odl_config.get("ODL_RETRY", self.retry)
+
         url = self._full_url(spec)
         headers = dict(spec.headers) if spec.headers else {}
         

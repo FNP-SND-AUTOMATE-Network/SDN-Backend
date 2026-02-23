@@ -19,7 +19,7 @@ async def lifespan(app: FastAPI):
     scheduler = AsyncIOScheduler()
     sync_service = OdlSyncService()
     
-    # Run sync every 1 minute
+    # Run device sync every 1 minute
     scheduler.add_job(
         sync_service.sync_devices_from_odl, 
         'interval', 
@@ -27,6 +27,17 @@ async def lifespan(app: FastAPI):
         id='sync_odl_devices',
         replace_existing=True
     )
+    
+    # Run topology sync every 5 minutes
+    from app.services.topology_sync import sync_odl_topology_to_db
+    scheduler.add_job(
+        sync_odl_topology_to_db,
+        'interval',
+        minutes=5,
+        id='sync_odl_topology',
+        replace_existing=True
+    )
+    
     scheduler.start()
     logger.info("Background ODL sync scheduler started.")
 

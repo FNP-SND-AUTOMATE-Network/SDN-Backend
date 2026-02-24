@@ -16,6 +16,7 @@ class IntentCategory(str, Enum):
     ACL = "acl"
     DEVICE = "device"  # Device management (mount/unmount)
     DHCP = "dhcp"      # DHCP server configuration
+    FLOW = "flow"      # OpenFlow rules
 
 
 @dataclass
@@ -358,6 +359,21 @@ class IntentRegistry:
         is_read_only=True,
     )
     
+    # ===== FLOW INTENTS (OpenFlow) =====
+    FLOW_ADD = IntentDefinition(
+        name="flow.add",
+        category=IntentCategory.FLOW,
+        description="Add an OpenFlow rule",
+        required_params=["table_id", "flow_id", "priority", "match", "instructions"],
+    )
+
+    FLOW_DELETE = IntentDefinition(
+        name="flow.delete",
+        category=IntentCategory.FLOW,
+        description="Delete an OpenFlow rule",
+        required_params=["table_id", "flow_id"],
+    )
+
     # ===== Registry Map =====
     _registry: Dict[str, IntentDefinition] = {}
     
@@ -484,3 +500,7 @@ class Intents:
         CREATE_POOL = "dhcp.create_pool"
         DELETE_POOL = "dhcp.delete_pool"
         UPDATE_POOL = "dhcp.update_pool"
+
+    class FLOW:
+        ADD = "flow.add"
+        DELETE = "flow.delete"

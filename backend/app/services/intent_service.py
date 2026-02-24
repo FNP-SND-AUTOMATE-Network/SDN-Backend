@@ -142,14 +142,15 @@ class IntentService:
         if missing:
             raise UnsupportedIntent(f"Missing params: {', '.join(missing)}")
         
-        # Special handling for DEVICE category (no device profile needed for some operations)
-        if intent_def.category == IntentCategory.DEVICE:
-            return await self._handle_device_intent(req)
-        
-        # Step 3: Get device profile และ check mount status
+        # Step 3: Get device profile
         device = await self.device_profiles.get(req.node_id)
         
-        # Step 3.1: Check if device is mounted and connected
+        # OpenFlow Bypass
+        if getattr(device, "management_protocol", "NETCONF") == "OPENFLOW":
+            return await self._execute_openflow(req, device)
+        
+        # Step 4: Check if device is mounted and connected (NETCONF only)
+        # We only check this for NETCONF, OPENFLOW is handled above
         mount_status = await self.device_profiles.check_mount_status(req.node_id)
         if not mount_status.get("ready_for_intent"):
             connection_status = mount_status.get("connection_status", "unknown")
@@ -170,17 +171,51 @@ class IntentService:
                     f"Device '{req.node_id}' is not connected. "
                     f"Current status: {connection_status}. Please check device connectivity."
                 )
+                
+        # Special handling for DEVICE category (mount/unmount/status etc)
+        if intent_def.category == IntentCategory.DEVICE:
+            return await self._handle_device_intent(req)
         
-        # Step 4: Get driver directly from factory (deterministic - no fallback)
-        intent_def = IntentRegistry.get(req.intent)
+        # Step 5: Get driver directly from factory (deterministic - no fallback)
         os_type = device.os_type     # Use OsType (required: "CISCO_IOS_XE", "HUAWEI_VRP")
         driver_name = os_type or device.vendor  # os_type เป็น primary key สำหรับ driver + normalizer
         
         logger.info(f"Intent: {req.intent}, Device: {req.node_id}, "
                    f"Driver: {driver_name}, OS: {os_type} (deterministic)")
         
-        # Step 5: Execute with native driver (no fallback mechanism)
+        # Step 6: Execute with native driver (no fallback mechanism)
         return await self._execute(req, device, driver_name, os_type)
+
+    async def _execute_openflow(self, req: IntentRequest, device) -> IntentResponse:
+        """Handle OpenFlow intents, bypassing DriverFactory and NETCONF mount checks"""
+        from app.drivers.openflow.flow import OpenFlowDriver
+        
+        driver = OpenFlowDriver()
+        driver_name = "openflow"
+        
+        logger.info(f"Intent: {req.intent}, Device: {req.node_id}, "
+                   f"Driver: {driver_name}, Protocol: OPENFLOW (bypassing NETCONF)")
+                   
+        spec = driver.build(device, req.intent, req.params)
+        logger.debug(f"RequestSpec: {spec.method} {spec.path}")
+        
+        try:
+            # Send to ODL using generic client
+            raw = await self.client.send(spec)
+        except OdlRequestError as e:
+            raise OdlRequestError(
+                status_code=getattr(e, 'status_code', 502),
+                message=f"ODL OpenFlow request failed: {e}",
+                details={"original_error": str(e)}
+            ) from e
+            
+        return IntentResponse(
+            success=True,
+            intent=req.intent,
+            node_id=req.node_id,
+            driver_used=driver_name,
+            result=raw
+        )
 
     async def _handle_device_intent(self, req: IntentRequest) -> IntentResponse:
         """

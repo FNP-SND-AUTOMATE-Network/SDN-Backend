@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
@@ -43,7 +43,6 @@ class StatusDevice(str, Enum):
     MAINTENANCE = "MAINTENANCE"
     OTHER = "OTHER"
 
-# ========= NBI/ODL Enums =========
 class DeviceVendor(str, Enum):
     """Vendor สำหรับเลือก driver ใน NBI"""
     CISCO = "CISCO"
@@ -51,6 +50,10 @@ class DeviceVendor(str, Enum):
     JUNIPER = "JUNIPER"
     ARISTA = "ARISTA"
     OTHER = "OTHER"
+
+class ManagementProtocol(str, Enum):
+    NETCONF = "NETCONF"
+    OPENFLOW = "OPENFLOW"
 
 
 
@@ -72,14 +75,17 @@ class DeviceNetworkBase(BaseModel):
     local_site_id: Optional[str] = Field(None, description="Local Site ID")
     configuration_template_id: Optional[str] = Field(None, description="Configuration Template ID")
     
-    # NBI/ODL Fields - node_id is REQUIRED
-    node_id: str = Field(
-        ..., 
+    # NBI/ODL Fields - node_id is Optional now for Pre-provisioning
+    node_id: Optional[str] = Field(
+        None, 
         description="ODL node-id (unique, URL-safe). ใช้เป็น path parameter ใน API. ตัวอย่าง: CSR1, router-core-01",
-        min_length=1,
         max_length=63
     )
     vendor: DeviceVendor = Field(default=DeviceVendor.OTHER, description="Vendor สำหรับเลือก driver")
+    
+    # ฟิลด์ใหม่สำหรับการแยกประเภท SDN
+    management_protocol: ManagementProtocol = Field(default=ManagementProtocol.NETCONF, description="โปรโตคอลการจัดการ (NETCONF หรือ OPENFLOW)")
+    datapath_id: Optional[str] = Field(None, description="สำหรับ OpenFlow (เช่น '0000000000000001')")
     
     # NETCONF Connection Fields (สำหรับ Mount)
     netconf_host: Optional[str] = Field(None, description="IP/Hostname สำหรับ NETCONF connection")
@@ -90,7 +96,15 @@ class DeviceNetworkBase(BaseModel):
     @field_validator('node_id')
     @classmethod
     def validate_node_id_format(cls, v):
+        if v is None:
+            return v
         return validate_node_id(v)
+
+    @model_validator(mode='after')
+    def validate_openflow_requires_ip(self):
+        if self.management_protocol == ManagementProtocol.OPENFLOW and not self.ip_address:
+            raise ValueError('ip_address is required when management_protocol is OPENFLOW')
+        return self
 
 class DeviceNetworkCreate(DeviceNetworkBase):
     pass
@@ -117,6 +131,8 @@ class DeviceNetworkUpdate(BaseModel):
     # NBI/ODL Fields
     node_id: Optional[str] = Field(None, description="ODL node-id สำหรับ topology-netconf", max_length=63)
     vendor: Optional[DeviceVendor] = Field(None, description="Vendor สำหรับเลือก driver")
+    management_protocol: Optional[ManagementProtocol] = Field(None, description="โปรโตคอลการจัดการ")
+    datapath_id: Optional[str] = Field(None, description="สำหรับ OpenFlow (เช่น '0000000000000001')")
     
     # NETCONF Connection Fields
     netconf_host: Optional[str] = Field(None, description="IP/Hostname สำหรับ NETCONF connection")
@@ -185,6 +201,8 @@ class DeviceNetworkResponse(BaseModel):
     # NBI/ODL Fields - node_id is OPTIONAL in response (for backward compatibility)
     node_id: Optional[str] = Field(None, description="ODL node-id (unique, URL-safe)")
     vendor: Optional[str] = Field(None, description="Vendor สำหรับเลือก driver")
+    management_protocol: str = Field(default="NETCONF", description="โปรโตคอลการจัดการ")
+    datapath_id: Optional[str] = Field(None, description="สำหรับ OpenFlow")
     
     # NETCONF Connection Fields
     netconf_host: Optional[str] = Field(None, description="IP/Hostname สำหรับ NETCONF")

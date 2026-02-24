@@ -13,6 +13,7 @@ class OpenFlowDriver(BaseDriver):
     SUPPORTED_INTENTS: List[str] = [
         "flow.add",
         "flow.delete",
+        "show.flows",
     ]
 
     def build(self, device: Any, intent: str, params: Dict[str, Any]) -> RequestSpec:
@@ -30,9 +31,16 @@ class OpenFlowDriver(BaseDriver):
         
         path, payload, method = self._route_intent(intent, device, params)
         
+        # Use 'config' datastore for add/delete since we are writing to ODL.
+        # Use 'operational' datastore (or generic) when reading flows.
+        # Depending on ODL version, reading from config vs operational shows different views.
+        # For showing flows currently operating on the switch, 'operational' is standard.
+        # But we will let the intent specify if we want 'config' or 'operational', default to what is appropriate.
+        datastore = "operational" if intent == "show.flows" else "config"
+        
         return RequestSpec(
             method=method,
-            datastore="config",  # Using generic config datastore logic
+            datastore=datastore, 
             path=path,
             payload=payload,
             headers={
@@ -42,7 +50,6 @@ class OpenFlowDriver(BaseDriver):
             intent=intent,
             driver="openflow"
         )
-        
     def _route_intent(self, intent: str, device: Any, params: Dict[str, Any]) -> tuple[str, Dict[str, Any] | None, str]:
         """Route the intent to the correct handler method"""
         
@@ -102,6 +109,14 @@ class OpenFlowDriver(BaseDriver):
                   raise ValueError("flow_id is required for flow.delete")
              path = f"{base_path}/flow-node-inventory:table={table_id}/flow={flow_id}"
              return path, None, "DELETE"
+             
+        elif intent == "show.flows":
+            # If table_id is provided, show that table. Otherwise show all tables.
+            if "table_id" in params:
+                 path = f"{base_path}/flow-node-inventory:table={table_id}"
+            else:
+                 path = base_path
+            return path, None, "GET"
 
         else:
             raise UnsupportedIntent(intent, driver="openflow")

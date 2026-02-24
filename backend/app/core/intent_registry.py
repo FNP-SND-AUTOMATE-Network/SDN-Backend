@@ -373,6 +373,15 @@ class IntentRegistry:
         description="Delete an OpenFlow rule",
         required_params=["table_id", "flow_id"],
     )
+    
+    SHOW_FLOWS = IntentDefinition(
+        name="show.flows",
+        category=IntentCategory.SHOW,
+        description="Show OpenFlow rules",
+        required_params=[],
+        optional_params=["table_id"],
+        is_read_only=True,
+    )
 
     # ===== Registry Map =====
     _registry: Dict[str, IntentDefinition] = {}
@@ -467,6 +476,8 @@ class Intents:
         OSPF_DATABASE = "show.ospf.database"
         # DHCP
         DHCP_POOLS = "show.dhcp_pools"
+        # OpenFlow
+        FLOWS = "show.flows"
     
     class ROUTING:
         STATIC_ADD = "routing.static.add"

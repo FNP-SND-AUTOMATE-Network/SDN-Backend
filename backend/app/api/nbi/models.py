@@ -140,6 +140,4 @@ class UpdateNetconfRequest(BaseModel):
     """Request body สำหรับ update NETCONF credentials"""
     netconf_host: Optional[str] = Field(None, description="IP/Hostname สำหรับ NETCONF")
     netconf_port: int = Field(default=830, description="NETCONF port")
-    netconf_username: Optional[str] = Field(None, description="Username สำหรับ NETCONF")
-    netconf_password: Optional[str] = Field(None, description="Password สำหรับ NETCONF")
     vendor: Optional[str] = Field(None, description="Vendor: cisco, huawei, juniper, arista")

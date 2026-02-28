@@ -74,12 +74,13 @@ class OdlMountService:
         
         return device
     
-    def _build_mount_payload(self, device) -> Dict[str, Any]:
+    def _build_mount_payload(self, device, credentials) -> Dict[str, Any]:
         """
         สร้าง payload สำหรับ mount NETCONF node (ODL Potassium compatible)
         
         Args:
             device: DeviceNetwork object จาก DB
+            credentials: DeviceCredentials object จาก DB
         
         Returns:
             ODL mount payload with RFC-8040 compliant structure
@@ -89,9 +90,9 @@ class OdlMountService:
                 {
                     "node-id": device.node_id,
                     "netconf-node-topology:host": device.netconf_host or device.ip_address,
-                    "netconf-node-topology:port": device.netconf_port or 830,
-                    "netconf-node-topology:username": device.netconf_username,
-                    "netconf-node-topology:password": device.netconf_password,
+                    "netconf-node-topology:port": getattr(device, 'netconf_port', 830) or 830,
+                    "netconf-node-topology:username": credentials.deviceUsername,
+                    "netconf-node-topology:password": credentials.devicePassword, # Need to decode/use raw
                     # Stability parameters for ODL Potassium
                     "netconf-node-topology:tcp-only": False,
                     "netconf-node-topology:keepalive-delay": 10,
@@ -102,21 +103,21 @@ class OdlMountService:
             ]
         }
     
-    async def mount_device(self, node_id: str) -> Dict[str, Any]:
+    async def mount_device(self, node_id: str, user_id: str) -> Dict[str, Any]:
         """
         Mount device ใน ODL โดยใช้ข้อมูลจาก Database
         
         Args:
             node_id: ODL node-id (เช่น "CSR1")
+            user_id: ID ของ User ที่ทำการ mount
         
         Returns:
             {
-                "success": True/False,
-                "message": "...",
-                "node_id": "...",
-                "connection_status": "..."
+                ...
             }
         """
+        from app.services.device_credentials_service import DeviceCredentialsService
+        
         prisma = get_prisma_client()
         device = None
         
@@ -133,9 +134,12 @@ class OdlMountService:
             
             if not (device.netconf_host or device.ip_address):
                 raise ValueError("netconf_host or ip_address is required")
-            
-            if not device.netconf_username or not device.netconf_password:
-                raise ValueError("netconf_username and netconf_password are required")
+                
+            # 2.5 Fetch User Credentials
+            creds_svc = DeviceCredentialsService(prisma)
+            credentials = await creds_svc.get_device_credentials(user_id)
+            if not credentials:
+                raise ValueError("Device Credentials not configured for your profile")
             
             # 3. Check if already mounted
             if device.odl_mounted:
@@ -151,7 +155,7 @@ class OdlMountService:
                     }
             
             # 4. Build mount payload
-            payload = self._build_mount_payload(device)
+            payload = self._build_mount_payload(device, credentials)
             
             # 5. Send mount request to ODL
             node_path = f"{self.TOPOLOGY_PATH}/node={device.node_id}"
@@ -398,6 +402,7 @@ class OdlMountService:
     async def mount_and_wait(
         self, 
         node_id: str, 
+        user_id: str,
         max_wait_seconds: int = 30,
         check_interval: int = 3
     ) -> Dict[str, Any]:
@@ -406,6 +411,7 @@ class OdlMountService:
         
         Args:
             node_id: ODL node-id (เช่น "CSR1")
+            user_id: ID ของ User ที่กระทำการ mount
             max_wait_seconds: เวลารอสูงสุด (วินาที)
             check_interval: interval ในการ check status (วินาที)
         
@@ -413,7 +419,7 @@ class OdlMountService:
             Mount result พร้อม final connection status
         """
         # 1. Mount
-        mount_result = await self.mount_device(node_id)
+        mount_result = await self.mount_device(node_id, user_id)
         
         if not mount_result.get("success"):
             return mount_result

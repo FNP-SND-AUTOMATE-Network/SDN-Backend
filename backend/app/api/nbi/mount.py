@@ -3,9 +3,11 @@ NBI Mount/Unmount Endpoints
 Device mount, unmount, and status endpoints
 """
 import asyncio
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends
+from typing import Dict, Any
 from app.services.odl_mount_service import OdlMountService
 from app.core.logging import logger
+from app.api.users import get_current_user
 
 from .models import ErrorCode, MountRequest, MountResponse
 
@@ -14,7 +16,11 @@ odl_mount_service = OdlMountService()
 
 
 @router.post("/devices/{node_id}/mount", response_model=MountResponse)
-async def mount_device(node_id: str, request: MountRequest = MountRequest()):
+async def mount_device(
+    node_id: str, 
+    request: MountRequest = MountRequest(),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
     """
     🔌 Mount device ใน ODL
     
@@ -30,13 +36,16 @@ async def mount_device(node_id: str, request: MountRequest = MountRequest()):
     - `MOUNT_TIMEOUT`: รอ connection timeout
     """
     try:
+        user_id = current_user["id"]
+        
         if request.wait_for_connection:
             result = await odl_mount_service.mount_and_wait(
                 node_id=node_id,
+                user_id=user_id,
                 max_wait_seconds=request.max_wait_seconds
             )
         else:
-            result = await odl_mount_service.mount_device(node_id)
+            result = await odl_mount_service.mount_device(node_id, user_id=user_id)
         
         # Determine response code
         if result.get("success"):
@@ -109,7 +118,10 @@ async def mount_device(node_id: str, request: MountRequest = MountRequest()):
 
 
 @router.post("/devices/{node_id}/unmount", response_model=MountResponse)
-async def unmount_device(node_id: str):
+async def unmount_device(
+    node_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
     """
     🔌 Unmount device จาก ODL
     
@@ -162,7 +174,10 @@ async def unmount_device(node_id: str):
 
 
 @router.get("/devices/{node_id}/status", response_model=MountResponse)
-async def check_device_status(node_id: str):
+async def check_device_status(
+    node_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
     """
     📊 Check connection status และ sync กับ Database
     

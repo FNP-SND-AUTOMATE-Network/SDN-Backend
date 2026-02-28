@@ -160,13 +160,14 @@ class OdlConfigResponse(BaseModel):
 # ===== OpenFlow Flow Management Models =====
 
 class FlowAddRequest(BaseModel):
-    """Request body สำหรับเพิ่ม OpenFlow Flow Rule"""
-    flow_id: str = Field(..., min_length=1, description="ชื่อกฎ เช่น 'ovs1-p1-to-p2'")
+    """Request body สำหรับ Base Connectivity Flow (L1 Forwarding)"""
+    flow_id: str = Field(..., min_length=1, description="ชื่อกฎ เช่น 'base-ovs1' (ถ้า bidirectional จะต่อท้าย -forward/-reverse ให้อัตโนมัติ)")
     node_id: str = Field(..., min_length=1, description="node_id ของ OpenFlow switch (เช่น 'openflow:1')")
     inbound_interface_id: str = Field(..., description="UUID ของ Interface ขาเข้า")
     outbound_interface_id: str = Field(..., description="UUID ของ Interface ขาออก")
     priority: int = Field(default=500, ge=0, le=65535, description="Priority ของ flow rule (0-65535)")
     table_id: int = Field(default=0, ge=0, le=255, description="Flow Table ID (default: 0)")
+    bidirectional: bool = Field(default=True, description="สร้างทั้งขาไป (forward) และขากลับ (reverse) ใน 1 API call")
 
 
 class FlowDeleteRequest(BaseModel):
@@ -192,15 +193,102 @@ class TrafficSteerRequest(BaseModel):
     tcp_dst_port: int = Field(..., ge=1, le=65535, description="TCP destination port ที่ต้องการ redirect (เช่น 8080)")
     priority: int = Field(default=600, ge=0, le=65535, description="Priority (ควรสูงกว่า base wiring)")
     table_id: int = Field(default=0, ge=0, le=255, description="Flow Table ID")
+    bidirectional: bool = Field(default=True, description="สร้างทั้งขาไป + ขากลับ ใน 1 API call")
 
 
-class AclDropRequest(BaseModel):
-    """Request body สำหรับ ACL Drop Flow — block TCP traffic"""
-    flow_id: str = Field(..., min_length=1, description="ชื่อกฎ เช่น 'drop-telnet'")
-    node_id: str = Field(..., min_length=1, description="node_id ของ switch (เช่น 'openflow:1')")
-    inbound_interface_id: str = Field(..., description="UUID ของ Interface ขาเข้า (match in-port)")
-    tcp_dst_port: int = Field(..., ge=1, le=65535, description="TCP destination port ที่ต้องการ drop (เช่น 23)")
-    priority: int = Field(default=700, ge=0, le=65535, description="Priority (ควรสูงกว่า steering)")
+class AclMacDropRequest(BaseModel):
+    """L2 ACL — Drop traffic จาก source MAC เฉพาะเครื่อง"""
+    flow_id: str = Field(..., min_length=1, description="ชื่อกฎ เช่น 'acl-mac-drop'")
+    node_id: str = Field(..., min_length=1, description="node_id ของ switch")
+    src_mac: str = Field(..., min_length=11, description="Source MAC Address เช่น '00:50:79:66:68:05'")
+    priority: int = Field(default=1100, ge=0, le=65535, description="Priority (สูงมากเพื่อ block)")
     table_id: int = Field(default=0, ge=0, le=255, description="Flow Table ID")
+
+
+class AclIpBlacklistRequest(BaseModel):
+    """L3 ACL — Drop traffic ระหว่าง source IP กับ destination IP"""
+    flow_id: str = Field(..., min_length=1, description="ชื่อกฎ เช่น 'acl-ip-blacklist'")
+    node_id: str = Field(..., min_length=1, description="node_id ของ switch")
+    src_ip: str = Field(..., min_length=7, description="Source IP (CIDR) เช่น '192.168.50.5/32'")
+    dst_ip: str = Field(..., min_length=7, description="Destination IP (CIDR) เช่น '192.168.50.4/32'")
+    priority: int = Field(default=1100, ge=0, le=65535, description="Priority")
+    table_id: int = Field(default=0, ge=0, le=255, description="Flow Table ID")
+
+
+class AclPortDropRequest(BaseModel):
+    """L4 ACL — Drop traffic ที่ไปหา TCP destination port"""
+    flow_id: str = Field(..., min_length=1, description="ชื่อกฎ เช่น 'acl-port-8080-block'")
+    node_id: str = Field(..., min_length=1, description="node_id ของ switch")
+    tcp_dst_port: int = Field(..., ge=1, le=65535, description="TCP destination port เช่น 8080")
+    priority: int = Field(default=1200, ge=0, le=65535, description="Priority (สูงสุดใน ACL)")
+    table_id: int = Field(default=0, ge=0, le=255, description="Flow Table ID")
+
+
+class AclWhitelistRequest(BaseModel):
+    """Whitelist — อนุญาตเฉพาะ TCP port ที่กำหนด (action: NORMAL)"""
+    flow_id: str = Field(..., min_length=1, description="ชื่อกฎ เช่น 'acl-permit-http'")
+    node_id: str = Field(..., min_length=1, description="node_id ของ switch")
+    tcp_dst_port: int = Field(..., ge=1, le=65535, description="TCP destination port ที่อนุญาต เช่น 80")
+    priority: int = Field(default=1000, ge=0, le=65535, description="Priority (ต่ำกว่า drop เพื่อใช้คู่กับ drop-all)")
+    table_id: int = Field(default=0, ge=0, le=255, description="Flow Table ID")
+
+
+class ArpFloodRequest(BaseModel):
+    """Request body สำหรับ ARP Flood Flow — กระจาย ARP ทุกพอร์ต"""
+    flow_id: str = Field(..., min_length=1, description="ชื่อกฎ เช่น 'arp-flood-ovs1'")
+    node_id: str = Field(..., min_length=1, description="node_id ของ switch (เช่น 'openflow:1')")
+    priority: int = Field(default=400, ge=0, le=65535, description="Priority (ต่ำกว่า base wiring)")
+    table_id: int = Field(default=0, ge=0, le=255, description="Flow Table ID")
+
+
+class MacSteerRequest(BaseModel):
+    """Request body สำหรับ L2 MAC-based Steering — redirect traffic จาก source MAC เฉพาะเครื่อง"""
+    flow_id: str = Field(..., min_length=1, description="ชื่อกฎ เช่น 'steer-mac-ovs2'")
+    node_id: str = Field(..., min_length=1, description="node_id ของ switch")
+    src_mac: str = Field(..., min_length=11, description="Source MAC Address เช่น '00:50:79:66:68:05'")
+    outbound_interface_id: str = Field(..., description="UUID ของ Interface ขาออก (redirect destination)")
+    priority: int = Field(default=960, ge=0, le=65535, description="Priority (ควรสูง)")
+    table_id: int = Field(default=0, ge=0, le=255, description="Flow Table ID")
+
+
+class IpSteerRequest(BaseModel):
+    """Request body สำหรับ L3 IP-based Steering — redirect traffic ไปหา destination IP"""
+    flow_id: str = Field(..., min_length=1, description="ชื่อกฎ เช่น 'steer-ip-ovs2'")
+    node_id: str = Field(..., min_length=1, description="node_id ของ switch")
+    dst_ip: str = Field(..., min_length=7, description="Destination IP (CIDR) เช่น '192.168.50.4/32'")
+    outbound_interface_id: str = Field(..., description="UUID ของ Interface ขาออก (redirect destination)")
+    priority: int = Field(default=960, ge=0, le=65535, description="Priority (ควรสูง)")
+    table_id: int = Field(default=0, ge=0, le=255, description="Flow Table ID")
+
+
+# ========= Flow Rule DB Response (Dashboard) =========
+
+class FlowRuleItem(BaseModel):
+    """FlowRule record จาก DB — ใช้แสดง flow list บน Dashboard"""
+    id: str
+    flow_id: str
+    node_id: str
+    table_id: int
+    flow_type: str
+    priority: int
+    bidirectional: bool
+    pair_flow_id: Optional[str] = None
+    direction: Optional[str] = None
+    match_details: Optional[dict] = None
+    status: str  # PENDING | ACTIVE | FAILED | DELETED
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class FlowRuleListResponse(BaseModel):
+    """Response สำหรับ GET /flow-rules"""
+    success: bool
+    code: str
+    message: str
+    data: List[FlowRuleItem] = []
+    total: int = 0
+
+
+
 
 

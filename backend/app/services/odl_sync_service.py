@@ -346,11 +346,33 @@ class OdlSyncService:
 
                 device = matched_devices[0]
 
+                # Check if this node_id is already used by another device (to prevent Unique Constraint Error)
+                existing_node = await prisma.devicenetwork.find_unique(
+                    where={"node_id": odl_node_id}
+                )
+                
+                if existing_node and existing_node.id != device.id:
+                    # Node IP might have changed, clear the old one first
+                    await prisma.devicenetwork.update(
+                        where={"id": existing_node.id},
+                        data={
+                            "node_id": None,
+                            "status": "OFFLINE",
+                            "odl_connection_status": "UNABLE_TO_CONNECT"
+                        }
+                    )
+
+                # Extract datapath_id from node_id (e.g. "openflow:1" -> "1")
+                extracted_dp_id = None
+                if odl_node_id.startswith("openflow:"):
+                    extracted_dp_id = odl_node_id.replace("openflow:", "")
+
                 # Update Device
                 await prisma.devicenetwork.update(
                     where={"id": device.id},
                     data={
                         "node_id": odl_node_id,
+                        "datapath_id": extracted_dp_id,
                         "status": "ONLINE",
                         "odl_connection_status": "CONNECTED",
                         "last_synced_at": datetime.utcnow()
@@ -378,9 +400,16 @@ class OdlSyncService:
                             pass
 
                     # Upsert Interface
+                    # tp_id is unique, so we should first try to find by tp_id
                     existing_iface = await prisma.interface.find_unique(
-                        where={"device_id_name": {"device_id": device.id, "name": name}}
+                        where={"tp_id": tp_id}
                     )
+                    
+                    if not existing_iface:
+                        # Fallback to device_id and name if tp_id wasn't set yet
+                        existing_iface = await prisma.interface.find_unique(
+                            where={"device_id_name": {"device_id": device.id, "name": name}}
+                        )
 
                     params = {
                         "name": name,
@@ -388,10 +417,12 @@ class OdlSyncService:
                         "tp_id": tp_id,
                         "port_number": port_num,
                         "mac_address": mac_addr,
-                        "status": "UP" # สมมติว่าพอร์ตมาด้วยคือ UP
+                        "status": "UP", # สมมติว่าพอร์ตมาด้วยคือ UP
+                        "device_id": device.id # ย้ายมาผูกกับ device ปัจจุบันเสมอเผื่อเปลี่ยน
                     }
 
                     if existing_iface:
+                        # อัปเดตข้อมูลและย้าย device_id (ถ้าเปลี่ยน)
                         await prisma.interface.update(
                             where={"id": existing_iface.id},
                             data=params
@@ -400,7 +431,6 @@ class OdlSyncService:
                         await prisma.interface.create(
                             data={
                                 **params,
-                                "device_id": device.id,
                                 "type": "PHYSICAL"
                             }
                         )

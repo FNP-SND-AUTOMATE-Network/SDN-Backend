@@ -117,11 +117,8 @@ async def mount_device(
         )
 
 
-@router.post("/devices/{node_id}/unmount", response_model=MountResponse)
-async def unmount_device(
-    node_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
+@router.delete("/devices/{node_id}/mount", response_model=MountResponse)
+async def unmount_device(node_id: str):
     """
     🔌 Unmount device จาก ODL
     

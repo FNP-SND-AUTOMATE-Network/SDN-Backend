@@ -17,7 +17,7 @@ router = APIRouter()
 intent_service = IntentService()
 
 
-@router.post("/intent", response_model=IntentResponse)
+@router.post("/intents", response_model=IntentResponse)
 async def handle_intent(req: IntentRequest):
     """
     Execute an Intent-based network operation

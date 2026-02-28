@@ -15,7 +15,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -51,7 +51,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -60,8 +60,60 @@ services:
       - default
       - phpipam
 
+  # ========= Zabbix Services =========
+  zabbix-postgres-db:
+    image: postgres:15
+    container_name: zabbix-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: zabbix
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: zabbixpass
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - default
+    restart: unless-stopped
+
+  zabbix-server:
+    image: zabbix/zabbix-server-pgsql:latest
+    container_name: zabbix-server
+    environment:
+      DB_SERVER_HOST: zabbix-postgres-db
+      POSTGRES_DB: zabbix
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: zabbixpass
+    ports:
+      - "10051:10051"
+    depends_on:
+      - zabbix-postgres-db
+    networks:
+      - default
+    restart: unless-stopped
+
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-pgsql:latest
+    container_name: zabbix-web
+    environment:
+      DB_SERVER_HOST: zabbix-postgres-db
+      POSTGRES_DB: zabbix
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: zabbixpass
+      ZBX_SERVER_HOST: zabbix-server
+      PHP_TZ: Asia/Bangkok
+    ports:
+      - "8080:8080"
+    depends_on:
+      - zabbix-server
+    networks:
+      - default
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  pg_data:
+
 
 networks:
   phpipam:

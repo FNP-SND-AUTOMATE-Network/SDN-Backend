@@ -3,6 +3,7 @@ from typing import Dict, Any, Optional
 from app.database import get_db
 from app.api.users import get_current_user, check_engineer_permission
 from app.services.device_network_service import DeviceNetworkService
+from app.services.odl_sync_service import OdlSyncService
 from app.models.device_network import (
     DeviceNetworkCreate,
     DeviceNetworkUpdate,
@@ -237,6 +238,35 @@ async def assign_tags_to_device(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error assigning tags to device: {str(e)}"
+        )
+
+@router.post("/sync-openflow", response_model=Dict[str, Any], status_code=status.HTTP_200_OK)
+async def sync_openflow_devices(
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    try:
+        if current_user["role"] not in ALLOWED_ROLES:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"User role {current_user['role']} is not allowed to sync devices"
+            )
+
+        sync_service = OdlSyncService()
+        result = await sync_service.sync_openflow_devices_from_odl()
+
+        if result.get("errors"):
+            # We return 200 even with errors to show partial success, but log them
+            logger.error(f"OpenFlow Sync completed with some errors: {result['errors']}")
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error syncing OpenFlow devices: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error syncing OpenFlow devices: {str(e)}"
         )
 
 @router.delete("/{device_id}/tags", response_model=DeviceNetworkUpdateResponse)

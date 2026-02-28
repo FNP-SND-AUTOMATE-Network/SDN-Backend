@@ -84,8 +84,8 @@ class DeviceNetworkService:
                     "serial_number": device_data.serial_number,
                     "device_name": device_data.device_name,
                     "device_model": device_data.device_model,
-                    "type": device_data.type.value,
-                    "status": device_data.status.value,
+                    "type": device_data.type.value if hasattr(device_data.type, 'value') else device_data.type,
+                    "status": "OFFLINE", # Force status to OFFLINE explicitly
                     "mac_address": device_data.mac_address,
             }
 
@@ -103,7 +103,7 @@ class DeviceNetworkService:
                 "device_name": device_data.device_name,
                 "device_model": device_data.device_model,
                 "type": device_data.type.value if hasattr(device_data.type, 'value') else device_data.type,
-                "status": device_data.status.value if hasattr(device_data.status, 'value') else device_data.status,
+                "status": "OFFLINE", # Force status to OFFLINE
                 "ip_address": device_data.ip_address,
                 "mac_address": device_data.mac_address,
                 "description": device_data.description,
@@ -376,10 +376,10 @@ class DeviceNetworkService:
                 update_dict["device_model"] = update_data.device_model
 
             if update_data.type is not None:
-                update_dict["type"] = update_data.type.value
+                update_dict["type"] = update_data.type.value if hasattr(update_data.type, 'value') else update_data.type
 
             if update_data.status is not None:
-                update_dict["status"] = update_data.status.value
+                update_dict["status"] = update_data.status.value if hasattr(update_data.status, 'value') else update_data.status
 
             if update_data.ip_address is not None:
                 update_dict["ip_address"] = update_data.ip_address
@@ -423,7 +423,13 @@ class DeviceNetworkService:
                 update_dict["node_id"] = update_data.node_id
 
             if update_data.vendor is not None:
-                update_dict["vendor"] = update_data.vendor.value
+                update_dict["vendor"] = update_data.vendor.value if hasattr(update_data.vendor, 'value') else update_data.vendor
+
+            if update_data.management_protocol is not None:
+                update_dict["management_protocol"] = update_data.management_protocol.value if hasattr(update_data.management_protocol, 'value') else update_data.management_protocol
+                
+            if update_data.datapath_id is not None:
+                update_dict["datapath_id"] = update_data.datapath_id
 
             if update_data.management_protocol is not None:
                 update_dict["management_protocol"] = update_data.management_protocol.value

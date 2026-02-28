@@ -14,6 +14,7 @@ from app.clients.odl_restconf_client import OdlRestconfClient
 from app.schemas.request_spec import RequestSpec
 from app.core.logging import logger
 from app.database import get_prisma_client
+import json
 
 
 # FlowStatus string constants (match Prisma enum)
@@ -93,20 +94,38 @@ class OpenFlowService:
     ):
         """INSERT FlowRule → status=PENDING"""
         prisma = get_prisma_client()
-        return await prisma.flowrule.create(
-            data={
-                "flow_id": flow_id,
+        existing = await prisma.flowrule.find_first(
+            where={
                 "node_id": node_id,
+                "flow_id": flow_id,
                 "table_id": table_id,
-                "flow_type": flow_type,
-                "priority": priority,
-                "bidirectional": bidirectional,
-                "pair_flow_id": pair_flow_id,
-                "direction": direction,
-                "match_details": match_details if match_details else {},
-                "status": FlowStatus.PENDING,
             }
         )
+        
+        data = {
+            "flow_type": flow_type,
+            "priority": priority,
+            "bidirectional": bidirectional,
+            "pair_flow_id": pair_flow_id,
+            "direction": direction,
+            "match_details": json.dumps(match_details) if match_details else "{}",
+            "status": FlowStatus.PENDING,
+        }
+        
+        if existing:
+            return await prisma.flowrule.update(
+                where={"id": existing.id},
+                data=data,
+            )
+        else:
+            return await prisma.flowrule.create(
+                data={
+                    "flow_id": flow_id,
+                    "node_id": node_id,
+                    "table_id": table_id,
+                    **data
+                }
+            )
 
     async def _update_flow_status(self, db_id: str, status: FlowStatus):
         """Update FlowRule status"""
@@ -550,6 +569,45 @@ class OpenFlowService:
         }
 
     # ============================================================
+    # Hard Delete Flow (DB Only)
+    # ============================================================
+
+    async def hard_delete_flow(self, flow_rule_id: str) -> Dict[str, Any]:
+        """ลบ Flow Rule ออกจาก Database อย่างถาวร (Hard Delete)"""
+        prisma = get_prisma_client()
+        record = await prisma.flowrule.find_unique(where={"id": flow_rule_id})
+
+        if not record:
+            raise ValueError(f"FlowRule '{flow_rule_id}' not found")
+            
+        # บังคับห้าม Hard Delete ถ้า Flow ยังทำงานอยู่หรือรอดำเนินการ
+        if record.status in [FlowStatus.ACTIVE, FlowStatus.PENDING]:
+            raise ValueError(
+                f"Cannot hard delete flow '{record.flow_id}' because its status is {record.status}. "
+                "Please delete/deactivate it from the switch first."
+            )
+
+        await prisma.flowrule.delete(where={"id": flow_rule_id})
+        
+        # ลบคู่ (pair) ด้วยถ้ามี
+        if record.pair_flow_id:
+            pair = await prisma.flowrule.find_first(
+                where={"flow_id": record.pair_flow_id, "node_id": record.node_id}
+            )
+            if pair:
+                await prisma.flowrule.delete(where={"id": pair.id})
+                logger.info(f"Hard deleted paired flow: {pair.flow_id}")
+
+        logger.info(f"Hard deleted flow from DB: {record.flow_id} (ID: {flow_rule_id})")
+        return {
+            "success": True,
+            "message": f"Flow '{record.flow_id}' permanently deleted from database",
+            "flow_rule_id": flow_rule_id,
+            "flow_id": record.flow_id,
+            "node_id": record.node_id
+        }
+
+    # ============================================================
     # Reset Table (clear ODL + DB)
     # ============================================================
 
@@ -810,6 +868,46 @@ class OpenFlowService:
             return {
                 "success": True,
                 "message": f"Flow '{record.flow_id}' retried successfully → ACTIVE",
+                "flow_rule_id": record.id,
+                "flow_id": record.flow_id,
+                "node_id": record.node_id,
+                "status": "ACTIVE",
+                "odl_response": result,
+            }
+        except Exception as e:
+            await self._update_flow_status(record.id, FlowStatus.FAILED)
+            raise
+
+    # ============================================================
+    # Reactivate DELETED Flow
+    # ============================================================
+
+    async def reactivate_flow(self, flow_rule_id: str) -> Dict[str, Any]:
+        """เปิดใช้งาน Flow ที่เคยถูกลบไปแล้วกลับมาใหม่"""
+        prisma = get_prisma_client()
+        record = await prisma.flowrule.find_unique(where={"id": flow_rule_id})
+
+        if not record:
+            raise ValueError(f"FlowRule '{flow_rule_id}' not found")
+        if record.status != FlowStatus.DELETED:
+            raise ValueError(f"FlowRule '{flow_rule_id}' is {record.status}. Only DELETED flows can be reactivated.")
+
+        # Rebuild payload from match_details
+        match = record.match_details or {}
+        payload = self._rebuild_payload(record, match)
+
+        # Update to PENDING before retrying
+        await self._update_flow_status(record.id, FlowStatus.PENDING)
+
+        try:
+            result = await self._push_flow_to_odl(
+                record.flow_id, record.node_id, record.table_id, payload,
+            )
+            await self._update_flow_status(record.id, FlowStatus.ACTIVE)
+
+            return {
+                "success": True,
+                "message": f"Flow '{record.flow_id}' reactivated successfully → ACTIVE",
                 "flow_rule_id": record.id,
                 "flow_id": record.flow_id,
                 "node_id": record.node_id,

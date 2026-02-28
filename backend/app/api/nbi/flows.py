@@ -550,3 +550,43 @@ async def retry_flow(flow_rule_id: str):
         )
     except Exception as e:
         _handle_flow_error(e, "flow-rules.retry")
+
+# ──────────────────────────────────────────────────────────────
+# POST /flow-rules/{id}/reactivate  →  Reactivate DELETED Flow
+# ──────────────────────────────────────────────────────────────
+@router.post("/flow-rules/{flow_rule_id}/reactivate", response_model=FlowResponse)
+async def reactivate_flow(flow_rule_id: str):
+    """
+    ✨ Reactivate DELETED Flow — เปิดใช้งาน Flow ที่เคยลบไปแล้วกลับมาใหม่
+
+    ใช้เมื่อ flow ถูกลบออกจาก ODL ไปแล้ว (Status = DELETED) แต่ต้องการนำประวัติเดิม
+    ที่เคยเก็บใน Database ขึ้นมาใช้งาน (Deploy) บน ODL อีกครั้ง
+    """
+    try:
+        result = await openflow_service.reactivate_flow(flow_rule_id=flow_rule_id)
+        return FlowResponse(
+            success=True, code=ErrorCode.SUCCESS.value,
+            message=result["message"], data=result,
+        )
+    except Exception as e:
+        _handle_flow_error(e, "flow-rules.reactivate")
+
+# ──────────────────────────────────────────────────────────────
+# DELETE /flow-rules/{id}  →  Hard Delete Flow from DB
+# ──────────────────────────────────────────────────────────────
+@router.delete("/flow-rules/{flow_rule_id}", response_model=FlowResponse)
+async def hard_delete_flow(flow_rule_id: str):
+    """
+    🗑️ Hard Delete Flow — ลบประวัติ Flow ออกจาก Database ถาวร
+
+    ใช้สำหรับลบ Flow Rule ที่ผู้ใช้ไม่ต้องการเก็บประวัติไว้อีกต่อไป
+    (ข้อมูลจะหายไปจากตาราง Flow เลย ไม่สามารถ Reactivate ได้อีก)
+    """
+    try:
+        result = await openflow_service.hard_delete_flow(flow_rule_id=flow_rule_id)
+        return FlowResponse(
+            success=True, code=ErrorCode.SUCCESS.value,
+            message=result["message"], data=result,
+        )
+    except Exception as e:
+        _handle_flow_error(e, "flow-rules.hard_delete")

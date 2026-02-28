@@ -90,8 +90,6 @@ class DeviceNetworkBase(BaseModel):
     # NETCONF Connection Fields (สำหรับ Mount)
     netconf_host: Optional[str] = Field(None, description="IP/Hostname สำหรับ NETCONF connection")
     netconf_port: int = Field(default=830, description="NETCONF port (default: 830, SSH)")
-    netconf_username: Optional[str] = Field(None, description="Username สำหรับ NETCONF")
-    netconf_password: Optional[str] = Field(None, description="Password สำหรับ NETCONF")
     
     @field_validator('node_id')
     @classmethod
@@ -141,8 +139,6 @@ class DeviceNetworkUpdate(BaseModel):
     # NETCONF Connection Fields
     netconf_host: Optional[str] = Field(None, description="IP/Hostname สำหรับ NETCONF connection")
     netconf_port: Optional[int] = Field(None, description="NETCONF port")
-    netconf_username: Optional[str] = Field(None, description="Username สำหรับ NETCONF")
-    netconf_password: Optional[str] = Field(None, description="Password สำหรับ NETCONF")
     
     @field_validator('node_id')
     @classmethod
@@ -211,8 +207,6 @@ class DeviceNetworkResponse(BaseModel):
     # NETCONF Connection Fields
     netconf_host: Optional[str] = Field(None, description="IP/Hostname สำหรับ NETCONF")
     netconf_port: int = Field(default=830, description="NETCONF port")
-    netconf_username: Optional[str] = Field(None, description="Username สำหรับ NETCONF")
-    netconf_password: Optional[str] = Field(None, description="Password - will be null for security")
     
     created_at: datetime
     updated_at: datetime

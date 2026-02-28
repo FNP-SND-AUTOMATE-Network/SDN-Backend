@@ -71,10 +71,17 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         )
 
 def check_admin_permission(current_user: dict):
-    if current_user["role"] not in ["ADMIN", "OWNER"]:
+    if current_user.get("role") not in ["ADMIN", "OWNER"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to access this"
+            detail="Admin permission required"
+        )
+
+def check_engineer_permission(current_user: dict):
+    if current_user.get("role") not in ["ENGINEER", "ADMIN", "OWNER"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Engineer or Admin permission required"
         )
 
 def check_admin_or_self_permission(current_user: dict, target_user_id: str):

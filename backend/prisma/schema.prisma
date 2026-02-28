@@ -222,10 +222,8 @@ model DeviceNetwork {
 
   // ========= NETCONF Connection Fields (สำหรับ Mount) =========
   // (สำหรับอุปกรณ์ OpenFlow ฟิลด์เหล่านี้จะเป็น Null)
-  netconf_host     String? // IP/Hostname สำหรับ NETCONF connection
-  netconf_port     Int     @default(830) // NETCONF port (default: 830, SSH)
-  netconf_username String? // Username สำหรับ NETCONF
-  netconf_password String? // Password สำหรับ NETCONF (encrypted)
+  netconf_host String? // IP/Hostname สำหรับ NETCONF connection
+  netconf_port Int     @default(830) // NETCONF port (default: 830, SSH)
 
   configuration_template ConfigurationTemplate? @relation(fields: [configuration_template_id], references: [id], onDelete: SetNull)
   operatingSystem        OperatingSystem?       @relation(fields: [os_id], references: [id], onDelete: SetNull)
@@ -551,15 +549,4 @@ enum TemplateType {
   NETWORK
   SECURITY
   OTHER
-}
-
-//========== IPAM =========
-
-// ========= System Settings =========
-model SystemSettings {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  key         String   @unique
-  value       Json
-  description String?
-  updatedAt   DateTime @updatedAt
 }

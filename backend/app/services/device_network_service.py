@@ -123,8 +123,6 @@ class DeviceNetworkService:
                 # NETCONF fields (from input or defaults)
                 "netconf_host": device_data.netconf_host or device_data.ip_address,
                 "netconf_port": device_data.netconf_port,
-                "netconf_username": device_data.netconf_username,
-                "netconf_password": device_data.netconf_password,
                 
                 "odl_mounted": False,
                 "odl_connection_status": "UNABLE_TO_CONNECT"
@@ -243,8 +241,6 @@ class DeviceNetworkService:
             datapath_id=getattr(device, 'datapath_id', None),
             netconf_host=getattr(device, 'netconf_host', None),
             netconf_port=getattr(device, 'netconf_port', 830) or 830,
-            netconf_username=getattr(device, 'netconf_username', None),
-            netconf_password=None,  # ไม่ส่ง password กลับไป frontend
             # ODL Status Fields
             odl_mounted=is_mounted,
             odl_connection_status=connection_status,
@@ -447,12 +443,6 @@ class DeviceNetworkService:
 
             if update_data.netconf_port is not None:
                 update_dict["netconf_port"] = update_data.netconf_port
-
-            if update_data.netconf_username is not None:
-                update_dict["netconf_username"] = update_data.netconf_username
-
-            if update_data.netconf_password is not None:
-                update_dict["netconf_password"] = update_data.netconf_password
 
             #Validate foreign keys
             if foreign_keys_to_validate:

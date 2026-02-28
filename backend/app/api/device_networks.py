@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import Dict, Any, Optional
 from app.database import get_db
-from app.api.users import get_current_user
+from app.api.users import get_current_user, check_engineer_permission
 from app.services.device_network_service import DeviceNetworkService
 from app.services.odl_sync_service import OdlSyncService
 from app.models.device_network import (
@@ -97,11 +97,8 @@ async def create_device(
     device_svc: DeviceNetworkService = Depends(get_device_service)
 ):
     try:
-        if current_user["role"] not in ALLOWED_ROLES:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"User role {current_user['role']} is not allowed to create device"
-            )
+        # Require ENGINEER or ADMIN
+        check_engineer_permission(current_user)
 
         device = await device_svc.create_device(device_data)
         
@@ -137,11 +134,8 @@ async def update_device(
     device_svc: DeviceNetworkService = Depends(get_device_service)
 ):
     try:
-        if current_user["role"] not in ALLOWED_ROLES:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"User role {current_user['role']} is not allowed to update device"
-            )
+        # Require ENGINEER or ADMIN
+        check_engineer_permission(current_user)
 
         device = await device_svc.update_device(device_id, update_data)
         
@@ -217,11 +211,8 @@ async def assign_tags_to_device(
     device_svc: DeviceNetworkService = Depends(get_device_service)
 ):
     try:
-        if current_user["role"] not in ALLOWED_ROLES:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"User role {current_user['role']} is not allowed to assign tags to device"
-            )
+        # Require ENGINEER or ADMIN
+        check_engineer_permission(current_user)
 
         device = await device_svc.assign_tags(device_id, tag_assignment.tag_ids)
         
@@ -286,11 +277,8 @@ async def remove_tags_from_device(
     device_svc: DeviceNetworkService = Depends(get_device_service)
 ):
     try:
-        if current_user["role"] not in ALLOWED_ROLES:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"User role {current_user['role']} is not allowed to remove tags from device"
-            )
+        # Require ENGINEER or ADMIN
+        check_engineer_permission(current_user)
 
         device = await device_svc.remove_tags(device_id, tag_assignment.tag_ids)
         

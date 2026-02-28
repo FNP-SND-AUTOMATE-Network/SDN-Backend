@@ -6,7 +6,6 @@ from typing import Dict, Any, List, Set, Tuple
 from app.core.config import settings
 from app.core.logging import logger
 from app.database import get_prisma_client
-from app.services.settings_service import SettingsService
 
 async def sync_odl_topology_to_db() -> Dict[str, Any]:
     """
@@ -15,12 +14,11 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
     """
     prisma = get_prisma_client()
     
-    # Credentials ODL
-    odl_config = await SettingsService.get_odl_config()
-    AUTH = (odl_config["ODL_USERNAME"], odl_config["ODL_PASSWORD"])
+    # Credentials ODL (จาก .env)
+    AUTH = (settings.ODL_USERNAME, settings.ODL_PASSWORD)
     HEADERS = {'Accept': 'application/json'}
-    TIMEOUT = odl_config["ODL_TIMEOUT_SEC"]
-    ODL_BASE = odl_config["ODL_BASE_URL"]
+    TIMEOUT = settings.ODL_TIMEOUT_SEC
+    ODL_BASE = settings.ODL_BASE_URL.rstrip("/")
     
     # ---------------------------------------------------------
     # 1. รวบรวมข้อมูลดิบ (Raw Data) จาก ODL ก่อน

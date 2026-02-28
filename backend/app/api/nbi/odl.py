@@ -5,10 +5,10 @@ ODL node listing and sync endpoints
 import asyncio
 from fastapi import APIRouter, HTTPException, status
 from app.services.odl_sync_service import OdlSyncService
+from app.core.config import settings
 from app.core.logging import logger
 
-from .models import ErrorCode, SyncResponse, OdlConfigRequest, OdlConfigResponse
-from app.services.settings_service import SettingsService
+from .models import ErrorCode, SyncResponse, OdlConfigResponse
 
 router = APIRouter()
 odl_sync_service = OdlSyncService()
@@ -110,42 +110,18 @@ async def sync_devices_from_odl():
 @router.get("/odl/config", response_model=OdlConfigResponse)
 async def get_odl_config():
     """
-    ดึงค่า Config ของ ODL จากระบบ (ดึงจาก Cache/DB)
+    ดึงค่า Config ของ ODL จากระบบ (อ่านจาก .env)
     """
-    try:
-        config = await SettingsService.get_odl_config()
-        return OdlConfigResponse(
-            success=True,
-            data=config
-        )
-    except Exception as e:
-        logger.error(f"Failed to get ODL config: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
+    config = {
+        "ODL_BASE_URL": settings.ODL_BASE_URL,
+        "ODL_USERNAME": settings.ODL_USERNAME,
+        "ODL_PASSWORD": "********",  # ซ่อน password
+        "ODL_TIMEOUT_SEC": settings.ODL_TIMEOUT_SEC,
+        "ODL_RETRY": settings.ODL_RETRY,
+    }
+    return OdlConfigResponse(
+        success=True,
+        message="ODL config loaded from .env",
+        data=config,
+    )
 
-@router.put("/odl/config", response_model=OdlConfigResponse)
-async def update_odl_config(req: OdlConfigRequest):
-    """
-    บันทึกค่า ODL Config ใหม่ลง Database และอัปเดต Cache
-    """
-    try:
-        config = await SettingsService.update_odl_config(
-            base_url=req.odl_base_url,
-            username=req.odl_username,
-            password=req.odl_password,
-            timeout=req.odl_timeout_sec,
-            retry=req.odl_retry
-        )
-        return OdlConfigResponse(
-            success=True,
-            message="ODL config updated successfully",
-            data=config
-        )
-    except Exception as e:
-        logger.error(f"Failed to update ODL config: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )

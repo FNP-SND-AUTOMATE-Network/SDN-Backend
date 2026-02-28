@@ -171,6 +171,10 @@ class OdlMountService:
                 payload=payload
             )
             
+            import json
+            logger.info(f"--- DEBUG: Assembled ODL Mount Payload ---")
+            logger.info(json.dumps(payload, indent=2))
+            
             logger.info(f"Mounting device {device.node_id} to ODL...")
             response = await self.odl_client.send(spec)
             

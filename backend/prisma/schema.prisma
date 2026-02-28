@@ -279,7 +279,7 @@ model Interface {
 
   // ODL Fields สำหรับทำ Flow Rule
   tp_id       String? @unique // Termination Point ID จาก ODL (เช่น "openflow:2:1")
-  port_number Int? // หมายเลขพอร์ตที่ใช้เขียน rule (เช่น 1, 2, 3)
+  port_number BigInt? // หมายเลขพอร์ตที่ใช้เขียน rule (เช่น 1, 2, 3 หรือค่าใหญ่ๆ เช่น 4294967294)
   mac_address String? // MAC address ของ Interface (ถ้าจำเป็น)
 
   // phpIPAM Integration
@@ -554,3 +554,12 @@ enum TemplateType {
 }
 
 //========== IPAM =========
+
+// ========= System Settings =========
+model SystemSettings {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key         String   @unique
+  value       Json
+  description String?
+  updatedAt   DateTime @updatedAt
+}

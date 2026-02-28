@@ -16,6 +16,7 @@ class IntentCategory(str, Enum):
     ACL = "acl"
     DEVICE = "device"  # Device management (mount/unmount)
     DHCP = "dhcp"      # DHCP server configuration
+    FLOW = "flow"      # OpenFlow rules
 
 
 @dataclass
@@ -307,7 +308,7 @@ class IntentRegistry:
     # ===== DEVICE MANAGEMENT INTENTS =====
     # Note: device.mount and device.unmount removed - use dedicated REST endpoints:
     #   POST /api/v1/nbi/devices/{node_id}/mount
-    #   POST /api/v1/nbi/devices/{node_id}/unmount
+    #   DELETE /api/v1/nbi/devices/{node_id}/mount
     
     DEVICE_STATUS = IntentDefinition(
         name="device.status",
@@ -358,6 +359,30 @@ class IntentRegistry:
         is_read_only=True,
     )
     
+    # ===== FLOW INTENTS (OpenFlow) =====
+    FLOW_ADD = IntentDefinition(
+        name="flow.add",
+        category=IntentCategory.FLOW,
+        description="Add an OpenFlow rule",
+        required_params=["table_id", "flow_id", "priority", "match", "instructions"],
+    )
+
+    FLOW_DELETE = IntentDefinition(
+        name="flow.delete",
+        category=IntentCategory.FLOW,
+        description="Delete an OpenFlow rule",
+        required_params=["table_id", "flow_id"],
+    )
+    
+    SHOW_FLOWS = IntentDefinition(
+        name="show.flows",
+        category=IntentCategory.SHOW,
+        description="Show OpenFlow rules",
+        required_params=[],
+        optional_params=["table_id"],
+        is_read_only=True,
+    )
+
     # ===== Registry Map =====
     _registry: Dict[str, IntentDefinition] = {}
     
@@ -451,6 +476,8 @@ class Intents:
         OSPF_DATABASE = "show.ospf.database"
         # DHCP
         DHCP_POOLS = "show.dhcp_pools"
+        # OpenFlow
+        FLOWS = "show.flows"
     
     class ROUTING:
         STATIC_ADD = "routing.static.add"
@@ -484,3 +511,7 @@ class Intents:
         CREATE_POOL = "dhcp.create_pool"
         DELETE_POOL = "dhcp.delete_pool"
         UPDATE_POOL = "dhcp.update_pool"
+
+    class FLOW:
+        ADD = "flow.add"
+        DELETE = "flow.delete"

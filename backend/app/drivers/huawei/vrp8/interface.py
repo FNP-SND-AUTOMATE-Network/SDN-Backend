@@ -393,7 +393,7 @@ class HuaweiInterfaceDriver(BaseDriver):
         )
     
     def _build_show_interfaces(self, mount: str) -> RequestSpec:
-        path = f"{mount}/huawei-ifm:ifm/interfaces?content=config"
+        path = f"{mount}/huawei-ifm:ifm/interfaces"
         return RequestSpec(
             method="GET",
             datastore="operational",

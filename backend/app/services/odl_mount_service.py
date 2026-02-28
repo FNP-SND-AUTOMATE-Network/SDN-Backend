@@ -137,18 +137,48 @@ class OdlMountService:
             if not device.netconf_username or not device.netconf_password:
                 raise ValueError("netconf_username and netconf_password are required")
             
-            # 3. Check if already mounted
-            if device.odl_mounted:
-                # Check actual status in ODL
-                status = await self.get_connection_status(device.node_id)
-                if status.get("mounted"):
+            # 3. Check if already mounted (always check ODL regardless of DB flag)
+            odl_status = await self.get_connection_status(device.node_id)
+            
+            if odl_status.get("mounted"):
+                connection_status = odl_status.get("connection_status", "unknown")
+                
+                if connection_status == "connected":
+                    # Already mounted and connected → no action needed
+                    # Sync DB if out of sync
+                    if not device.odl_mounted:
+                        await prisma.devicenetwork.update(
+                            where={"id": device.id},
+                            data={
+                                "odl_mounted": True,
+                                "odl_connection_status": "CONNECTED",
+                                "status": "ONLINE",
+                                "last_synced_at": datetime.utcnow()
+                            }
+                        )
                     return {
                         "success": True,
-                        "message": f"Device {device.node_id} is already mounted",
+                        "message": f"Device {device.node_id} is already mounted and connected",
                         "node_id": device.node_id,
-                        "connection_status": status.get("connection_status", "unknown"),
+                        "connection_status": connection_status,
                         "already_mounted": True
                     }
+                else:
+                    # Node exists but NOT connected (connecting / unable-to-connect)
+                    # → Unmount stale node first, then remount with fresh credentials
+                    logger.info(f"Device {device.node_id} has stale mount (status: {connection_status}), unmounting before remount...")
+                    try:
+                        stale_path = f"{self.TOPOLOGY_PATH}/node={device.node_id}"
+                        stale_spec = RequestSpec(
+                            method="DELETE",
+                            path=stale_path,
+                            datastore="config",
+                            headers={"Accept": "application/yang-data+json"}
+                        )
+                        await self.odl_client.send(stale_spec)
+                        await asyncio.sleep(1)  # ให้ ODL cleanup
+                    except Exception as cleanup_err:
+                        logger.warning(f"Failed to cleanup stale mount: {cleanup_err}")
             
             # 4. Build mount payload
             payload = self._build_mount_payload(device)
@@ -455,6 +485,7 @@ class OdlMountService:
                 await prisma.devicenetwork.update(
                     where={"id": device.id},
                     data={
+                        "odl_mounted": False,
                         "odl_connection_status": "UNABLE_TO_CONNECT",
                         "status": "OFFLINE",
                         "last_synced_at": datetime.utcnow()
@@ -481,6 +512,7 @@ class OdlMountService:
         await prisma.devicenetwork.update(
             where={"id": device.id},
             data={
+                "odl_mounted": False,
                 "odl_connection_status": map_odl_status_to_enum(final_status.get("connection_status", "unknown")),
                 "status": "OFFLINE",
                 "last_synced_at": datetime.utcnow()

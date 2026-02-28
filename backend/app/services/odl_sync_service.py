@@ -40,6 +40,9 @@ class OdlSyncService:
     # ODL topology-netconf path
     NETCONF_TOPOLOGY_PATH = "/network-topology:network-topology/topology=topology-netconf"
     
+    # ODL OPENFLOW Inventory path
+    OPENFLOW_INVENTORY_PATH = "/opendaylight-inventory:nodes?content=nonconfig"
+    
     def __init__(self):
         self.odl_client = OdlRestconfClient()
     
@@ -230,6 +233,219 @@ class OdlSyncService:
             
         except Exception as e:
             logger.error(f"Sync failed: {e}")
+            result["errors"].append({"error": str(e)})
+            return result
+            
+    async def sync_openflow_devices_from_odl(self) -> Dict[str, Any]:
+        """
+        Sync ข้อมูล Device ที่เป็น OpenFlow จาก ODL แบบอัตโนมัติ
+        โดยจับคู่จาก IP Address
+        
+        Flow:
+        1. ดึงข้อมูล nodes จาก /opendaylight-inventory:nodes?content=nonconfig
+        2. วนลูปแล้วดึง node.id และ ip-address
+        3. ค้นหาใน DB ด้วย ip_address และ management_protocol = 'OPENFLOW'
+        4. อัปเดต node_id, status, last_synced_at
+        5. ซิงค์ interface (node-connector -> Interface)
+        """
+        prisma = get_prisma_client()
+        result = {
+            "synced": [],
+            "not_found": [],
+            "errors": [],
+            "duplicate_ips": [],
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+        try:
+            # 1. ปลดล็อค offline device ก่อน (สมมติว่าถ้าไม่มีใน ODL แล้วคือ OFFLINE)
+            # เราจะเก็บ ip ไว้ล่ง ๆ แล้วค่อยไป update ONLINE ใน loop
+            spec = RequestSpec(
+                method="GET",
+                path=self.OPENFLOW_INVENTORY_PATH,
+                datastore="operational",
+                headers={"Accept": "application/yang-data+json"}
+            )
+            try:
+                response = await self.odl_client.send(spec)
+                nodes_list = response.get("opendaylight-inventory:nodes", {}).get("node", [])
+                if not nodes_list:
+                    # ฟอลแบ็คสำหรับบางเวอร์ชัน ODL
+                    nodes_list = response.get("nodes", {}).get("node", [])
+            except Exception as e:
+                logger.error(f"Failed to fetch OpenFlow inventory: {e}")
+                result["errors"].append({"error": f"Failed to fetch from ODL: {str(e)}"})
+                return result
+
+            odl_active_ips = set()
+            odl_node_data = []
+
+            # 2. Extract Data
+            for node in nodes_list:
+                node_id = node.get("id")
+                ip_addr = node.get("flow-node-inventory:ip-address")
+                
+                # เก็บ node-connector ด้วย
+                connectors = node.get("node-connector", [])
+                
+                if not ip_addr or not node_id:
+                    continue
+
+                odl_active_ips.add(ip_addr)
+                odl_node_data.append({
+                    "node_id": node_id,
+                    "ip": ip_addr,
+                    "connectors": connectors
+                })
+
+            # 3. Get DB Devices with OPENFLOW
+            db_of_devices = await prisma.devicenetwork.find_many(
+                where={"management_protocol": "OPENFLOW"}
+            )
+            
+            # Map ip_address to list of devices in DB (เพื่อตรวจจับ duplicate IP)
+            ip_to_db_devices = {}
+            for d in db_of_devices:
+                if d.ip_address:
+                    if d.ip_address not in ip_to_db_devices:
+                        ip_to_db_devices[d.ip_address] = []
+                    ip_to_db_devices[d.ip_address].append(d)
+
+            # Mark devices offline that are in DB but not in ODL active IPs
+            for ip, devices in ip_to_db_devices.items():
+                if ip not in odl_active_ips:
+                    for d in devices:
+                        if d.status != "OFFLINE":
+                            await prisma.devicenetwork.update(
+                                where={"id": d.id},
+                                data={
+                                    "status": "OFFLINE",
+                                    "odl_connection_status": "UNABLE_TO_CONNECT",
+                                    "last_synced_at": datetime.utcnow()
+                                }
+                            )
+
+            # 4. Sync each ODL node to the DB
+            for odl_nd in odl_node_data:
+                odl_ip = odl_nd["ip"]
+                odl_node_id = odl_nd["node_id"]
+                connectors = odl_nd["connectors"]
+
+                matched_devices = ip_to_db_devices.get(odl_ip, [])
+
+                if not matched_devices:
+                    result["not_found"].append({"ip": odl_ip, "node_id": odl_node_id})
+                    continue
+
+                if len(matched_devices) > 1:
+                    logger.warning(f"Duplicate IP found in DB for OPENFLOW sync: {odl_ip}")
+                    result["duplicate_ips"].append(odl_ip)
+                    # ข้าม หรือเลือกตัวแรกเพื่อความปลอดภัย? เลือกเตือนแล้วจัดการตัวแรกไปก่อน
+                    # แต่ถ้าเข้มงวดคือ ข้าม
+                    continue
+
+                device = matched_devices[0]
+
+                # Check if this node_id is already used by another device (to prevent Unique Constraint Error)
+                existing_node = await prisma.devicenetwork.find_unique(
+                    where={"node_id": odl_node_id}
+                )
+                
+                if existing_node and existing_node.id != device.id:
+                    # Node IP might have changed, clear the old one first
+                    await prisma.devicenetwork.update(
+                        where={"id": existing_node.id},
+                        data={
+                            "node_id": None,
+                            "status": "OFFLINE",
+                            "odl_connection_status": "UNABLE_TO_CONNECT"
+                        }
+                    )
+
+                # Extract datapath_id from node_id (e.g. "openflow:1" -> "1")
+                extracted_dp_id = None
+                if odl_node_id.startswith("openflow:"):
+                    extracted_dp_id = odl_node_id.replace("openflow:", "")
+
+                # Update Device
+                await prisma.devicenetwork.update(
+                    where={"id": device.id},
+                    data={
+                        "node_id": odl_node_id,
+                        "datapath_id": extracted_dp_id,
+                        "status": "ONLINE",
+                        "odl_connection_status": "CONNECTED",
+                        "last_synced_at": datetime.utcnow()
+                    }
+                )
+
+                # 5. Sync Interfaces
+                for conn in connectors:
+                    tp_id = conn.get("id")
+                    port_num_str = conn.get("flow-node-inventory:port-number")
+                    mac_addr = conn.get("flow-node-inventory:hardware-address")
+                    name = conn.get("flow-node-inventory:name", tp_id)
+                    
+                    if not tp_id:
+                        continue
+                        
+                    # Parse port number
+                    port_num = None
+                    if port_num_str:
+                        try:
+                            # บางทีเป็น string "LOCAL", ข้ามถ้า cast int ไม่ได้
+                            if str(port_num_str).isdigit():
+                                port_num = int(port_num_str)
+                        except:
+                            pass
+
+                    # Upsert Interface
+                    # tp_id is unique, so we should first try to find by tp_id
+                    existing_iface = await prisma.interface.find_unique(
+                        where={"tp_id": tp_id}
+                    )
+                    
+                    if not existing_iface:
+                        # Fallback to device_id and name if tp_id wasn't set yet
+                        existing_iface = await prisma.interface.find_unique(
+                            where={"device_id_name": {"device_id": device.id, "name": name}}
+                        )
+
+                    params = {
+                        "name": name,
+                        "label": name,
+                        "tp_id": tp_id,
+                        "port_number": port_num,
+                        "mac_address": mac_addr,
+                        "status": "UP", # สมมติว่าพอร์ตมาด้วยคือ UP
+                        "device_id": device.id # ย้ายมาผูกกับ device ปัจจุบันเสมอเผื่อเปลี่ยน
+                    }
+
+                    if existing_iface:
+                        # อัปเดตข้อมูลและย้าย device_id (ถ้าเปลี่ยน)
+                        await prisma.interface.update(
+                            where={"id": existing_iface.id},
+                            data=params
+                        )
+                    else:
+                        await prisma.interface.create(
+                            data={
+                                **params,
+                                "type": "PHYSICAL"
+                            }
+                        )
+
+                result["synced"].append({
+                    "device_id": device.id,
+                    "ip_address": odl_ip,
+                    "node_id": odl_node_id,
+                    "interfaces_synced": len(connectors)
+                })
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Sync OpenFlow failed: {e}")
             result["errors"].append({"error": str(e)})
             return result
     

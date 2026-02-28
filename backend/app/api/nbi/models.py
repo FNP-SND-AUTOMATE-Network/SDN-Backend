@@ -143,3 +143,17 @@ class UpdateNetconfRequest(BaseModel):
     netconf_username: Optional[str] = Field(None, description="Username สำหรับ NETCONF")
     netconf_password: Optional[str] = Field(None, description="Password สำหรับ NETCONF")
     vendor: Optional[str] = Field(None, description="Vendor: cisco, huawei, juniper, arista")
+
+class OdlConfigRequest(BaseModel):
+    """Request body สำหรับแก้ไข ODL Config"""
+    odl_base_url: str = Field(..., description="Base URL ของ OpenDaylight")
+    odl_username: str = Field(..., description="Username สำหรับ ODL")
+    odl_password: str = Field(..., description="Password สำหรับ ODL")
+    odl_timeout_sec: float = Field(default=10.0, description="Timeout (วินาที)")
+    odl_retry: int = Field(default=1, description="จำนวนครั้งที่ Retry")
+
+class OdlConfigResponse(BaseModel):
+    """Response สำหรับแบบ ODL Config"""
+    success: bool
+    message: str = "Success"
+    data: Dict[str, Any]

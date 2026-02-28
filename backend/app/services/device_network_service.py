@@ -435,6 +435,11 @@ class DeviceNetworkService:
             if update_data.datapath_id is not None:
                 update_dict["datapath_id"] = update_data.datapath_id
 
+            if update_data.management_protocol is not None:
+                update_dict["management_protocol"] = update_data.management_protocol.value
+
+            if update_data.datapath_id is not None:
+                update_dict["datapath_id"] = update_data.datapath_id
 
             # NETCONF Connection Fields
             if update_data.netconf_host is not None:

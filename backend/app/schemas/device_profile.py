@@ -33,3 +33,5 @@ class DeviceProfile(BaseModel):
     os_type: Optional[str] = None # "CISCO_IOS_XE" | "HUAWEI_VRP" | "CISCO_IOS" | "CISCO_NXOS" | etc.
     model: Optional[str] = None
     role: str = "router"        # router | switch
+    management_protocol: str = "NETCONF"
+    datapath_id: Optional[str] = None

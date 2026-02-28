@@ -134,6 +134,10 @@ class DeviceNetworkUpdate(BaseModel):
     management_protocol: Optional[ManagementProtocol] = Field(None, description="โปรโตคอลการจัดการ")
     datapath_id: Optional[str] = Field(None, description="สำหรับ OpenFlow (เช่น '0000000000000001')")
     
+    # Management Protocol Fields
+    management_protocol: Optional[ManagementProtocol] = Field(None, description="Protocol สำหรับจัดการ (NETCONF หรือ OPENFLOW)")
+    datapath_id: Optional[str] = Field(None, description="OpenFlow datapath_id")
+    
     # NETCONF Connection Fields
     netconf_host: Optional[str] = Field(None, description="IP/Hostname สำหรับ NETCONF connection")
     netconf_port: Optional[int] = Field(None, description="NETCONF port")

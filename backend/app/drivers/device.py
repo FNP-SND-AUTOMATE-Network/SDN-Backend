@@ -3,7 +3,7 @@ Device Driver - สำหรับ Mount/Unmount NETCONF devices ใน ODL
 
 Note: mount/unmount ไม่ผ่าน intent system แล้ว ใช้ dedicated REST endpoints แทน:
     POST /api/v1/nbi/devices/{node_id}/mount
-    POST /api/v1/nbi/devices/{node_id}/unmount
+    DELETE /api/v1/nbi/devices/{node_id}/mount
 
 build_mount/build_unmount methods ยังคงใช้งานได้โดย OdlMountService
 """

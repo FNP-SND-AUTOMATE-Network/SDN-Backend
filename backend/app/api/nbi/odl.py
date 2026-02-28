@@ -62,7 +62,7 @@ async def get_odl_mounted_nodes():
         )
 
 
-@router.post("/sync", response_model=SyncResponse)
+@router.post("/odl/sync", response_model=SyncResponse)
 async def sync_devices_from_odl():
     """
     Sync ข้อมูล Device จาก ODL มา update ใน Database

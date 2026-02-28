@@ -308,7 +308,7 @@ class IntentRegistry:
     # ===== DEVICE MANAGEMENT INTENTS =====
     # Note: device.mount and device.unmount removed - use dedicated REST endpoints:
     #   POST /api/v1/nbi/devices/{node_id}/mount
-    #   POST /api/v1/nbi/devices/{node_id}/unmount
+    #   DELETE /api/v1/nbi/devices/{node_id}/mount
     
     DEVICE_STATUS = IntentDefinition(
         name="device.status",

@@ -224,7 +224,7 @@ class IntentService:
         
         Note: mount/unmount removed - use dedicated REST endpoints:
             POST /api/v1/nbi/devices/{node_id}/mount
-            POST /api/v1/nbi/devices/{node_id}/unmount
+            DELETE /api/v1/nbi/devices/{node_id}/mount
         """
         node_id = req.node_id  # Use node_id directly for ODL
         

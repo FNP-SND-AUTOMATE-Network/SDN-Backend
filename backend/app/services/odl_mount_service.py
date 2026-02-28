@@ -92,7 +92,7 @@ class OdlMountService:
                     "netconf-node-topology:host": device.netconf_host or device.ip_address,
                     "netconf-node-topology:port": getattr(device, 'netconf_port', 830) or 830,
                     "netconf-node-topology:username": credentials.deviceUsername,
-                    "netconf-node-topology:password": credentials.devicePassword, # Need to decode/use raw
+                    "netconf-node-topology:password": credentials.devicePasswordHash, # Need to decode/use raw
                     # Stability parameters for ODL Potassium
                     "netconf-node-topology:tcp-only": False,
                     "netconf-node-topology:keepalive-delay": 10,
@@ -135,9 +135,8 @@ class OdlMountService:
             if not (device.netconf_host or device.ip_address):
                 raise ValueError("netconf_host or ip_address is required")
                 
-            # 2.5 Fetch User Credentials
-            creds_svc = DeviceCredentialsService(prisma)
-            credentials = await creds_svc.get_device_credentials(user_id)
+            # 2.5 Fetch User Credentials (Fetch raw Prisma model to get the password)
+            credentials = await prisma.devicecredentials.find_unique(where={"userId": user_id})
             if not credentials:
                 raise ValueError("Device Credentials not configured for your profile")
             

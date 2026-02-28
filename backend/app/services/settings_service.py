@@ -25,7 +25,7 @@ class SettingsService:
 
     @classmethod
     async def _load_and_cache_odl_config(cls) -> Dict[str, Any]:
-        """โหลดข้อมูลจาก DB และเก็บลง Cache"""
+        """โหลดข้อมูลจาก .env เนื่องจาก SystemSettings table ถูกลบไปแล้ว"""
         # ป้องกัน Race Condition ตอน Startup มีหลาย request เข้ามาพร้อมกัน
         if cls._is_initializing:
             await asyncio.sleep(0.5)
@@ -34,41 +34,7 @@ class SettingsService:
 
         cls._is_initializing = True
         try:
-            prisma = get_prisma_client()
-            if not prisma.is_connected():
-                # ถ้าระบบยังไม่ต่อ DB ให้คืนค่าจาก .env ไปก่อน (fallback)
-                return cls._get_default_env_config()
-
-            db_config = await prisma.systemsettings.find_unique(
-                where={"key": "odl_config"}
-            )
-
-            if db_config and db_config.value:
-                # แปลงจาก Json เป็น Dict
-                try:
-                    config_val = db_config.value
-                    if isinstance(config_val, str):
-                        config_val = json.loads(config_val)
-                    cls._odl_config_cache = config_val
-                    return cls._odl_config_cache
-                except Exception as e:
-                    logger.error(f"Failed to parse odl_config from DB: {e}")
-
-            # ถ้าใน DB ไม่มี (ครั้งแรกที่เพิ่งรัน) ให้ seed จาก .env
             default_config = cls._get_default_env_config()
-            
-            try:
-                await prisma.systemsettings.create(
-                    data={
-                        "key": "odl_config",
-                        "value": json.dumps(default_config),
-                        "description": "OpenDaylight Connection Configuration"
-                    }
-                )
-                logger.info("Seeded default ODL config to database")
-            except Exception as e:
-                logger.error(f"Failed to seed odl_config: {e}")
-
             cls._odl_config_cache = default_config
             return cls._odl_config_cache
             

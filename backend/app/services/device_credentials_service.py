@@ -1,5 +1,8 @@
 from typing import Optional, Dict, Any
-import bcrypt
+import os
+import base64
+import hashlib
+from cryptography.fernet import Fernet
 from app.models.device_credentials import (
     DeviceCredentialsCreate, 
     DeviceCredentialsUpdate, 
@@ -13,19 +16,29 @@ class DeviceCredentialsService:
     def __init__(self, prisma_client):
         self.prisma = prisma_client
     
-    def _hash_password(self, password: str) -> str:
-        #Hash รหัสผ่านด้วย bcrypt
-        #ตรวจสอบ byte length เพื่อป้องกัน bcrypt truncation
-        password_bytes = password.encode('utf-8')
-        if len(password_bytes) > 72:
-            raise ValueError(f"รหัสผ่านยาวเกินไป ({len(password_bytes)} bytes) bcrypt รองรับได้สูงสุด 72 bytes")
+    def _get_fernet(self) -> Fernet:
+        # ดึง SECRET_KEY มาแปลงเป็น 32-byte url-safe base64 สำหรับ Fernet
+        secret = os.environ.get("SECRET_KEY", "fallback-fnp-sdn-secret-1234!!").encode('utf-8')
+        key = base64.urlsafe_b64encode(hashlib.sha256(secret).digest())
+        return Fernet(key)
         
-        salt = bcrypt.gensalt()
-        return bcrypt.hashpw(password_bytes, salt).decode('utf-8')
+    def _encrypt_password(self, password: str) -> str:
+        # เข้ารหัสแบบกู้คืนได้ (Two-way) สำหรับใช้ส่งไปหา ODL
+        fernet = self._get_fernet()
+        return fernet.encrypt(password.encode('utf-8')).decode('utf-8')
     
-    def _verify_password(self, password: str, hashed: str) -> bool:
-        #ตรวจสอบรหัสผ่านกับ hash
-        return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+    def decrypt_password(self, encrypted_password: str) -> str:
+        # ถอดรหัสสำหรับเอาไปใช้งานใน ODL Mount
+        try:
+            fernet = self._get_fernet()
+            return fernet.decrypt(encrypted_password.encode('utf-8')).decode('utf-8')
+        except Exception as e:
+            print(f"Error decrypting password: {e}")
+            return ""
+            
+    def _verify_password(self, password: str, encrypted: str) -> bool:
+        #ตรวจสอบรหัสผ่าน
+        return self.decrypt_password(encrypted) == password
     
     async def get_device_credentials(self, user_id: str) -> Optional[DeviceCredentialsResponse]:
         #ดึงข้อมูล Device Credentials ของ user
@@ -61,15 +74,15 @@ class DeviceCredentialsService:
             if existing:
                 raise ValueError("ผู้ใช้มี Device Credentials อยู่แล้ว กรุณาใช้การอัปเดตแทน")
             
-            # Hash รหัสผ่าน
-            password_hash = self._hash_password(data.device_password)
+            # เข้ารหัสรหัสผ่านแบบ 2 ทาง (Fernet)
+            password_encrypted = self._encrypt_password(data.device_password)
             
             # สร้าง device credentials ใหม่
             device_creds = await self.prisma.devicecredentials.create(
                 data={
                     "userId": user_id,
                     "deviceUsername": data.device_username,
-                    "devicePasswordHash": password_hash
+                    "devicePasswordHash": password_encrypted
                 }
             )
             
@@ -104,7 +117,7 @@ class DeviceCredentialsService:
                 update_data["deviceUsername"] = data.device_username
             
             if data.device_password is not None:
-                update_data["devicePasswordHash"] = self._hash_password(data.device_password)
+                update_data["devicePasswordHash"] = self._encrypt_password(data.device_password)
             
             # ตรวจสอบว่ามีข้อมูลที่จะอัปเดตหรือไม่
             if not update_data:

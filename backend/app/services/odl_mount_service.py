@@ -74,13 +74,14 @@ class OdlMountService:
         
         return device
     
-    def _build_mount_payload(self, device, credentials) -> Dict[str, Any]:
+    def _build_mount_payload(self, device, username: str, password: str) -> Dict[str, Any]:
         """
         สร้าง payload สำหรับ mount NETCONF node (ODL Potassium compatible)
         
         Args:
             device: DeviceNetwork object จาก DB
-            credentials: DeviceCredentials object จาก DB
+            username: ODL Netconf Username
+            password: ODL Netconf Password (Plaintext)
         
         Returns:
             ODL mount payload with RFC-8040 compliant structure
@@ -91,8 +92,8 @@ class OdlMountService:
                     "node-id": device.node_id,
                     "netconf-node-topology:host": device.netconf_host or device.ip_address,
                     "netconf-node-topology:port": getattr(device, 'netconf_port', 830) or 830,
-                    "netconf-node-topology:username": credentials.deviceUsername,
-                    "netconf-node-topology:password": credentials.devicePasswordHash, # Need to decode/use raw
+                    "netconf-node-topology:username": username,
+                    "netconf-node-topology:password": password,
                     # Stability parameters for ODL Potassium
                     "netconf-node-topology:tcp-only": False,
                     "netconf-node-topology:keepalive-delay": 10,
@@ -139,6 +140,9 @@ class OdlMountService:
             credentials = await prisma.devicecredentials.find_unique(where={"userId": user_id})
             if not credentials:
                 raise ValueError("Device Credentials not configured for your profile")
+                
+            creds_svc = DeviceCredentialsService(prisma)
+            plain_pw = creds_svc.decrypt_password(credentials.devicePasswordHash)
             
             # 3. Check if already mounted (always check ODL regardless of DB flag)
             odl_status = await self.get_connection_status(device.node_id)
@@ -184,7 +188,7 @@ class OdlMountService:
                         logger.warning(f"Failed to cleanup stale mount: {cleanup_err}")
             
             # 4. Build mount payload
-            payload = self._build_mount_payload(device, credentials)
+            payload = self._build_mount_payload(device, credentials.deviceUsername, plain_pw)
             
             # 5. Send mount request to ODL
             node_path = f"{self.TOPOLOGY_PATH}/node={device.node_id}"

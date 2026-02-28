@@ -245,10 +245,11 @@ class OpenFlowService:
     async def add_traffic_steer_flow(
         self, flow_id: str, node_id: str,
         inbound_interface_id: str, outbound_interface_id: str,
-        tcp_dst_port: int, priority: int = 600,
+        dst_port: int, protocol: str = "tcp", priority: int = 600,
         table_id: int = 0, bidirectional: bool = True,
     ) -> Dict[str, Any]:
-        """Traffic Steering — L4 TCP Redirect (bidirectional by default)"""
+        """Traffic Steering — L4 Redirect (TCP/UDP, bidirectional by default)"""
+        proto = protocol.lower()
         device = await self._validate_device(node_id)
         inbound_iface = await self._validate_interface(inbound_interface_id, device, "Inbound")
         outbound_iface = await self._validate_interface(outbound_interface_id, device, "Outbound")
@@ -264,47 +265,47 @@ class OpenFlowService:
             fwd_db = await self._save_flow_to_db(
                 fwd_id, node_id, table_id, "traffic_steering", priority,
                 bidirectional=True, pair_flow_id=rev_id, direction="forward",
-                match_details={"in_port": int(in_port), "out_port": int(out_port), "tcp_dst_port": tcp_dst_port},
+                match_details={"in_port": int(in_port), "out_port": int(out_port), "dst_port": dst_port, "protocol": proto},
             )
             rev_db = await self._save_flow_to_db(
                 rev_id, node_id, table_id, "traffic_steering", priority,
                 bidirectional=True, pair_flow_id=fwd_id, direction="reverse",
-                match_details={"in_port": int(out_port), "out_port": int(in_port), "tcp_dst_port": tcp_dst_port},
+                match_details={"in_port": int(out_port), "out_port": int(in_port), "dst_port": dst_port, "protocol": proto},
             )
 
-            logger.info(f"Flow ADD [steer-fwd]: {fwd_id} on {node_id} | TCP:{tcp_dst_port}")
-            fwd_payload = self._build_steering_payload(fwd_id, table_id, priority, in_port, out_port, tcp_dst_port)
+            logger.info(f"Flow ADD [steer-fwd]: {fwd_id} on {node_id} | {proto.upper()}:{dst_port}")
+            fwd_payload = self._build_steering_payload(fwd_id, table_id, priority, in_port, out_port, dst_port, proto)
             fwd_result = await self._push_and_track(fwd_db, fwd_id, node_id, table_id, fwd_payload)
             flows_created.append({
-                "flow_id": fwd_id, "direction": "forward", "tcp_dst_port": tcp_dst_port,
+                "flow_id": fwd_id, "direction": "forward", "dst_port": dst_port, "protocol": proto,
                 "flow_rule_id": fwd_db.id, "odl_response": fwd_result,
             })
 
-            logger.info(f"Flow ADD [steer-rev]: {rev_id} on {node_id} | TCP:{tcp_dst_port}")
-            rev_payload = self._build_steering_payload(rev_id, table_id, priority, out_port, in_port, tcp_dst_port)
+            logger.info(f"Flow ADD [steer-rev]: {rev_id} on {node_id} | {proto.upper()}:{dst_port}")
+            rev_payload = self._build_steering_payload(rev_id, table_id, priority, out_port, in_port, dst_port, proto)
             rev_result = await self._push_and_track(rev_db, rev_id, node_id, table_id, rev_payload)
             flows_created.append({
-                "flow_id": rev_id, "direction": "reverse", "tcp_dst_port": tcp_dst_port,
+                "flow_id": rev_id, "direction": "reverse", "dst_port": dst_port, "protocol": proto,
                 "flow_rule_id": rev_db.id, "odl_response": rev_result,
             })
         else:
-            logger.info(f"Flow ADD [steer]: {flow_id} on {node_id} | TCP:{tcp_dst_port}")
+            logger.info(f"Flow ADD [steer]: {flow_id} on {node_id} | {proto.upper()}:{dst_port}")
             db_record = await self._save_flow_to_db(
                 flow_id, node_id, table_id, "traffic_steering", priority,
-                match_details={"in_port": int(in_port), "out_port": int(out_port), "tcp_dst_port": tcp_dst_port},
+                match_details={"in_port": int(in_port), "out_port": int(out_port), "dst_port": dst_port, "protocol": proto},
             )
-            payload = self._build_steering_payload(flow_id, table_id, priority, in_port, out_port, tcp_dst_port)
+            payload = self._build_steering_payload(flow_id, table_id, priority, in_port, out_port, dst_port, proto)
             result = await self._push_and_track(db_record, flow_id, node_id, table_id, payload)
             flows_created.append({
-                "flow_id": flow_id, "direction": "forward", "tcp_dst_port": tcp_dst_port,
+                "flow_id": flow_id, "direction": "forward", "dst_port": dst_port, "protocol": proto,
                 "flow_rule_id": db_record.id, "odl_response": result,
             })
 
         direction_text = "bidirectional" if bidirectional else "unidirectional"
         return {
             "success": True, "flow_type": "traffic_steering",
-            "message": f"Traffic steering '{flow_id}' on {node_id} — TCP:{tcp_dst_port} ({direction_text})",
-            "node_id": node_id, "tcp_dst_port": tcp_dst_port, "bidirectional": bidirectional,
+            "message": f"Traffic steering '{flow_id}' on {node_id} — {proto.upper()}:{dst_port} ({direction_text})",
+            "node_id": node_id, "dst_port": dst_port, "protocol": proto, "bidirectional": bidirectional,
             "flows_created": flows_created,
         }
 
@@ -365,24 +366,25 @@ class OpenFlowService:
     # ============================================================
 
     async def add_acl_port_drop(
-        self, flow_id: str, node_id: str, tcp_dst_port: int,
-        priority: int = 1200, table_id: int = 0,
+        self, flow_id: str, node_id: str, dst_port: int,
+        protocol: str = "tcp", priority: int = 1200, table_id: int = 0,
     ) -> Dict[str, Any]:
-        """L4 ACL — Drop traffic ที่ไปหา TCP destination port"""
+        """L4 ACL — Drop traffic ที่ไปหา destination port (TCP/UDP)"""
+        proto = protocol.lower()
         await self._validate_device(node_id)
-        logger.info(f"Flow ADD [acl-port-drop]: {flow_id} on {node_id} | TCP:{tcp_dst_port}")
+        logger.info(f"Flow ADD [acl-port-drop]: {flow_id} on {node_id} | {proto.upper()}:{dst_port}")
 
         db_record = await self._save_flow_to_db(
             flow_id, node_id, table_id, "acl_port_drop", priority,
-            match_details={"tcp_dst_port": tcp_dst_port},
+            match_details={"dst_port": dst_port, "protocol": proto},
         )
-        payload = self._build_acl_port_drop_payload(flow_id, table_id, priority, tcp_dst_port)
+        payload = self._build_acl_port_drop_payload(flow_id, table_id, priority, dst_port, proto)
         result = await self._push_and_track(db_record, flow_id, node_id, table_id, payload)
 
         return {
             "success": True, "flow_type": "acl_port_drop",
-            "message": f"ACL port drop '{flow_id}' on {node_id}: TCP:{tcp_dst_port} → DROP",
-            "flow_id": flow_id, "node_id": node_id, "tcp_dst_port": tcp_dst_port,
+            "message": f"ACL port drop '{flow_id}' on {node_id}: {proto.upper()}:{dst_port} → DROP",
+            "flow_id": flow_id, "node_id": node_id, "dst_port": dst_port, "protocol": proto,
             "flow_rule_id": db_record.id, "odl_response": result,
         }
 
@@ -391,24 +393,25 @@ class OpenFlowService:
     # ============================================================
 
     async def add_acl_whitelist(
-        self, flow_id: str, node_id: str, tcp_dst_port: int,
-        priority: int = 1000, table_id: int = 0,
+        self, flow_id: str, node_id: str, dst_port: int,
+        protocol: str = "tcp", priority: int = 1000, table_id: int = 0,
     ) -> Dict[str, Any]:
-        """Whitelist — อนุญาตเฉพาะ TCP port (output NORMAL)"""
+        """Whitelist — อนุญาตเฉพาะ port ที่กำหนด (TCP/UDP, output NORMAL)"""
+        proto = protocol.lower()
         await self._validate_device(node_id)
-        logger.info(f"Flow ADD [acl-whitelist]: {flow_id} on {node_id} | TCP:{tcp_dst_port}")
+        logger.info(f"Flow ADD [acl-whitelist]: {flow_id} on {node_id} | {proto.upper()}:{dst_port}")
 
         db_record = await self._save_flow_to_db(
             flow_id, node_id, table_id, "acl_whitelist", priority,
-            match_details={"tcp_dst_port": tcp_dst_port},
+            match_details={"dst_port": dst_port, "protocol": proto},
         )
-        payload = self._build_acl_whitelist_payload(flow_id, table_id, priority, tcp_dst_port)
+        payload = self._build_acl_whitelist_payload(flow_id, table_id, priority, dst_port, proto)
         result = await self._push_and_track(db_record, flow_id, node_id, table_id, payload)
 
         return {
             "success": True, "flow_type": "acl_whitelist",
-            "message": f"ACL whitelist '{flow_id}' on {node_id}: TCP:{tcp_dst_port} → PERMIT",
-            "flow_id": flow_id, "node_id": node_id, "tcp_dst_port": tcp_dst_port,
+            "message": f"ACL whitelist '{flow_id}' on {node_id}: {proto.upper()}:{dst_port} → PERMIT",
+            "flow_id": flow_id, "node_id": node_id, "dst_port": dst_port, "protocol": proto,
             "flow_rule_id": db_record.id, "odl_response": result,
         }
 
@@ -595,7 +598,7 @@ class OpenFlowService:
     async def get_flows(
         self, node_id: str, table_id: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """ดึง Flow Rules จาก ODL (raw YANG data)"""
+        """ดึง Flow Rules ทั้งหมดใน table จาก ODL (raw YANG data)"""
         await self._validate_device(node_id)
         logger.info(f"Flow GET: {node_id}, table={table_id or 'all'}")
 
@@ -618,6 +621,31 @@ class OpenFlowService:
             "message": f"Flows retrieved from {node_id}",
             "node_id": node_id, "table_id": table_id,
             "flows": result,
+        }
+
+    async def get_flow_by_id(
+        self, node_id: str, flow_id: str, table_id: int = 0,
+    ) -> Dict[str, Any]:
+        """ดึง Flow เฉพาะตัวจาก ODL (specific flow detail)"""
+        await self._validate_device(node_id)
+        logger.info(f"Flow GET [specific]: {flow_id} on {node_id}, table={table_id}")
+
+        path = (
+            f"{self.INVENTORY_BASE}/node={node_id}"
+            f"/flow-node-inventory:table={table_id}"
+            f"/flow={flow_id}"
+        )
+        spec = RequestSpec(
+            method="GET", datastore="config", path=path,
+            payload=None, headers={"Accept": "application/json"},
+        )
+        result = await self.odl_client.send(spec)
+
+        return {
+            "success": True,
+            "message": f"Flow '{flow_id}' retrieved from {node_id}",
+            "node_id": node_id, "table_id": table_id,
+            "flow_id": flow_id, "flow": result,
         }
 
     # ============================================================
@@ -664,6 +692,93 @@ class OpenFlowService:
             }
             for r in records
         ]
+
+    # ============================================================
+    # Sync Flow Rules (compare DB ↔ ODL)
+    # ============================================================
+
+    async def sync_flow_rules(
+        self, node_id: str, table_id: int = 0,
+    ) -> Dict[str, Any]:
+        """
+        เทียบ FlowRule ใน DB กับ Flow จริงใน ODL config datastore
+
+        ตรวจจับ:
+        - zombie: DB ยัง ACTIVE แต่ ODL ไม่มีแล้ว → mark DELETED
+        - unmanaged: ODL มี แต่ DB ไม่มี → report (ไม่ได้สร้างผ่าน Backend)
+        """
+        await self._validate_device(node_id)
+        prisma = get_prisma_client()
+
+        logger.info(f"Flow SYNC: {node_id}, table={table_id}")
+
+        # ① ดึง flows จาก ODL config
+        odl_flow_ids = set()
+        try:
+            path = (
+                f"{self.INVENTORY_BASE}/node={node_id}"
+                f"/flow-node-inventory:table={table_id}"
+            )
+            spec = RequestSpec(
+                method="GET", datastore="config", path=path,
+                payload=None, headers={"Accept": "application/json"},
+            )
+            result = await self.odl_client.send(spec)
+
+            # Parse flow IDs จาก ODL response
+            table_data = result.get("flow-node-inventory:table", [])
+            if isinstance(table_data, list):
+                for table in table_data:
+                    for flow in table.get("flow", []):
+                        odl_flow_ids.add(flow.get("id", ""))
+            elif isinstance(table_data, dict):
+                for flow in table_data.get("flow", []):
+                    odl_flow_ids.add(flow.get("id", ""))
+
+        except Exception as e:
+            logger.warning(f"Could not fetch ODL flows for {node_id}: {e}")
+            # ถ้า ODL ไม่ตอบ (เช่น table ว่าง) → ถือว่า ODL ไม่มี flow
+            odl_flow_ids = set()
+
+        # ② ดึง ACTIVE flows จาก DB
+        db_flows = await prisma.flowrule.find_many(
+            where={
+                "node_id": node_id,
+                "table_id": table_id,
+                "status": FlowStatus.ACTIVE,
+            }
+        )
+        db_flow_ids = {f.flow_id for f in db_flows}
+
+        # ③ เทียบ
+        zombies = []  # DB มี แต่ ODL ไม่มี
+        unmanaged = []  # ODL มี แต่ DB ไม่มี
+
+        # Zombie: DB ACTIVE → ODL ไม่มี → mark DELETED
+        for db_flow in db_flows:
+            if db_flow.flow_id not in odl_flow_ids:
+                await self._update_flow_status(db_flow.id, FlowStatus.DELETED)
+                zombies.append(db_flow.flow_id)
+                logger.info(f"Flow SYNC [zombie]: {db_flow.flow_id} → DELETED")
+
+        # Unmanaged: ODL มี → DB ไม่มี (สร้างนอก Backend)
+        for odl_fid in odl_flow_ids:
+            if odl_fid and odl_fid not in db_flow_ids:
+                unmanaged.append(odl_fid)
+
+        return {
+            "success": True,
+            "message": (
+                f"Sync complete for {node_id}: "
+                f"{len(zombies)} zombie(s) cleaned, {len(unmanaged)} unmanaged"
+            ),
+            "node_id": node_id,
+            "table_id": table_id,
+            "odl_flow_count": len(odl_flow_ids),
+            "db_active_count": len(db_flow_ids),
+            "zombies_cleaned": zombies,
+            "unmanaged_flows": unmanaged,
+        }
 
     # ============================================================
     # Retry FAILED Flow
@@ -720,7 +835,8 @@ class OpenFlowService:
             return self._build_steering_payload(
                 record.flow_id, record.table_id, record.priority,
                 str(match.get("in_port", "")), str(match.get("out_port", "")),
-                match.get("tcp_dst_port", 0),
+                match.get("dst_port", match.get("tcp_dst_port", 0)),
+                match.get("protocol", "tcp"),
             )
         elif ft == "acl_mac_drop":
             return self._build_acl_mac_drop_payload(
@@ -733,11 +849,15 @@ class OpenFlowService:
             )
         elif ft == "acl_port_drop":
             return self._build_acl_port_drop_payload(
-                record.flow_id, record.table_id, record.priority, match.get("tcp_dst_port", 0),
+                record.flow_id, record.table_id, record.priority,
+                match.get("dst_port", match.get("tcp_dst_port", 0)),
+                match.get("protocol", "tcp"),
             )
         elif ft == "acl_whitelist":
             return self._build_acl_whitelist_payload(
-                record.flow_id, record.table_id, record.priority, match.get("tcp_dst_port", 0),
+                record.flow_id, record.table_id, record.priority,
+                match.get("dst_port", match.get("tcp_dst_port", 0)),
+                match.get("protocol", "tcp"),
             )
         elif ft == "mac_steering":
             return self._build_mac_steering_payload(
@@ -786,16 +906,18 @@ class OpenFlowService:
     @staticmethod
     def _build_steering_payload(flow_id: str, table_id: int, priority: int,
                                 inbound_port: str, outbound_port: str,
-                                tcp_dst_port: int) -> Dict[str, Any]:
-        """Traffic Steering — Match in-port + IPv4 + TCP + dst-port → output"""
+                                dst_port: int, protocol: str = "tcp") -> Dict[str, Any]:
+        """Traffic Steering — Match in-port + IPv4 + TCP/UDP + dst-port → output"""
+        ip_proto = 6 if protocol == "tcp" else 17
+        port_key = "tcp-destination-port" if protocol == "tcp" else "udp-destination-port"
         return {
             "flow-node-inventory:flow": [{
                 "id": flow_id, "table_id": table_id, "priority": priority,
                 "match": {
                     "in-port": inbound_port,
                     "ethernet-match": {"ethernet-type": {"type": 2048}},
-                    "ip-match": {"ip-protocol": 6},
-                    "tcp-destination-port": tcp_dst_port,
+                    "ip-match": {"ip-protocol": ip_proto},
+                    port_key: dst_port,
                 },
                 "instructions": {"instruction": [{"order": 0, "apply-actions": {
                     "action": [{"order": 0, "output-action": {"output-node-connector": outbound_port}}]
@@ -831,30 +953,34 @@ class OpenFlowService:
 
     @staticmethod
     def _build_acl_port_drop_payload(flow_id: str, table_id: int, priority: int,
-                                     tcp_dst_port: int) -> Dict[str, Any]:
-        """L4 ACL — Match IPv4 + TCP + dst-port → DROP"""
+                                     dst_port: int, protocol: str = "tcp") -> Dict[str, Any]:
+        """L4 ACL — Match IPv4 + TCP/UDP + dst-port → DROP"""
+        ip_proto = 6 if protocol == "tcp" else 17
+        port_key = "tcp-destination-port" if protocol == "tcp" else "udp-destination-port"
         return {
             "flow-node-inventory:flow": [{
                 "id": flow_id, "table_id": table_id, "priority": priority,
                 "match": {
                     "ethernet-match": {"ethernet-type": {"type": 2048}},
-                    "ip-match": {"ip-protocol": 6},
-                    "tcp-destination-port": tcp_dst_port,
+                    "ip-match": {"ip-protocol": ip_proto},
+                    port_key: dst_port,
                 },
             }]
         }
 
     @staticmethod
     def _build_acl_whitelist_payload(flow_id: str, table_id: int, priority: int,
-                                     tcp_dst_port: int) -> Dict[str, Any]:
-        """Whitelist — Match IPv4 + TCP + dst-port → output NORMAL"""
+                                     dst_port: int, protocol: str = "tcp") -> Dict[str, Any]:
+        """Whitelist — Match IPv4 + TCP/UDP + dst-port → output NORMAL"""
+        ip_proto = 6 if protocol == "tcp" else 17
+        port_key = "tcp-destination-port" if protocol == "tcp" else "udp-destination-port"
         return {
             "flow-node-inventory:flow": [{
                 "id": flow_id, "table_id": table_id, "priority": priority,
                 "match": {
                     "ethernet-match": {"ethernet-type": {"type": 2048}},
-                    "ip-match": {"ip-protocol": 6},
-                    "tcp-destination-port": tcp_dst_port,
+                    "ip-match": {"ip-protocol": ip_proto},
+                    port_key: dst_port,
                 },
                 "instructions": {"instruction": [{"order": 0, "apply-actions": {
                     "action": [{"order": 0, "output-action": {"output-node-connector": "NORMAL"}}]
@@ -891,4 +1017,166 @@ class OpenFlowService:
                     "action": [{"order": 0, "output-action": {"output-node-connector": outbound_port}}]
                 }}]},
             }]
+        }
+
+    # ============================================================
+    # Flow Templates Metadata (For Frontend Wizard)
+    # ============================================================
+
+    @staticmethod
+    def get_flow_templates() -> Dict[str, Any]:
+        """ดึง Template ของ Flow ทั้งหมดสำหรับวาด UI หน้าเว็บ"""
+        return {
+            "success": True,
+            "total_templates": 9,
+            "categories": [
+                {
+                    "id": "connectivity",
+                    "label": "🔌 Connectivity",
+                    "description": "การเชื่อมต่อพื้นฐานระหว่างพอร์ต",
+                    "templates": [
+                        {
+                            "id": "arp_flood",
+                            "label": "ARP Flood",
+                            "description": "กระจาย ARP ทุกพอร์ต เพื่อให้ Host คุยกันได้ (Priority 400)",
+                            "endpoint": "/api/v1/nbi/flows/arp-flood",
+                            "method": "POST",
+                            "fields": [
+                                {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
+                                {"name": "node_id", "label": "Device", "type": "device_select", "required": True},
+                                {"name": "priority", "label": "Priority", "type": "number", "default": 400, "required": False}
+                            ]
+                        },
+                        {
+                            "id": "base_connectivity",
+                            "label": "Base Connectivity",
+                            "description": "เชื่อม L1 Forwarding ระหว่าง 2 พอร์ต (Priority 500)",
+                            "endpoint": "/api/v1/nbi/flows",
+                            "method": "POST",
+                            "fields": [
+                                {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
+                                {"name": "node_id", "label": "Device", "type": "device_select", "required": True},
+                                {"name": "inbound_interface_id", "label": "Inbound Port", "type": "interface_select", "required": True},
+                                {"name": "outbound_interface_id", "label": "Outbound Port", "type": "interface_select", "required": True},
+                                {"name": "bidirectional", "label": "Bidirectional (สร้างขากลับด้วย)", "type": "boolean", "default": True, "required": False},
+                                {"name": "priority", "label": "Priority", "type": "number", "default": 500, "required": False}
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "id": "steering",
+                    "label": "🎯 Traffic Steering",
+                    "description": "เปลี่ยนเส้นทางทราฟฟิก (Redirect)",
+                    "templates": [
+                        {
+                            "id": "steer_l4_port",
+                            "label": "L4 Port Redirect (TCP/UDP)",
+                            "description": "บังคับ Traffic ของพอร์ต TCP/UDP เฉพาะ ให้ไปออกพอร์ตที่กำหนด",
+                            "endpoint": "/api/v1/nbi/flows/steer",
+                            "method": "POST",
+                            "fields": [
+                                {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
+                                {"name": "node_id", "label": "Device", "type": "device_select", "required": True},
+                                {"name": "inbound_interface_id", "label": "Inbound Port", "type": "interface_select", "required": True},
+                                {"name": "outbound_interface_id", "label": "Redirect To Port", "type": "interface_select", "required": True},
+                                {"name": "protocol", "label": "Protocol", "type": "protocol_select", "options": ["tcp", "udp"], "default": "tcp", "required": False},
+                                {"name": "dst_port", "label": "Destination Port", "type": "number", "min": 1, "max": 65535, "required": True},
+                                {"name": "bidirectional", "label": "Bidirectional (สร้างขากลับด้วย)", "type": "boolean", "default": True, "required": False},
+                                {"name": "priority", "label": "Priority", "type": "number", "default": 600, "required": False}
+                            ]
+                        },
+                        {
+                            "id": "steer_l2_mac",
+                            "label": "L2 MAC Redirect",
+                            "description": "บังคับ Traffic จาก Source MAC Address ให้ไปออกพอร์ตที่กำหนด (ไม่ต้องระบุขาเข้า)",
+                            "endpoint": "/api/v1/nbi/flows/steer/mac",
+                            "method": "POST",
+                            "fields": [
+                                {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
+                                {"name": "node_id", "label": "Device", "type": "device_select", "required": True},
+                                {"name": "src_mac", "label": "Source MAC Address", "type": "mac", "required": True},
+                                {"name": "outbound_interface_id", "label": "Redirect To Port", "type": "interface_select", "required": True},
+                                {"name": "priority", "label": "Priority", "type": "number", "default": 960, "required": False}
+                            ]
+                        },
+                        {
+                            "id": "steer_l3_ip",
+                            "label": "L3 IP Redirect",
+                            "description": "บังคับ Traffic ที่ไปหา Destination IP ให้ไปออกพอร์ตที่กำหนด (ไม่ต้องระบุขาเข้า)",
+                            "endpoint": "/api/v1/nbi/flows/steer/ip",
+                            "method": "POST",
+                            "fields": [
+                                {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
+                                {"name": "node_id", "label": "Device", "type": "device_select", "required": True},
+                                {"name": "dst_ip", "label": "Destination IP (CIDR)", "type": "ip_cidr", "required": True},
+                                {"name": "outbound_interface_id", "label": "Redirect To Port", "type": "interface_select", "required": True},
+                                {"name": "priority", "label": "Priority", "type": "number", "default": 960, "required": False}
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "id": "security",
+                    "label": "🛡️ Security (ACL)",
+                    "description": "บล็อกหรืออนุญาตทราฟฟิก (Drop / Allow)",
+                    "templates": [
+                        {
+                            "id": "acl_mac_drop",
+                            "label": "Block MAC Address",
+                            "description": "บล็อกทราฟฟิกทั้งหมดที่มาจาก Source MAC นี้",
+                            "endpoint": "/api/v1/nbi/flows/acl/mac",
+                            "method": "POST",
+                            "fields": [
+                                {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
+                                {"name": "node_id", "label": "Device", "type": "device_select", "required": True},
+                                {"name": "src_mac", "label": "Source MAC Address", "type": "mac", "required": True},
+                                {"name": "priority", "label": "Priority", "type": "number", "default": 1100, "required": False}
+                            ]
+                        },
+                        {
+                            "id": "acl_ip_blacklist",
+                            "label": "Block IP Pair",
+                            "description": "บล็อกการสื่อสารระหว่าง Source IP และ Destination IP",
+                            "endpoint": "/api/v1/nbi/flows/acl/ip",
+                            "method": "POST",
+                            "fields": [
+                                {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
+                                {"name": "node_id", "label": "Device", "type": "device_select", "required": True},
+                                {"name": "src_ip", "label": "Source IP (CIDR)", "type": "ip_cidr", "required": True},
+                                {"name": "dst_ip", "label": "Destination IP (CIDR)", "type": "ip_cidr", "required": True},
+                                {"name": "priority", "label": "Priority", "type": "number", "default": 1100, "required": False}
+                            ]
+                        },
+                        {
+                            "id": "acl_port_drop",
+                            "label": "Block Port (TCP/UDP)",
+                            "description": "บล็อกทราฟฟิกที่วิ่งเข้าหา Destination Port นี้ (เช่น บล็อกพอร์ต 80)",
+                            "endpoint": "/api/v1/nbi/flows/acl/port",
+                            "method": "POST",
+                            "fields": [
+                                {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
+                                {"name": "node_id", "label": "Device", "type": "device_select", "required": True},
+                                {"name": "protocol", "label": "Protocol", "type": "protocol_select", "options": ["tcp", "udp"], "default": "tcp", "required": False},
+                                {"name": "dst_port", "label": "Destination Port", "type": "number", "min": 1, "max": 65535, "required": True},
+                                {"name": "priority", "label": "Priority", "type": "number", "default": 1200, "required": False}
+                            ]
+                        },
+                        {
+                            "id": "acl_port_whitelist",
+                            "label": "Whitelist Port (TCP/UDP)",
+                            "description": "อนุญาตทราฟฟิกขาเข้าสำหรับพอร์ตนี้ (ไว้ใช้คู่กับการล็อกพอร์ตอื่นทิ้ง)",
+                            "endpoint": "/api/v1/nbi/flows/acl/whitelist",
+                            "method": "POST",
+                            "fields": [
+                                {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
+                                {"name": "node_id", "label": "Device", "type": "device_select", "required": True},
+                                {"name": "protocol", "label": "Protocol", "type": "protocol_select", "options": ["tcp", "udp"], "default": "tcp", "required": False},
+                                {"name": "dst_port", "label": "Destination Port", "type": "number", "min": 1, "max": 65535, "required": True},
+                                {"name": "priority", "label": "Priority", "type": "number", "default": 1000, "required": False}
+                            ]
+                        }
+                    ]
+                }
+            ]
         }

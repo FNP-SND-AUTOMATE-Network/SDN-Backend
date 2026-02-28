@@ -185,15 +185,22 @@ class FlowResponse(BaseModel):
 
 
 class TrafficSteerRequest(BaseModel):
-    """Request body สำหรับ Traffic Steering Flow — redirect TCP traffic ไปทางอื่น"""
+    """Request body สำหรับ Traffic Steering Flow — redirect traffic (TCP/UDP) ไปทางอื่น"""
     flow_id: str = Field(..., min_length=1, description="ชื่อกฎ เช่น 'steer-tcp8080'")
     node_id: str = Field(..., min_length=1, description="node_id ของ switch (เช่น 'openflow:1')")
     inbound_interface_id: str = Field(..., description="UUID ของ Interface ขาเข้า (match in-port)")
     outbound_interface_id: str = Field(..., description="UUID ของ Interface ขาออก (redirect output)")
-    tcp_dst_port: int = Field(..., ge=1, le=65535, description="TCP destination port ที่ต้องการ redirect (เช่น 8080)")
+    dst_port: int = Field(..., ge=1, le=65535, description="Destination port ที่ต้องการ redirect (เช่น 8080)")
+    protocol: str = Field(default="tcp", description="Protocol: 'tcp' หรือ 'udp'")
     priority: int = Field(default=600, ge=0, le=65535, description="Priority (ควรสูงกว่า base wiring)")
     table_id: int = Field(default=0, ge=0, le=255, description="Flow Table ID")
     bidirectional: bool = Field(default=True, description="สร้างทั้งขาไป + ขากลับ ใน 1 API call")
+
+    @validator("protocol")
+    def validate_protocol(cls, v):
+        if v.lower() not in ("tcp", "udp"):
+            raise ValueError("protocol ต้องเป็น 'tcp' หรือ 'udp' เท่านั้น")
+        return v.lower()
 
 
 class AclMacDropRequest(BaseModel):
@@ -216,21 +223,35 @@ class AclIpBlacklistRequest(BaseModel):
 
 
 class AclPortDropRequest(BaseModel):
-    """L4 ACL — Drop traffic ที่ไปหา TCP destination port"""
+    """L4 ACL — Drop traffic ที่ไปหา destination port (TCP/UDP)"""
     flow_id: str = Field(..., min_length=1, description="ชื่อกฎ เช่น 'acl-port-8080-block'")
     node_id: str = Field(..., min_length=1, description="node_id ของ switch")
-    tcp_dst_port: int = Field(..., ge=1, le=65535, description="TCP destination port เช่น 8080")
+    dst_port: int = Field(..., ge=1, le=65535, description="Destination port เช่น 8080")
+    protocol: str = Field(default="tcp", description="Protocol: 'tcp' หรือ 'udp'")
     priority: int = Field(default=1200, ge=0, le=65535, description="Priority (สูงสุดใน ACL)")
     table_id: int = Field(default=0, ge=0, le=255, description="Flow Table ID")
 
+    @validator("protocol")
+    def validate_protocol(cls, v):
+        if v.lower() not in ("tcp", "udp"):
+            raise ValueError("protocol ต้องเป็น 'tcp' หรือ 'udp' เท่านั้น")
+        return v.lower()
+
 
 class AclWhitelistRequest(BaseModel):
-    """Whitelist — อนุญาตเฉพาะ TCP port ที่กำหนด (action: NORMAL)"""
+    """Whitelist — อนุญาตเฉพาะ port ที่กำหนด (TCP/UDP, action: NORMAL)"""
     flow_id: str = Field(..., min_length=1, description="ชื่อกฎ เช่น 'acl-permit-http'")
     node_id: str = Field(..., min_length=1, description="node_id ของ switch")
-    tcp_dst_port: int = Field(..., ge=1, le=65535, description="TCP destination port ที่อนุญาต เช่น 80")
+    dst_port: int = Field(..., ge=1, le=65535, description="Destination port ที่อนุญาต เช่น 80")
+    protocol: str = Field(default="tcp", description="Protocol: 'tcp' หรือ 'udp'")
     priority: int = Field(default=1000, ge=0, le=65535, description="Priority (ต่ำกว่า drop เพื่อใช้คู่กับ drop-all)")
     table_id: int = Field(default=0, ge=0, le=255, description="Flow Table ID")
+
+    @validator("protocol")
+    def validate_protocol(cls, v):
+        if v.lower() not in ("tcp", "udp"):
+            raise ValueError("protocol ต้องเป็น 'tcp' หรือ 'udp' เท่านั้น")
+        return v.lower()
 
 
 class ArpFloodRequest(BaseModel):
@@ -289,6 +310,37 @@ class FlowRuleListResponse(BaseModel):
     total: int = 0
 
 
+# ===== Flow Templates Metadata Models =====
+
+class FlowTemplateField(BaseModel):
+    name: str
+    label: str
+    type: str
+    required: bool = True
+    default: Optional[Any] = None
+    min: Optional[int] = None
+    max: Optional[int] = None
+    options: Optional[List[str]] = None
 
 
+class FlowTemplate(BaseModel):
+    id: str
+    label: str
+    description: str
+    endpoint: str
+    method: str = "POST"
+    fields: List[FlowTemplateField]
 
+
+class FlowCategory(BaseModel):
+    id: str
+    label: str
+    description: str
+    templates: List[FlowTemplate]
+
+
+class FlowTemplateResponse(BaseModel):
+    """Response สำหรับ GET /flows/templates"""
+    success: bool = True
+    categories: List[FlowCategory]
+    total_templates: int

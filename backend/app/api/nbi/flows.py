@@ -31,6 +31,8 @@ from .models import (
     AclWhitelistRequest,
     FlowRuleItem,
     FlowRuleListResponse,
+    FlowDeleteRequest,
+    FlowTemplateResponse,
 )
 
 router = APIRouter()
@@ -155,13 +157,13 @@ async def add_flow(request: FlowAddRequest):
 @router.post("/flows/steer", response_model=FlowResponse)
 async def add_traffic_steer_flow(request: TrafficSteerRequest):
     """
-    🎯 Traffic Steering — L4 TCP Redirect
+    🎯 Traffic Steering — L4 TCP/UDP Redirect
 
-    Match: `in-port` + `IPv4` + `TCP` + `tcp-dst-port` → Action: `output`
+    Match: `in-port` + `IPv4` + `TCP/UDP` + `dst-port` → Action: `output`
 
     **bidirectional=true** (default): สร้าง 2 flows ใน 1 call
-    - forward: port A + TCP:dst → port B
-    - reverse: port B + TCP:dst → port A
+    - forward: port A + dst-port → port B
+    - reverse: port B + dst-port → port A
     """
     try:
         result = await openflow_service.add_traffic_steer_flow(
@@ -169,7 +171,8 @@ async def add_traffic_steer_flow(request: TrafficSteerRequest):
             node_id=request.node_id,
             inbound_interface_id=request.inbound_interface_id,
             outbound_interface_id=request.outbound_interface_id,
-            tcp_dst_port=request.tcp_dst_port,
+            dst_port=request.dst_port,
+            protocol=request.protocol,
             priority=request.priority,
             table_id=request.table_id,
             bidirectional=request.bidirectional,
@@ -308,16 +311,16 @@ async def add_acl_ip_blacklist(request: AclIpBlacklistRequest):
 @router.post("/flows/acl/port", response_model=FlowResponse)
 async def add_acl_port_drop(request: AclPortDropRequest):
     """
-    🛑 L4 ACL — Drop traffic ที่ไปหา TCP destination port
+    🛑 L4 ACL — Drop traffic ที่ไปหา destination port (TCP/UDP)
 
-    Match: `IPv4` + `TCP` + `tcp-dst-port` → **DROP**
+    Match: `IPv4` + `TCP/UDP` + `dst-port` → **DROP**
 
     Use Case: บล็อกไม่ให้เข้าถึงบริการบนพอร์ต 8080
     """
     try:
         result = await openflow_service.add_acl_port_drop(
             flow_id=request.flow_id, node_id=request.node_id,
-            tcp_dst_port=request.tcp_dst_port,
+            dst_port=request.dst_port, protocol=request.protocol,
             priority=request.priority, table_id=request.table_id,
         )
         return FlowResponse(
@@ -334,16 +337,16 @@ async def add_acl_port_drop(request: AclPortDropRequest):
 @router.post("/flows/acl/whitelist", response_model=FlowResponse)
 async def add_acl_whitelist(request: AclWhitelistRequest):
     """
-    ✅ Whitelist — อนุญาตเฉพาะ TCP port ที่กำหนด (output NORMAL)
+    ✅ Whitelist — อนุญาตเฉพาะ port ที่กำหนด (TCP/UDP, output NORMAL)
 
-    Match: `IPv4` + `TCP` + `tcp-dst-port` → Action: `output NORMAL`
+    Match: `IPv4` + `TCP/UDP` + `dst-port` → Action: `output NORMAL`
 
     Use Case: อนุญาตให้ใช้แค่พอร์ต 80 (ใช้คู่กับ drop-all ที่ priority ต่ำกว่า)
     """
     try:
         result = await openflow_service.add_acl_whitelist(
             flow_id=request.flow_id, node_id=request.node_id,
-            tcp_dst_port=request.tcp_dst_port,
+            dst_port=request.dst_port, protocol=request.protocol,
             priority=request.priority, table_id=request.table_id,
         )
         return FlowResponse(
@@ -430,6 +433,75 @@ async def get_flows(
         )
     except Exception as e:
         _handle_flow_error(e, "flow.get")
+
+
+# ──────────────────────────────────────────────────────────────
+# GET /devices/{node_id}/flows/{flow_id}  →  ดู Flow เฉพาะตัว
+# ──────────────────────────────────────────────────────────────
+@router.get("/devices/{node_id}/flows/{flow_id}", response_model=FlowResponse)
+async def get_flow_by_id(
+    node_id: str,
+    flow_id: str,
+    table_id: int = Query(default=0, ge=0, le=255, description="Flow Table ID"),
+):
+    """
+    🔍 ดู Flow เฉพาะตัว — ดึงรายละเอียดเชิงลึกจาก ODL
+
+    ใช้เมื่อกดที่รายการ Flow บน Dashboard เพื่อดู Match/Action details
+    """
+    try:
+        result = await openflow_service.get_flow_by_id(
+            node_id=node_id, flow_id=flow_id, table_id=table_id,
+        )
+        return FlowResponse(
+            success=True, code=ErrorCode.SUCCESS.value,
+            message=result["message"], data=result,
+        )
+    except Exception as e:
+        _handle_flow_error(e, "flow.get.detail")
+
+
+# ──────────────────────────────────────────────────────────────
+# GET /flows/templates  →  Flow Templates Metadata (frontend UI)
+# ──────────────────────────────────────────────────────────────
+@router.get("/flows/templates", response_model=FlowTemplateResponse)
+async def get_flow_templates():
+    """
+    📋 Flow Templates — Metadata สำหรับวาด UI สร้าง Flow
+    ส่งคืน หมวดหมู่ > Templates > ฟิลด์ที่จำเป็น สำหรับสร้าง frontend wizard
+    """
+    try:
+        return openflow_service.get_flow_templates()
+    except Exception as e:
+        _handle_flow_error(e, "flow.templates")
+
+
+# ──────────────────────────────────────────────────────────────
+# POST /devices/{node_id}/flows/sync  →  Sync DB ↔ ODL
+# ──────────────────────────────────────────────────────────────
+@router.post("/devices/{node_id}/flows/sync", response_model=FlowResponse)
+async def sync_flow_rules(
+    node_id: str,
+    table_id: int = Query(default=0, ge=0, le=255, description="Flow Table ID"),
+):
+    """
+    🔄 Flow Sync — เทียบ DB กับ ODL ตรวจจับ zombie/unmanaged
+
+    - **zombie**: DB ยัง ACTIVE แต่ ODL ไม่มี → auto mark DELETED
+    - **unmanaged**: ODL มี flow แต่ DB ไม่มี → report (ไม่ได้สร้างผ่าน Backend)
+
+    ใช้สำหรับปุ่ม **"Sync Flows"** บนหน้า Dashboard
+    """
+    try:
+        result = await openflow_service.sync_flow_rules(
+            node_id=node_id, table_id=table_id,
+        )
+        return FlowResponse(
+            success=True, code=ErrorCode.SUCCESS.value,
+            message=result["message"], data=result,
+        )
+    except Exception as e:
+        _handle_flow_error(e, "flow.sync")
 
 
 # ──────────────────────────────────────────────────────────────

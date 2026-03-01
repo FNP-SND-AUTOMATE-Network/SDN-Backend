@@ -84,11 +84,20 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
                             remote_port = state.get("port-id")
                             
                             if remote_node and remote_port:
-                                # Clean domain from system-name (e.g., CSR1000vT.lab.local -> CSR1000vT)
-                                remote_node_clean = remote_node.split('.')[0]
+                                # Clean domain from system-name (e.g., CSR1000vT.lab.local -> CSR1000vT, openflow:1 -> openflow:1)
+                                remote_node_clean = remote_node.split('.')[0] if "openflow" not in remote_node else remote_node
                                 
-                                # Expand interface name abbreviations
+                                # In Huawei VR8, sometimes the port-id comes as 'id' field in state instead of port-id or combined with id
+                                # E.g., Huawei sends 'id': '70f5.4e5a.cba1Ethernet1/0/1', port-id: 'Ethernet1/0/1'
                                 remote_port_clean = remote_port
+                                if remote_port_clean == "Not Advertised":
+                                    # Fallback when port is not advertised, try using neighbor ID
+                                    neighbor_id = state.get("id", "")
+                                    # We can assume neighbor_id might contain the port, but for Openflow it might just be datapath ID string
+                                    if "openflow" in remote_node:
+                                        remote_port_clean = neighbor.get("id", "Unknown")
+                                        
+                                # Expand interface name abbreviations
                                 if remote_port_clean.startswith("Gi") and not remote_port_clean.startswith("Gigabit"):
                                     remote_port_clean = remote_port_clean.replace("Gi", "GigabitEthernet", 1)
                                 elif remote_port_clean.startswith("Te") and not remote_port_clean.startswith("Ten"):
@@ -116,9 +125,27 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
                         ios_data = res_ios.json()
                         entries = ios_data.get("Cisco-IOS-XE-lldp-oper:lldp-entries", {}).get("lldp-entry", [])
                         for entry in entries:
-                            remote_id = entry.get('device-id')
+                            remote_id = entry.get('device-id', '')
                             local_intf = entry.get('local-interface')
                             remote_intf = entry.get('connecting-interface')
+                            
+                            if remote_id and "openflow" in remote_id:
+                                # Sometimes IOS-XE might report mac, sometimes openflow node if properly identified by controller
+                                # Example: 0000.0000.0001 (MAC string) or openflow:1
+                                # If the controller modifies it or it's just raw, we should ensure the format matches OpenFlow
+                                pass 
+                            elif remote_id:
+                                remote_id = remote_id.split('.')[0]
+                                
+                            if remote_intf:
+                                if remote_intf.startswith("Gi") and not remote_intf.startswith("Gigabit"):
+                                    remote_intf = remote_intf.replace("Gi", "GigabitEthernet", 1)
+                                elif remote_intf.startswith("Te") and not remote_intf.startswith("Ten"):
+                                    remote_intf = remote_intf.replace("Te", "TenGigabitEthernet", 1)
+                                elif remote_intf.startswith("Fa") and not remote_intf.startswith("Fast"):
+                                    remote_intf = remote_intf.replace("Fa", "FastEthernet", 1)
+                                elif remote_intf.startswith("Eth") and not remote_intf.startswith("Ethernet"):
+                                    remote_intf = remote_intf.replace("Eth", "Ethernet", 1)
                             
                             raw_links.append({
                                 "link_id": f"{node_id}:{local_intf}-to-{remote_id}:{remote_intf}",
@@ -225,10 +252,16 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
         parent_uuid = device_id_map.get(node_id)
         if not parent_uuid:
             # Node ขาดไป ไม่สามารถอแดปเตอรพอร์ตให้ได้
+            logger.warning(f"Parent UUID mapping failed for node {node_id}")
             continue
             
         port_number = None
-        if port_str.isdigit():
+        # Attempt to extract trailing digits from port_str (e.g., GigabitEthernet1 -> 1)
+        import re
+        match = re.search(r'\d+$', port_str)
+        if match:
+            port_number = int(match.group())
+        elif port_str.isdigit():
             port_number = int(port_str)
             
         # สร้างในตาราง Interface

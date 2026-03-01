@@ -497,6 +497,95 @@ class OpenFlowService:
         }
 
     # ============================================================
+    # 7. Default Gateway Forwarding
+    # ============================================================
+
+    async def add_default_gateway_flow(
+        self, flow_id: str, node_id: str, outbound_interface_id: str,
+        priority: int = 100, table_id: int = 0,
+    ) -> Dict[str, Any]:
+        """Default Gateway — ทราฟฟิกที่ไม่ตรงกับกฎใดๆ ให้ส่งออกไปที่ Gateway"""
+        device = await self._validate_device(node_id)
+        outbound_iface = await self._validate_interface(outbound_interface_id, device, "Outbound")
+        out_port = str(outbound_iface.port_number)
+
+        logger.info(f"Flow ADD [default-gw]: {flow_id} on {node_id} | →port {out_port}")
+
+        db_record = await self._save_flow_to_db(
+            flow_id, node_id, table_id, "default_gateway", priority,
+            match_details={"out_port": int(out_port)},
+        )
+        payload = self._build_default_gw_payload(flow_id, table_id, priority, out_port)
+        result = await self._push_and_track(db_record, flow_id, node_id, table_id, payload)
+
+        return {
+            "success": True, "flow_type": "default_gateway",
+            "message": f"Default Gateway '{flow_id}' on {node_id} → port {out_port}",
+            "flow_id": flow_id, "node_id": node_id,
+            "outbound": {"interface_id": outbound_interface_id, "name": outbound_iface.name, "port_number": int(out_port)},
+            "flow_rule_id": db_record.id, "odl_response": result,
+        }
+
+    # ============================================================
+    # 8. L3 Subnet Steering
+    # ============================================================
+
+    async def add_subnet_steer_flow(
+        self, flow_id: str, node_id: str,
+        src_ip_subnet: str, outbound_interface_id: str,
+        priority: int = 960, table_id: int = 0,
+    ) -> Dict[str, Any]:
+        """L3 Subnet Steering — redirect traffic ตามวง Source IP"""
+        device = await self._validate_device(node_id)
+        outbound_iface = await self._validate_interface(outbound_interface_id, device, "Outbound")
+        out_port = str(outbound_iface.port_number)
+
+        logger.info(f"Flow ADD [steer-subnet]: {flow_id} on {node_id} | {src_ip_subnet}→port {out_port}")
+
+        db_record = await self._save_flow_to_db(
+            flow_id, node_id, table_id, "subnet_steering", priority,
+            match_details={"src_ip_subnet": src_ip_subnet, "out_port": int(out_port)},
+        )
+        payload = self._build_subnet_steering_payload(flow_id, table_id, priority, src_ip_subnet, out_port)
+        result = await self._push_and_track(db_record, flow_id, node_id, table_id, payload)
+
+        return {
+            "success": True, "flow_type": "subnet_steering",
+            "message": f"Subnet steering '{flow_id}' on {node_id}: {src_ip_subnet}→port {out_port}",
+            "flow_id": flow_id, "node_id": node_id, "src_ip_subnet": src_ip_subnet,
+            "outbound": {"interface_id": outbound_interface_id, "name": outbound_iface.name, "port_number": int(out_port)},
+            "flow_rule_id": db_record.id, "odl_response": result,
+        }
+
+    # ============================================================
+    # 9. L3 ICMP Control
+    # ============================================================
+
+    async def add_icmp_control(
+        self, flow_id: str, node_id: str, action: str = "DROP",
+        priority: int = 1100, table_id: int = 0,
+    ) -> Dict[str, Any]:
+        """L3 ICMP Control — บล็อกหรืออนุญาตการ Ping"""
+        await self._validate_device(node_id)
+        action_upper = action.upper()
+        
+        logger.info(f"Flow ADD [icmp-control]: {flow_id} on {node_id} | action={action_upper}")
+
+        db_record = await self._save_flow_to_db(
+            flow_id, node_id, table_id, "icmp_control", priority,
+            match_details={"action": action_upper},
+        )
+        payload = self._build_icmp_payload(flow_id, table_id, priority, action_upper)
+        result = await self._push_and_track(db_record, flow_id, node_id, table_id, payload)
+
+        return {
+            "success": True, "flow_type": "icmp_control",
+            "message": f"ICMP Control '{flow_id}' on {node_id} (Action: {action_upper})",
+            "flow_id": flow_id, "node_id": node_id, "action": action_upper,
+            "flow_rule_id": db_record.id, "odl_response": result,
+        }
+
+    # ============================================================
     # Smart Delete (bidirectional auto-pair)
     # ============================================================
 
@@ -967,6 +1056,19 @@ class OpenFlowService:
                 record.flow_id, record.table_id, record.priority,
                 match.get("dst_ip", ""), str(match.get("out_port", "")),
             )
+        elif ft == "default_gateway":
+            return self._build_default_gw_payload(
+                record.flow_id, record.table_id, record.priority, str(match.get("out_port", "")),
+            )
+        elif ft == "subnet_steering":
+            return self._build_subnet_steering_payload(
+                record.flow_id, record.table_id, record.priority,
+                match.get("src_ip_subnet", ""), str(match.get("out_port", "")),
+            )
+        elif ft == "icmp_control":
+            return self._build_icmp_payload(
+                record.flow_id, record.table_id, record.priority, match.get("action", "DROP"),
+            )
         else:
             raise ValueError(f"Unknown flow_type: {ft}")
 
@@ -1117,6 +1219,59 @@ class OpenFlowService:
             }]
         }
 
+    @staticmethod
+    def _build_default_gw_payload(flow_id: str, table_id: int, priority: int,
+                                  outbound_port: str) -> Dict[str, Any]:
+        """Default Gateway — Match IPv4 → output"""
+        return {
+            "flow-node-inventory:flow": [{
+                "id": flow_id, "table_id": table_id, "priority": priority,
+                "match": {
+                    "ethernet-match": {"ethernet-type": {"type": 2048}},
+                },
+                "instructions": {"instruction": [{"order": 0, "apply-actions": {
+                    "action": [{"order": 0, "output-action": {"output-node-connector": outbound_port}}]
+                }}]},
+            }]
+        }
+
+    @staticmethod
+    def _build_subnet_steering_payload(flow_id: str, table_id: int, priority: int,
+                                       src_subnet: str, outbound_port: str) -> Dict[str, Any]:
+        """L3 Subnet Steering — Match IPv4 + ipv4-source → output"""
+        return {
+            "flow-node-inventory:flow": [{
+                "id": flow_id, "table_id": table_id, "priority": priority,
+                "match": {
+                    "ethernet-match": {"ethernet-type": {"type": 2048}},
+                    "ipv4-source": src_subnet,
+                },
+                "instructions": {"instruction": [{"order": 0, "apply-actions": {
+                    "action": [{"order": 0, "output-action": {"output-node-connector": outbound_port}}]
+                }}]},
+            }]
+        }
+
+    @staticmethod
+    def _build_icmp_payload(flow_id: str, table_id: int, priority: int,
+                            action: str) -> Dict[str, Any]:
+        """L3 ICMP Control — Match IPv4 + ICMP → DROP or NORMAL"""
+        flow_dict: Dict[str, Any] = {
+            "id": flow_id, "table_id": table_id, "priority": priority,
+            "match": {
+                "ethernet-match": {"ethernet-type": {"type": 2048}},
+                "ip-match": {"ip-protocol": 1},
+            }
+        }
+        if action == "NORMAL":
+            flow_dict["instructions"] = {"instruction": [{"order": 0, "apply-actions": {
+                "action": [{"order": 0, "output-action": {"output-node-connector": "NORMAL"}}]
+            }}]}
+        
+        return {
+            "flow-node-inventory:flow": [flow_dict]
+        }
+
     # ============================================================
     # Flow Templates Metadata (For Frontend Wizard)
     # ============================================================
@@ -1126,7 +1281,7 @@ class OpenFlowService:
         """ดึง Template ของ Flow ทั้งหมดสำหรับวาด UI หน้าเว็บ"""
         return {
             "success": True,
-            "total_templates": 9,
+            "total_templates": 12,
             "categories": [
                 {
                     "id": "connectivity",
@@ -1137,7 +1292,7 @@ class OpenFlowService:
                             "id": "arp_flood",
                             "label": "ARP Flood",
                             "description": "กระจาย ARP ทุกพอร์ต เพื่อให้ Host คุยกันได้ (Priority 400)",
-                            "endpoint": "/api/v1/nbi/flows/arp-flood",
+                            "endpoint": "/api/v1/nbi/devices/{node_id}/flows/connectivity/arp-flood",
                             "method": "POST",
                             "fields": [
                                 {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
@@ -1149,7 +1304,7 @@ class OpenFlowService:
                             "id": "base_connectivity",
                             "label": "Base Connectivity",
                             "description": "เชื่อม L1 Forwarding ระหว่าง 2 พอร์ต (Priority 500)",
-                            "endpoint": "/api/v1/nbi/flows",
+                            "endpoint": "/api/v1/nbi/devices/{node_id}/flows/connectivity/base",
                             "method": "POST",
                             "fields": [
                                 {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
@@ -1158,6 +1313,19 @@ class OpenFlowService:
                                 {"name": "outbound_interface_id", "label": "Outbound Port", "type": "interface_select", "required": True},
                                 {"name": "bidirectional", "label": "Bidirectional (สร้างขากลับด้วย)", "type": "boolean", "default": True, "required": False},
                                 {"name": "priority", "label": "Priority", "type": "number", "default": 500, "required": False}
+                            ]
+                        },
+                        {
+                            "id": "default_gateway",
+                            "label": "Default Gateway",
+                            "description": "ทราฟฟิกที่ไม่ตรงกับกฎใดๆ ให้ส่งออกไปยัง Gateway Port (Priority 100)",
+                            "endpoint": "/api/v1/nbi/devices/{node_id}/flows/connectivity/default-gateway",
+                            "method": "POST",
+                            "fields": [
+                                {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
+                                {"name": "node_id", "label": "Device", "type": "device_select", "required": True},
+                                {"name": "outbound_interface_id", "label": "Gateway Port", "type": "interface_select", "required": True},
+                                {"name": "priority", "label": "Priority", "type": "number", "default": 100, "required": False}
                             ]
                         }
                     ]
@@ -1171,7 +1339,7 @@ class OpenFlowService:
                             "id": "steer_l4_port",
                             "label": "L4 Port Redirect (TCP/UDP)",
                             "description": "บังคับ Traffic ของพอร์ต TCP/UDP เฉพาะ ให้ไปออกพอร์ตที่กำหนด",
-                            "endpoint": "/api/v1/nbi/flows/steer",
+                            "endpoint": "/api/v1/nbi/devices/{node_id}/flows/steering/l4-port",
                             "method": "POST",
                             "fields": [
                                 {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
@@ -1187,8 +1355,8 @@ class OpenFlowService:
                         {
                             "id": "steer_l2_mac",
                             "label": "L2 MAC Redirect",
-                            "description": "บังคับ Traffic จาก Source MAC Address ให้ไปออกพอร์ตที่กำหนด (ไม่ต้องระบุขาเข้า)",
-                            "endpoint": "/api/v1/nbi/flows/steer/mac",
+                            "description": "บังคับ Traffic จาก Source MAC Address ให้ไปออกพอร์ตที่กำหนด",
+                            "endpoint": "/api/v1/nbi/devices/{node_id}/flows/steering/l2-mac",
                             "method": "POST",
                             "fields": [
                                 {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
@@ -1201,13 +1369,27 @@ class OpenFlowService:
                         {
                             "id": "steer_l3_ip",
                             "label": "L3 IP Redirect",
-                            "description": "บังคับ Traffic ที่ไปหา Destination IP ให้ไปออกพอร์ตที่กำหนด (ไม่ต้องระบุขาเข้า)",
-                            "endpoint": "/api/v1/nbi/flows/steer/ip",
+                            "description": "บังคับ Traffic ที่ไปหา Destination IP ให้ไปออกพอร์ตที่กำหนด",
+                            "endpoint": "/api/v1/nbi/devices/{node_id}/flows/steering/l3-ip",
                             "method": "POST",
                             "fields": [
                                 {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
                                 {"name": "node_id", "label": "Device", "type": "device_select", "required": True},
                                 {"name": "dst_ip", "label": "Destination IP (CIDR)", "type": "ip_cidr", "required": True},
+                                {"name": "outbound_interface_id", "label": "Redirect To Port", "type": "interface_select", "required": True},
+                                {"name": "priority", "label": "Priority", "type": "number", "default": 960, "required": False}
+                            ]
+                        },
+                        {
+                            "id": "steer_l3_subnet",
+                            "label": "L3 Subnet Redirect",
+                            "description": "แยกเส้นทางตามกลุ่ม IP ต้นทาง (Source IP Subnet) ให้ไปออกพอร์ตที่กำหนด",
+                            "endpoint": "/api/v1/nbi/devices/{node_id}/flows/steering/l3-subnet",
+                            "method": "POST",
+                            "fields": [
+                                {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
+                                {"name": "node_id", "label": "Device", "type": "device_select", "required": True},
+                                {"name": "src_ip_subnet", "label": "Source IP Subnet (CIDR)", "type": "ip_cidr", "required": True},
                                 {"name": "outbound_interface_id", "label": "Redirect To Port", "type": "interface_select", "required": True},
                                 {"name": "priority", "label": "Priority", "type": "number", "default": 960, "required": False}
                             ]
@@ -1223,7 +1405,7 @@ class OpenFlowService:
                             "id": "acl_mac_drop",
                             "label": "Block MAC Address",
                             "description": "บล็อกทราฟฟิกทั้งหมดที่มาจาก Source MAC นี้",
-                            "endpoint": "/api/v1/nbi/flows/acl/mac",
+                            "endpoint": "/api/v1/nbi/devices/{node_id}/flows/acl/block-mac",
                             "method": "POST",
                             "fields": [
                                 {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
@@ -1236,7 +1418,7 @@ class OpenFlowService:
                             "id": "acl_ip_blacklist",
                             "label": "Block IP Pair",
                             "description": "บล็อกการสื่อสารระหว่าง Source IP และ Destination IP",
-                            "endpoint": "/api/v1/nbi/flows/acl/ip",
+                            "endpoint": "/api/v1/nbi/devices/{node_id}/flows/acl/block-ip",
                             "method": "POST",
                             "fields": [
                                 {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
@@ -1250,7 +1432,7 @@ class OpenFlowService:
                             "id": "acl_port_drop",
                             "label": "Block Port (TCP/UDP)",
                             "description": "บล็อกทราฟฟิกที่วิ่งเข้าหา Destination Port นี้ (เช่น บล็อกพอร์ต 80)",
-                            "endpoint": "/api/v1/nbi/flows/acl/port",
+                            "endpoint": "/api/v1/nbi/devices/{node_id}/flows/acl/block-port",
                             "method": "POST",
                             "fields": [
                                 {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
@@ -1264,7 +1446,7 @@ class OpenFlowService:
                             "id": "acl_port_whitelist",
                             "label": "Whitelist Port (TCP/UDP)",
                             "description": "อนุญาตทราฟฟิกขาเข้าสำหรับพอร์ตนี้ (ไว้ใช้คู่กับการล็อกพอร์ตอื่นทิ้ง)",
-                            "endpoint": "/api/v1/nbi/flows/acl/whitelist",
+                            "endpoint": "/api/v1/nbi/devices/{node_id}/flows/acl/whitelist-port",
                             "method": "POST",
                             "fields": [
                                 {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
@@ -1272,6 +1454,19 @@ class OpenFlowService:
                                 {"name": "protocol", "label": "Protocol", "type": "protocol_select", "options": ["tcp", "udp"], "default": "tcp", "required": False},
                                 {"name": "dst_port", "label": "Destination Port", "type": "number", "min": 1, "max": 65535, "required": True},
                                 {"name": "priority", "label": "Priority", "type": "number", "default": 1000, "required": False}
+                            ]
+                        },
+                        {
+                            "id": "acl_icmp_control",
+                            "label": "ICMP Control (Ping)",
+                            "description": "ตั้งค่าอนุญาตหรือบล็อกการส่ง Ping (ICMP Echo) ทั้งระบบ",
+                            "endpoint": "/api/v1/nbi/devices/{node_id}/flows/acl/icmp-control",
+                            "method": "POST",
+                            "fields": [
+                                {"name": "flow_id", "label": "Flow ID", "type": "string", "required": True},
+                                {"name": "node_id", "label": "Device", "type": "device_select", "required": True},
+                                {"name": "action", "label": "Action", "type": "protocol_select", "options": ["DROP", "NORMAL"], "default": "DROP", "required": True},
+                                {"name": "priority", "label": "Priority", "type": "number", "default": 1100, "required": False}
                             ]
                         }
                     ]

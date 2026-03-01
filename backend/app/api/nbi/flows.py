@@ -25,10 +25,13 @@ from .models import (
     ArpFloodRequest,
     MacSteerRequest,
     IpSteerRequest,
+    DefaultGatewayRequest,
+    SubnetSteerRequest,
     AclMacDropRequest,
     AclIpBlacklistRequest,
     AclPortDropRequest,
     AclWhitelistRequest,
+    IcmpControlRequest,
     FlowRuleItem,
     FlowRuleListResponse,
     FlowDeleteRequest,
@@ -88,24 +91,18 @@ def _handle_flow_error(e: Exception, operation: str):
 
 
 # ──────────────────────────────────────────────────────────────
-# POST /flows/arp-flood  →  ARP Flood (1 call per switch)
+# POST /devices/{node_id}/flows/connectivity/arp-flood
 # ──────────────────────────────────────────────────────────────
-@router.post("/flows/arp-flood", response_model=FlowResponse)
-async def add_arp_flood_flow(request: ArpFloodRequest):
+@router.post("/devices/{node_id}/flows/connectivity/arp-flood", response_model=FlowResponse)
+async def add_arp_flood_flow(node_id: str, request: ArpFloodRequest):
     """
     📡 ARP Flood — กระจาย ARP ทุกพอร์ต
-
     Match: `ethernet-type = 0x0806 (ARP)` → Action: `FLOOD`
-
-    เรียก **1 ครั้งต่อ switch** ก็ครอบคลุมทุกพอร์ต
-    ไม่ต้องระบุ interface เพราะ FLOOD ส่งทุกทิศทาง
-
-    **จำเป็นต้องตั้งก่อน Base Connectivity** เพื่อให้ host หา MAC ได้
     """
     try:
         result = await openflow_service.add_arp_flood_flow(
             flow_id=request.flow_id,
-            node_id=request.node_id,
+            node_id=node_id,
             priority=request.priority,
             table_id=request.table_id,
         )
@@ -118,25 +115,15 @@ async def add_arp_flood_flow(request: ArpFloodRequest):
 
 
 # ──────────────────────────────────────────────────────────────
-# POST /flows  →  Base Connectivity (bidirectional by default)
+# POST /devices/{node_id}/flows/connectivity/base
 # ──────────────────────────────────────────────────────────────
-@router.post("/flows", response_model=FlowResponse)
-async def add_flow(request: FlowAddRequest):
-    """
-    🔀 Base Connectivity — L1 Forwarding
-
-    Match: `in-port` → Action: `output`
-
-    **bidirectional=true** (default): สร้าง 2 flows ใน 1 call
-    - `{flow_id}-forward`: port A → port B
-    - `{flow_id}-reverse`: port B → port A
-
-    **bidirectional=false**: สร้างทิศทางเดียว
-    """
+@router.post("/devices/{node_id}/flows/connectivity/base", response_model=FlowResponse)
+async def add_flow(node_id: str, request: FlowAddRequest):
+    """🔀 Base Connectivity — L1 Forwarding"""
     try:
         result = await openflow_service.add_flow(
             flow_id=request.flow_id,
-            node_id=request.node_id,
+            node_id=node_id,
             inbound_interface_id=request.inbound_interface_id,
             outbound_interface_id=request.outbound_interface_id,
             priority=request.priority,
@@ -152,23 +139,37 @@ async def add_flow(request: FlowAddRequest):
 
 
 # ──────────────────────────────────────────────────────────────
-# POST /flows/steer  →  Traffic Steering (bidirectional by default)
+# POST /devices/{node_id}/flows/connectivity/default-gateway
 # ──────────────────────────────────────────────────────────────
-@router.post("/flows/steer", response_model=FlowResponse)
-async def add_traffic_steer_flow(request: TrafficSteerRequest):
-    """
-    🎯 Traffic Steering — L4 TCP/UDP Redirect
+@router.post("/devices/{node_id}/flows/connectivity/default-gateway", response_model=FlowResponse)
+async def add_default_gateway_flow(node_id: str, request: DefaultGatewayRequest):
+    """🌐 Default Gateway — ทราฟฟิกที่ไม่ตรงกับกฎใดๆ ให้ส่งออกไปที่ Gateway"""
+    try:
+        result = await openflow_service.add_default_gateway_flow(
+            flow_id=request.flow_id,
+            node_id=node_id,
+            outbound_interface_id=request.outbound_interface_id,
+            priority=request.priority,
+            table_id=request.table_id,
+        )
+        return FlowResponse(
+            success=True, code=ErrorCode.SUCCESS.value,
+            message=result["message"], data=result,
+        )
+    except Exception as e:
+        _handle_flow_error(e, "flow.default_gateway")
 
-    Match: `in-port` + `IPv4` + `TCP/UDP` + `dst-port` → Action: `output`
 
-    **bidirectional=true** (default): สร้าง 2 flows ใน 1 call
-    - forward: port A + dst-port → port B
-    - reverse: port B + dst-port → port A
-    """
+# ──────────────────────────────────────────────────────────────
+# POST /devices/{node_id}/flows/steering/l4-port
+# ──────────────────────────────────────────────────────────────
+@router.post("/devices/{node_id}/flows/steering/l4-port", response_model=FlowResponse)
+async def add_traffic_steer_flow(node_id: str, request: TrafficSteerRequest):
+    """🎯 Traffic Steering — L4 TCP/UDP Redirect"""
     try:
         result = await openflow_service.add_traffic_steer_flow(
             flow_id=request.flow_id,
-            node_id=request.node_id,
+            node_id=node_id,
             inbound_interface_id=request.inbound_interface_id,
             outbound_interface_id=request.outbound_interface_id,
             dst_port=request.dst_port,
@@ -186,26 +187,15 @@ async def add_traffic_steer_flow(request: TrafficSteerRequest):
 
 
 # ──────────────────────────────────────────────────────────────
-# POST /flows/steer/mac  →  L2 MAC-based Steering
+# POST /devices/{node_id}/flows/steering/l2-mac
 # ──────────────────────────────────────────────────────────────
-@router.post("/flows/steer/mac", response_model=FlowResponse)
-async def add_mac_steer_flow(request: MacSteerRequest):
-    """
-    🏷️ L2 MAC Steering — redirect traffic จาก source MAC เฉพาะเครื่อง
-
-    Match: `ethernet-source` (MAC Address) → Action: `output`
-
-    ไม่ match in-port → ไม่ว่าเข้ามาจากพอร์ตไหน ถ้า source MAC ตรงก็ redirect
-    เรียก **1 ครั้ง** ไม่ต้อง bidirectional
-
-    **Request Body:**
-    - `src_mac`: Source MAC Address เช่น "00:50:79:66:68:05"
-    - `outbound_interface_id`: UUID พอร์ตปลายทาง
-    """
+@router.post("/devices/{node_id}/flows/steering/l2-mac", response_model=FlowResponse)
+async def add_mac_steer_flow(node_id: str, request: MacSteerRequest):
+    """🏷️ L2 MAC Steering — redirect traffic จาก source MAC เฉพาะเครื่อง"""
     try:
         result = await openflow_service.add_mac_steer_flow(
             flow_id=request.flow_id,
-            node_id=request.node_id,
+            node_id=node_id,
             src_mac=request.src_mac,
             outbound_interface_id=request.outbound_interface_id,
             priority=request.priority,
@@ -220,26 +210,15 @@ async def add_mac_steer_flow(request: MacSteerRequest):
 
 
 # ──────────────────────────────────────────────────────────────
-# POST /flows/steer/ip  →  L3 IP-based Steering
+# POST /devices/{node_id}/flows/steering/l3-ip
 # ──────────────────────────────────────────────────────────────
-@router.post("/flows/steer/ip", response_model=FlowResponse)
-async def add_ip_steer_flow(request: IpSteerRequest):
-    """
-    🌐 L3 IP Steering — redirect traffic ไปหา destination IP
-
-    Match: `ethernet-type(IPv4)` + `ipv4-destination` → Action: `output`
-
-    ไม่ match in-port → ถ้า destination IP ตรงก็ redirect ไม่ว่ามาจากพอร์ตไหน
-    เรียก **1 ครั้ง** ไม่ต้อง bidirectional
-
-    **Request Body:**
-    - `dst_ip`: Destination IP (CIDR) เช่น "192.168.50.4/32"
-    - `outbound_interface_id`: UUID พอร์ตปลายทาง
-    """
+@router.post("/devices/{node_id}/flows/steering/l3-ip", response_model=FlowResponse)
+async def add_ip_steer_flow(node_id: str, request: IpSteerRequest):
+    """🌐 L3 IP Steering — redirect traffic ไปหา destination IP"""
     try:
         result = await openflow_service.add_ip_steer_flow(
             flow_id=request.flow_id,
-            node_id=request.node_id,
+            node_id=node_id,
             dst_ip=request.dst_ip,
             outbound_interface_id=request.outbound_interface_id,
             priority=request.priority,
@@ -254,20 +233,37 @@ async def add_ip_steer_flow(request: IpSteerRequest):
 
 
 # ──────────────────────────────────────────────────────────────
-# POST /flows/acl/mac  →  L2 MAC Drop
+# POST /devices/{node_id}/flows/steering/l3-subnet
 # ──────────────────────────────────────────────────────────────
-@router.post("/flows/acl/mac", response_model=FlowResponse)
-async def add_acl_mac_drop(request: AclMacDropRequest):
-    """
-    🛑 L2 ACL — Drop traffic จาก source MAC เฉพาะเครื่อง
+@router.post("/devices/{node_id}/flows/steering/l3-subnet", response_model=FlowResponse)
+async def add_subnet_steer_flow(node_id: str, request: SubnetSteerRequest):
+    """🌐 L3 Subnet Steering — redirect traffic ตามวง Source IP"""
+    try:
+        result = await openflow_service.add_subnet_steer_flow(
+            flow_id=request.flow_id,
+            node_id=node_id,
+            src_ip_subnet=request.src_ip_subnet,
+            outbound_interface_id=request.outbound_interface_id,
+            priority=request.priority,
+            table_id=request.table_id,
+        )
+        return FlowResponse(
+            success=True, code=ErrorCode.SUCCESS.value,
+            message=result["message"], data=result,
+        )
+    except Exception as e:
+        _handle_flow_error(e, "flow.steer.subnet")
 
-    Match: `ethernet-source` → Action: **DROP** (ไม่ใส่ instructions)
 
-    Use Case: บล็อกเครื่อง PC1 ไม่ให้เข้าถึงเครือข่ายเลย
-    """
+# ──────────────────────────────────────────────────────────────
+# POST /devices/{node_id}/flows/acl/block-mac
+# ──────────────────────────────────────────────────────────────
+@router.post("/devices/{node_id}/flows/acl/block-mac", response_model=FlowResponse)
+async def add_acl_mac_drop(node_id: str, request: AclMacDropRequest):
+    """🛑 L2 ACL — Drop traffic จาก source MAC เฉพาะเครื่อง"""
     try:
         result = await openflow_service.add_acl_mac_drop(
-            flow_id=request.flow_id, node_id=request.node_id,
+            flow_id=request.flow_id, node_id=node_id,
             src_mac=request.src_mac, priority=request.priority,
             table_id=request.table_id,
         )
@@ -280,20 +276,14 @@ async def add_acl_mac_drop(request: AclMacDropRequest):
 
 
 # ──────────────────────────────────────────────────────────────
-# POST /flows/acl/ip  →  L3 IP Blacklist
+# POST /devices/{node_id}/flows/acl/block-ip
 # ──────────────────────────────────────────────────────────────
-@router.post("/flows/acl/ip", response_model=FlowResponse)
-async def add_acl_ip_blacklist(request: AclIpBlacklistRequest):
-    """
-    🛑 L3 ACL — Drop traffic ระหว่าง source IP กับ destination IP
-
-    Match: `ethernet-type(IPv4)` + `ipv4-source` + `ipv4-destination` → **DROP**
-
-    Use Case: ห้าม IP 192.168.50.5 คุยกับ IP 192.168.50.4
-    """
+@router.post("/devices/{node_id}/flows/acl/block-ip", response_model=FlowResponse)
+async def add_acl_ip_blacklist(node_id: str, request: AclIpBlacklistRequest):
+    """🛑 L3 ACL — Drop traffic ระหว่าง source IP กับ destination IP"""
     try:
         result = await openflow_service.add_acl_ip_blacklist(
-            flow_id=request.flow_id, node_id=request.node_id,
+            flow_id=request.flow_id, node_id=node_id,
             src_ip=request.src_ip, dst_ip=request.dst_ip,
             priority=request.priority, table_id=request.table_id,
         )
@@ -306,20 +296,14 @@ async def add_acl_ip_blacklist(request: AclIpBlacklistRequest):
 
 
 # ──────────────────────────────────────────────────────────────
-# POST /flows/acl/port  →  L4 Port Drop
+# POST /devices/{node_id}/flows/acl/block-port
 # ──────────────────────────────────────────────────────────────
-@router.post("/flows/acl/port", response_model=FlowResponse)
-async def add_acl_port_drop(request: AclPortDropRequest):
-    """
-    🛑 L4 ACL — Drop traffic ที่ไปหา destination port (TCP/UDP)
-
-    Match: `IPv4` + `TCP/UDP` + `dst-port` → **DROP**
-
-    Use Case: บล็อกไม่ให้เข้าถึงบริการบนพอร์ต 8080
-    """
+@router.post("/devices/{node_id}/flows/acl/block-port", response_model=FlowResponse)
+async def add_acl_port_drop(node_id: str, request: AclPortDropRequest):
+    """🛑 L4 ACL — Drop traffic ที่ไปหา destination port (TCP/UDP)"""
     try:
         result = await openflow_service.add_acl_port_drop(
-            flow_id=request.flow_id, node_id=request.node_id,
+            flow_id=request.flow_id, node_id=node_id,
             dst_port=request.dst_port, protocol=request.protocol,
             priority=request.priority, table_id=request.table_id,
         )
@@ -332,20 +316,14 @@ async def add_acl_port_drop(request: AclPortDropRequest):
 
 
 # ──────────────────────────────────────────────────────────────
-# POST /flows/acl/whitelist  →  Whitelist (Permit via NORMAL)
+# POST /devices/{node_id}/flows/acl/whitelist-port
 # ──────────────────────────────────────────────────────────────
-@router.post("/flows/acl/whitelist", response_model=FlowResponse)
-async def add_acl_whitelist(request: AclWhitelistRequest):
-    """
-    ✅ Whitelist — อนุญาตเฉพาะ port ที่กำหนด (TCP/UDP, output NORMAL)
-
-    Match: `IPv4` + `TCP/UDP` + `dst-port` → Action: `output NORMAL`
-
-    Use Case: อนุญาตให้ใช้แค่พอร์ต 80 (ใช้คู่กับ drop-all ที่ priority ต่ำกว่า)
-    """
+@router.post("/devices/{node_id}/flows/acl/whitelist-port", response_model=FlowResponse)
+async def add_acl_whitelist(node_id: str, request: AclWhitelistRequest):
+    """✅ Whitelist — อนุญาตเฉพาะ port ที่กำหนด (TCP/UDP, action: NORMAL)"""
     try:
         result = await openflow_service.add_acl_whitelist(
-            flow_id=request.flow_id, node_id=request.node_id,
+            flow_id=request.flow_id, node_id=node_id,
             dst_port=request.dst_port, protocol=request.protocol,
             priority=request.priority, table_id=request.table_id,
         )
@@ -358,21 +336,35 @@ async def add_acl_whitelist(request: AclWhitelistRequest):
 
 
 # ──────────────────────────────────────────────────────────────
-# DELETE /flows/{flow_id}  →  ลบ Flow Rule (ทุกประเภท)
+# POST /devices/{node_id}/flows/acl/icmp-control
 # ──────────────────────────────────────────────────────────────
-@router.delete("/flows/{flow_id}", response_model=FlowResponse)
+@router.post("/devices/{node_id}/flows/acl/icmp-control", response_model=FlowResponse)
+async def add_icmp_control(node_id: str, request: IcmpControlRequest):
+    """🛑 L3 ICMP Control — บล็อกหรืออนุญาตการ Ping"""
+    try:
+        result = await openflow_service.add_icmp_control(
+            flow_id=request.flow_id, node_id=node_id,
+            action=request.action,
+            priority=request.priority, table_id=request.table_id,
+        )
+        return FlowResponse(
+            success=True, code=ErrorCode.SUCCESS.value,
+            message=result["message"], data=result,
+        )
+    except Exception as e:
+        _handle_flow_error(e, "flow.acl.icmp")
+
+
+# ──────────────────────────────────────────────────────────────
+# DELETE /devices/{node_id}/flows/{flow_id}  →  ลบ Flow Rule
+# ──────────────────────────────────────────────────────────────
+@router.delete("/devices/{node_id}/flows/{flow_id}", response_model=FlowResponse)
 async def delete_flow(
+    node_id: str,
     flow_id: str,
-    node_id: str = Query(..., description="node_id ของ OpenFlow switch"),
     table_id: int = Query(default=0, ge=0, le=255, description="Flow Table ID"),
 ):
-    """
-    🗑️ ลบ Flow Rule (ใช้ได้ทุกประเภท)
-
-    สำหรับ bidirectional flows ต้องลบ 2 ครั้ง:
-    - DELETE `/flows/{flow_id}-forward?node_id=...`
-    - DELETE `/flows/{flow_id}-reverse?node_id=...`
-    """
+    """🗑️ ลบ Flow Rule (ใช้ได้ทุกประเภท)"""
     try:
         result = await openflow_service.delete_flow(
             flow_id=flow_id, node_id=node_id, table_id=table_id,
@@ -386,20 +378,14 @@ async def delete_flow(
 
 
 # ──────────────────────────────────────────────────────────────
-# DELETE /devices/{node_id}/flows/reset  →  ล้าง Flows ทั้ง table
+# DELETE /devices/{node_id}/flows  →  ล้าง Flows ทั้ง table
 # ──────────────────────────────────────────────────────────────
-@router.delete("/devices/{node_id}/flows/reset", response_model=FlowResponse)
+@router.delete("/devices/{node_id}/flows", response_model=FlowResponse)
 async def reset_table(
     node_id: str,
     table_id: int = Query(default=0, ge=0, le=255, description="Flow Table ID"),
 ):
-    """
-    💥 Reset Table — ล้าง Flow Rules ทั้งหมดใน table
-
-    ใช้สำหรับปุ่ม **"Reset Network"** หรือ **"Clear All"** บนหน้า Dashboard
-
-    ⚠️ **คำเตือน**: จะลบ flow ทุกตัวใน table นั้น (ARP, Base, Steer, ACL ทั้งหมด)
-    """
+    """💥 Reset Table — ล้าง Flow Rules ทั้งหมดใน table"""
     try:
         result = await openflow_service.reset_table(
             node_id=node_id, table_id=table_id,

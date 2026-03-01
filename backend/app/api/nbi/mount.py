@@ -85,15 +85,22 @@ async def mount_device(
         elif "username" in error_msg.lower() or "password" in error_msg.lower():
             code = ErrorCode.MISSING_NETCONF_CREDENTIALS
             status_code = status.HTTP_400_BAD_REQUEST
+        elif "profile" in error_msg.lower():
+            code = ErrorCode.MISSING_USER_CREDENTIALS
+            status_code = status.HTTP_400_BAD_REQUEST
         else:
             code = ErrorCode.INVALID_PARAMS
             status_code = status.HTTP_400_BAD_REQUEST
         
-        raise HTTPException(status_code=status_code, detail={
+        detail_data = {
             "code": code.value,
-            "message": error_msg,
-            "required_fields": ["node_id", "netconf_host or ip_address", "netconf_username", "netconf_password"]
-        })
+            "message": error_msg
+        }
+        
+        if code == ErrorCode.INVALID_PARAMS:
+            detail_data["required_fields"] = ["node_id", "netconf_host or ip_address", "netconf_username", "netconf_password"]
+            
+        raise HTTPException(status_code=status_code, detail=detail_data)
         
     except asyncio.TimeoutError:
         raise HTTPException(

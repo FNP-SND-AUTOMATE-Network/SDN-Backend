@@ -79,6 +79,9 @@ model User {
   // OS File Uploads
   uploadedOSFiles OSFile[]
 
+  // Backup records triggered by user
+  triggeredBackups DeviceBackupRecord[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -233,6 +236,8 @@ model DeviceNetwork {
 
   // Many-to-Many relation with Tags
   tags Tag[]
+
+  backupRecords DeviceBackupRecord[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -490,11 +495,15 @@ model Backup {
   status      BackupStatus @default(ONLINE)
   auto_backup Boolean      @default(false)
 
+  cron_expression String? // e.g. "0 0 * * *" (run every midnight)
+  retention_days  Int     @default(30) // How many days to keep backup records
+
   os_id           String?          @db.Uuid
   operatingSystem OperatingSystem? @relation(fields: [os_id], references: [id], onDelete: SetNull)
 
-  policy         Policy?         @relation(fields: [policy_id], references: [id], onDelete: SetNull)
+  policy         Policy?              @relation(fields: [policy_id], references: [id], onDelete: SetNull)
   deviceNetworks DeviceNetwork[]
+  records        DeviceBackupRecord[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -507,6 +516,57 @@ enum BackupStatus {
   OFFLINE
   MAINTENANCE
   OTHER
+}
+
+enum ConfigType {
+  RUNNING
+  STARTUP
+  CANDIDATE
+  OTHER
+}
+
+enum ConfigFormat {
+  CLI_TEXT
+  JSON
+  XML
+}
+
+enum BackupJobStatus {
+  SUCCESS
+  FAILED
+  IN_PROGRESS
+}
+
+// ========= Backup History (Record) =========
+model DeviceBackupRecord {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  device_id String        @db.Uuid
+  device    DeviceNetwork @relation(fields: [device_id], references: [id], onDelete: Cascade)
+
+  backup_profile_id String? @db.Uuid
+  backup_profile    Backup? @relation(fields: [backup_profile_id], references: [id], onDelete: SetNull)
+
+  config_type   ConfigType   @default(RUNNING)
+  config_format ConfigFormat @default(CLI_TEXT)
+
+  config_content String?         @db.Text
+  file_path      String?
+  file_size      Int?
+  file_hash      String?
+  status         BackupJobStatus @default(SUCCESS)
+  error_message  String?         @db.Text
+
+  triggered_by_user String? @db.Uuid
+  user              User?   @relation(fields: [triggered_by_user], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([device_id])
+  @@index([createdAt])
+  @@index([config_type])
+  @@index([backup_profile_id])
 }
 
 // ========= configuration Template =========

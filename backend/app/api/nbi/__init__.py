@@ -28,6 +28,7 @@ Structure:
 - odl.py        - ODL sync endpoints
 - mount.py      - Mount/Unmount endpoints
 - health.py     - Health check endpoint
+- flows.py      - OpenFlow flow management endpoints
 """
 from fastapi import APIRouter
 
@@ -39,6 +40,7 @@ from .mount import router as mount_router
 from .health import router as health_router
 from .discovery import router as discovery_router
 from .topology import router as topology_router
+from .flows import router as flows_router
 
 # Re-export models for backward compatibility
 from .models import (
@@ -66,3 +68,4 @@ router.include_router(mount_router)
 router.include_router(health_router)
 router.include_router(discovery_router)
 router.include_router(topology_router)
+router.include_router(flows_router)

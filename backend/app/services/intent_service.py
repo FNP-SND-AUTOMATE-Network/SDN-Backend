@@ -57,6 +57,7 @@ from app.drivers.huawei.vrp8.routing import HuaweiRoutingDriver
 
 # DHCP Drivers
 from app.drivers.huawei.vrp8.dhcp import HuaweiDhcpDriver
+from app.drivers.cisco.ios_xe.dhcp import CiscoDhcpDriver
 
 # Device Driver (mount/unmount)
 from app.drivers.device import DeviceDriver
@@ -145,12 +146,15 @@ class IntentService:
         # Step 3: Get device profile
         device = await self.device_profiles.get(req.node_id)
         
-        # OpenFlow Bypass
+        # OpenFlow devices are managed via RESTful endpoints, not intents
         if getattr(device, "management_protocol", "NETCONF") == "OPENFLOW":
-            return await self._execute_openflow(req, device)
+            raise UnsupportedIntent(
+                f"OpenFlow devices do not use the intent system. "
+                f"Please use the RESTful flow endpoints instead: "
+                f"POST /api/v1/nbi/devices/{req.node_id}/flows/..."
+            )
         
         # Step 4: Check if device is mounted and connected (NETCONF only)
-        # We only check this for NETCONF, OPENFLOW is handled above
         mount_status = await self.device_profiles.check_mount_status(req.node_id)
         if not mount_status.get("ready_for_intent"):
             connection_status = mount_status.get("connection_status", "unknown")
@@ -185,37 +189,6 @@ class IntentService:
         
         # Step 6: Execute with native driver (no fallback mechanism)
         return await self._execute(req, device, driver_name, os_type)
-
-    async def _execute_openflow(self, req: IntentRequest, device) -> IntentResponse:
-        """Handle OpenFlow intents, bypassing DriverFactory and NETCONF mount checks"""
-        from app.drivers.openflow.flow import OpenFlowDriver
-        
-        driver = OpenFlowDriver()
-        driver_name = "openflow"
-        
-        logger.info(f"Intent: {req.intent}, Device: {req.node_id}, "
-                   f"Driver: {driver_name}, Protocol: OPENFLOW (bypassing NETCONF)")
-                   
-        spec = driver.build(device, req.intent, req.params)
-        logger.debug(f"RequestSpec: {spec.method} {spec.path}")
-        
-        try:
-            # Send to ODL using generic client
-            raw = await self.client.send(spec)
-        except OdlRequestError as e:
-            raise OdlRequestError(
-                status_code=getattr(e, 'status_code', 502),
-                message=f"ODL OpenFlow request failed: {e}",
-                details={"original_error": str(e)}
-            ) from e
-            
-        return IntentResponse(
-            success=True,
-            intent=req.intent,
-            node_id=req.node_id,
-            driver_used=driver_name,
-            result=raw
-        )
 
     async def _handle_device_intent(self, req: IntentRequest) -> IntentResponse:
         """

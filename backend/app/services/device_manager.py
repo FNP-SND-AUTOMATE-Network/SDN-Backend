@@ -72,21 +72,17 @@ class DeviceManager:
 
     @property
     def _base_url(self) -> str:
-        from app.services.settings_service import SettingsService
-        config = SettingsService._odl_config_cache or SettingsService._get_default_env_config()
-        return (self._init_odl_url or config.get("ODL_BASE_URL", "")).rstrip("/")
+        return (self._init_odl_url or settings.ODL_BASE_URL).rstrip("/")
 
     @property
     def _auth(self) -> Tuple[str, str]:
-        from app.services.settings_service import SettingsService
-        config = SettingsService._odl_config_cache or SettingsService._get_default_env_config()
-        return (self._init_username or config.get("ODL_USERNAME", ""), self._init_password or config.get("ODL_PASSWORD", ""))
+        return (self._init_username or settings.ODL_USERNAME, self._init_password or settings.ODL_PASSWORD)
 
     # ── HTTP helper (sync, requests) ────────────────────────
     def _request(self, method: str, path: str, json_body: Optional[dict] = None) -> requests.Response:
         """
         ส่ง HTTP request ไปยัง ODL RESTCONF
-        ใช้ Basic Auth (admin:admin) ตาม requirement
+        ใช้ Basic Auth จาก .env settings
         """
         url = f"{self._base_url}/rests/data{path}"
         headers = {
@@ -101,7 +97,7 @@ class DeviceManager:
                 headers=headers,
                 auth=self._auth,
                 json=json_body,
-                timeout=15,
+                timeout=settings.ODL_TIMEOUT_SEC,
             )
             return resp
         except requests.exceptions.RequestException as e:

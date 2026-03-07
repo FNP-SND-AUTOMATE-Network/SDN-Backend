@@ -9,6 +9,7 @@ Flow:
 """
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+import asyncio
 from app.clients.odl_restconf_client import OdlRestconfClient
 from app.schemas.request_spec import RequestSpec
 from app.core.logging import logger
@@ -119,7 +120,7 @@ class OdlSyncService:
             logger.error(f"Failed to get ODL mounted nodes: {e}")
             raise
     
-    async def sync_devices_from_odl(self) -> Dict[str, Any]:
+    async def sync_netconf_devices_from_odl(self) -> Dict[str, Any]:
         """
         Sync ข้อมูล Device จาก ODL มา update ใน Database
         
@@ -148,7 +149,7 @@ class OdlSyncService:
         try:
             # 1. Get ODL mounted nodes
             odl_nodes = await self.get_odl_mounted_nodes()
-            logger.info(f"Found {len(odl_nodes)} nodes in ODL")
+            logger.info(f"[NETCONF-Sync] Starting NETCONF device sync — found {len(odl_nodes)} nodes in ODL topology-netconf")
             
             # 2. Get all devices from DB that have node_id
             db_devices = await prisma.devicenetwork.find_many(
@@ -183,6 +184,7 @@ class OdlSyncService:
                             }
                         )
                         
+                        logger.info(f"[NETCONF-Sync] {node_id} ({odl_node.get('host','?')}): connection={odl_node['connection_status']} → status={new_status}")
                         result["synced"].append({
                             "node_id": node_id,
                             "device_id": device.id,
@@ -205,10 +207,16 @@ class OdlSyncService:
                         "message": "ODL node not found in database. Create DeviceNetwork with this node_id to sync."
                     })
             
-            # 4. Mark devices as unmounted if not in ODL
+            # 4. Mark NETCONF devices as unmounted if not in ODL
+            #    Skip OpenFlow devices — they are not in topology-netconf
             odl_node_ids = {n["node_id"] for n in odl_nodes}
             for device in db_devices:
                 if device.node_id and device.node_id not in odl_node_ids:
+                    # Skip OpenFlow devices (managed via topology_sync, not NETCONF)
+                    if device.node_id.startswith("openflow:"):
+                        continue
+                    if device.management_protocol == "OPENFLOW":
+                        continue
                     if device.odl_mounted:  # Only update if was mounted
                         await prisma.devicenetwork.update(
                             where={"id": device.id},
@@ -219,6 +227,7 @@ class OdlSyncService:
                                 "last_synced_at": datetime.utcnow()
                             }
                         )
+                        logger.info(f"[NETCONF-Sync] {device.node_id}: not in ODL topology → status=OFFLINE (unmounted)")
                         result["synced"].append({
                             "node_id": device.node_id,
                             "device_id": device.id,
@@ -228,7 +237,7 @@ class OdlSyncService:
                             "note": "Unmounted from ODL"
                         })
             
-            logger.info(f"Sync completed: {len(result['synced'])} synced, {len(result['not_found'])} not found")
+            logger.info(f"[NETCONF-Sync] Completed: {len(result['synced'])} synced, {len(result['not_found'])} not found, {len(result['errors'])} errors")
             return result
             
         except Exception as e:
@@ -258,8 +267,8 @@ class OdlSyncService:
         }
 
         try:
-            # 1. ปลดล็อค offline device ก่อน (สมมติว่าถ้าไม่มีใน ODL แล้วคือ OFFLINE)
-            # เราจะเก็บ ip ไว้ล่ง ๆ แล้วค่อยไป update ONLINE ใน loop
+            logger.info("[OF-Sync] Starting OpenFlow device sync from ODL inventory...")
+            # 1. ดึง inventory จาก ODL
             spec = RequestSpec(
                 method="GET",
                 path=self.OPENFLOW_INVENTORY_PATH,
@@ -273,12 +282,39 @@ class OdlSyncService:
                     # ฟอลแบ็คสำหรับบางเวอร์ชัน ODL
                     nodes_list = response.get("nodes", {}).get("node", [])
             except Exception as e:
-                logger.error(f"Failed to fetch OpenFlow inventory: {e}")
-                result["errors"].append({"error": f"Failed to fetch from ODL: {str(e)}"})
-                return result
+                error_str = str(e)
+                # 409 data-missing = ไม่มี OF switch เชื่อมต่อเลย → mark ทุกตัวเป็น OFFLINE
+                if "409" in error_str and "data-missing" in error_str:
+                    logger.warning("[OF-Sync] ODL returned 409 data-missing — no OF switches connected. Marking all OF devices OFFLINE.")
+                    db_of_devices = await prisma.devicenetwork.find_many(
+                        where={"management_protocol": "OPENFLOW"}
+                    )
+                    for d in db_of_devices:
+                        if d.status != "OFFLINE":
+                            await prisma.devicenetwork.update(
+                                where={"id": d.id},
+                                data={
+                                    "status": "OFFLINE",
+                                    "odl_connection_status": "UNABLE_TO_CONNECT",
+                                    "last_synced_at": datetime.utcnow()
+                                }
+                            )
+                            result["synced"].append({
+                                "device_id": d.id,
+                                "node_id": d.node_id,
+                                "status": "OFFLINE",
+                                "note": "No OF switches in ODL inventory (409)"
+                            })
+                    logger.info(f"[OF-Sync] Marked {len(result['synced'])} OF devices OFFLINE (409 data-missing)")
+                    return result
+                else:
+                    logger.error(f"Failed to fetch OpenFlow inventory: {e}")
+                    result["errors"].append({"error": f"Failed to fetch from ODL: {error_str}"})
+                    return result
 
             odl_active_ips = set()
-            odl_node_data = []
+            odl_active_node_ids = set()   # ALL OF nodes in inventory (for offline detection)
+            odl_node_data = []            # Only nodes with IP (for data sync)
 
             # 2. Extract Data
             for node in nodes_list:
@@ -288,7 +324,15 @@ class OdlSyncService:
                 # เก็บ node-connector ด้วย
                 connectors = node.get("node-connector", [])
                 
-                if not ip_addr or not node_id:
+                if not node_id:
+                    continue
+
+                # Track ALL OF nodes as active (presence in inventory = connected)
+                if node_id.startswith("openflow:"):
+                    odl_active_node_ids.add(node_id)
+
+                # Only sync data if we have IP
+                if not ip_addr:
                     continue
 
                 odl_active_ips.add(ip_addr)
@@ -303,17 +347,21 @@ class OdlSyncService:
                 where={"management_protocol": "OPENFLOW"}
             )
             
-            # Map ip_address to list of devices in DB (เพื่อตรวจจับ duplicate IP)
-            ip_to_db_devices = {}
+            # Map node_id or device_name to list of devices in DB
+            db_lookup_map = {}
             for d in db_of_devices:
-                if d.ip_address:
-                    if d.ip_address not in ip_to_db_devices:
-                        ip_to_db_devices[d.ip_address] = []
-                    ip_to_db_devices[d.ip_address].append(d)
+                key = d.node_id if d.node_id else d.device_name
+                if key:
+                    if key not in db_lookup_map:
+                        db_lookup_map[key] = []
+                    db_lookup_map[key].append(d)
 
-            # Mark devices offline that are in DB but not in ODL active IPs
-            for ip, devices in ip_to_db_devices.items():
-                if ip not in odl_active_ips:
+            # odl_active_node_ids already built during extraction (step 2)
+            logger.info(f"[OF-Sync] ODL active OF nodes: {odl_active_node_ids}, DB OF devices: {list(db_lookup_map.keys())}")
+
+            # Mark devices offline that are in DB but not active in ODL
+            for key, devices in db_lookup_map.items():
+                if key not in odl_active_node_ids:
                     for d in devices:
                         if d.status != "OFFLINE":
                             await prisma.devicenetwork.update(
@@ -331,18 +379,15 @@ class OdlSyncService:
                 odl_node_id = odl_nd["node_id"]
                 connectors = odl_nd["connectors"]
 
-                matched_devices = ip_to_db_devices.get(odl_ip, [])
+                matched_devices = db_lookup_map.get(odl_node_id, [])
 
                 if not matched_devices:
                     result["not_found"].append({"ip": odl_ip, "node_id": odl_node_id})
                     continue
 
                 if len(matched_devices) > 1:
-                    logger.warning(f"Duplicate IP found in DB for OPENFLOW sync: {odl_ip}")
-                    result["duplicate_ips"].append(odl_ip)
-                    # ข้าม หรือเลือกตัวแรกเพื่อความปลอดภัย? เลือกเตือนแล้วจัดการตัวแรกไปก่อน
-                    # แต่ถ้าเข้มงวดคือ ข้าม
-                    continue
+                    logger.warning(f"Duplicate device found in DB for OPENFLOW sync: {odl_node_id}")
+                    # In real-world, might append to duplicate array, but let's just proceed with first
 
                 device = matched_devices[0]
 
@@ -352,7 +397,7 @@ class OdlSyncService:
                 )
                 
                 if existing_node and existing_node.id != device.id:
-                    # Node IP might have changed, clear the old one first
+                    # Node might have been reassigned, clear the old one first
                     await prisma.devicenetwork.update(
                         where={"id": existing_node.id},
                         data={
@@ -367,11 +412,12 @@ class OdlSyncService:
                 if odl_node_id.startswith("openflow:"):
                     extracted_dp_id = odl_node_id.replace("openflow:", "")
 
-                # Update Device
+                # Update Device with new IP from ODL
                 await prisma.devicenetwork.update(
                     where={"id": device.id},
                     data={
                         "node_id": odl_node_id,
+                        "ip_address": odl_ip,
                         "datapath_id": extracted_dp_id,
                         "status": "ONLINE",
                         "odl_connection_status": "CONNECTED",
@@ -442,6 +488,7 @@ class OdlSyncService:
                     "interfaces_synced": len(connectors)
                 })
 
+            logger.info(f"[OF-Sync] Completed: {len(result['synced'])} synced, {len(result['not_found'])} not found, {len(result['errors'])} errors")
             return result
 
         except Exception as e:
@@ -542,3 +589,72 @@ class OdlSyncService:
             return "arista"
         else:
             return "other"
+
+    # ─── UNIFIED SYNC (NETCONF + OpenFlow) ────────────────────────
+    async def sync_all_devices(self) -> Dict[str, Any]:
+        """
+        Sync ข้อมูล Device ทั้ง NETCONF และ OpenFlow จาก ODL ในครั้งเดียว
+        ใช้ asyncio.gather() เพื่อรัน parallel ลด latency
+
+        Returns:
+            {
+                "netconf": { "synced": [...], "not_found": [...], "errors": [...] },
+                "openflow": { "synced": [...], "not_found": [...], "errors": [...] },
+                "summary": { "total_synced": N, "total_not_found": N, "total_errors": N },
+                "timestamp": "..."
+            }
+        """
+        # Run both syncs in parallel
+        netconf_result, openflow_result = await asyncio.gather(
+            self.sync_netconf_devices_from_odl(),
+            self.sync_openflow_devices_from_odl(),
+            return_exceptions=True,
+        )
+
+        # Handle exceptions from gather
+        if isinstance(netconf_result, Exception):
+            logger.error(f"NETCONF sync failed in unified sync: {netconf_result}")
+            netconf_result = {
+                "synced": [], "not_found": [],
+                "errors": [{"error": str(netconf_result)}],
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        if isinstance(openflow_result, Exception):
+            logger.error(f"OpenFlow sync failed in unified sync: {openflow_result}")
+            openflow_result = {
+                "synced": [], "not_found": [],
+                "errors": [{"error": str(openflow_result)}],
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+
+        # Build summary
+        nc_synced = len(netconf_result.get("synced", []))
+        of_synced = len(openflow_result.get("synced", []))
+        nc_not_found = len(netconf_result.get("not_found", []))
+        of_not_found = len(openflow_result.get("not_found", []))
+        nc_errors = len(netconf_result.get("errors", []))
+        of_errors = len(openflow_result.get("errors", []))
+
+        logger.info(
+            f"[UnifiedSync] NETCONF: {nc_synced} synced, {nc_not_found} not_found, {nc_errors} errors | "
+            f"OpenFlow: {of_synced} synced, {of_not_found} not_found, {of_errors} errors"
+        )
+
+        return {
+            "netconf": {
+                "synced": netconf_result.get("synced", []),
+                "not_found": netconf_result.get("not_found", []),
+                "errors": netconf_result.get("errors", []),
+            },
+            "openflow": {
+                "synced": openflow_result.get("synced", []),
+                "not_found": openflow_result.get("not_found", []),
+                "errors": openflow_result.get("errors", []),
+            },
+            "summary": {
+                "total_synced": nc_synced + of_synced,
+                "total_not_found": nc_not_found + of_not_found,
+                "total_errors": nc_errors + of_errors,
+            },
+            "timestamp": datetime.utcnow().isoformat(),
+        }

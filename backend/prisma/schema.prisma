@@ -550,3 +550,40 @@ enum TemplateType {
   SECURITY
   OTHER
 }
+
+// ========= OpenFlow Flow Rule Tracking =========
+
+enum FlowStatus {
+  PENDING
+  ACTIVE
+  FAILED
+  DELETED
+}
+
+model FlowRule {
+  id        String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  flow_id   String // เช่น "base-ovs2-forward"
+  node_id   String // เช่น "openflow:2"
+  table_id  Int    @default(0)
+  flow_type String // "arp_flood", "base_connectivity", "traffic_steering", etc.
+  priority  Int
+
+  // Bidirectional tracking
+  bidirectional Boolean @default(false)
+  pair_flow_id  String? // flow_id ของคู่ (forward→reverse, reverse→forward)
+  direction     String? // "forward" | "reverse" | null
+
+  // Match details (เก็บทุก match field เป็น JSON)
+  match_details Json? // { in_port, out_port, tcp_dst_port, src_mac, dst_ip, ... }
+
+  // Status lifecycle: PENDING → ACTIVE → DELETED / FAILED
+  status FlowStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([node_id, flow_id, table_id])
+  @@index([node_id])
+  @@index([flow_type])
+  @@index([status])
+}

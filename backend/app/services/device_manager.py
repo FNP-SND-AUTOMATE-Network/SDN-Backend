@@ -82,7 +82,7 @@ class DeviceManager:
     def _request(self, method: str, path: str, json_body: Optional[dict] = None) -> requests.Response:
         """
         ส่ง HTTP request ไปยัง ODL RESTCONF
-        ใช้ Basic Auth (admin:admin) ตาม requirement
+        ใช้ Basic Auth จาก .env settings
         """
         url = f"{self._base_url}/rests/data{path}"
         headers = {
@@ -97,7 +97,7 @@ class DeviceManager:
                 headers=headers,
                 auth=self._auth,
                 json=json_body,
-                timeout=15,
+                timeout=settings.ODL_TIMEOUT_SEC,
             )
             return resp
         except requests.exceptions.RequestException as e:

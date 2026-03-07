@@ -82,8 +82,9 @@ model User {
   // Backup records triggered by user
   triggeredBackups DeviceBackupRecord[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  deploymentJobs DeploymentJob[]
 
   @@index([emailVerified])
   @@index([role])
@@ -242,7 +243,8 @@ model DeviceNetwork {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  interfaces Interface[]
+  interfaces        Interface[]
+  deploymentRecords DeploymentRecord[]
 
   @@index([serial_number])
   @@index([node_id])
@@ -583,8 +585,9 @@ model ConfigurationTemplate {
 
   detail ConfigurationTemplateDetail?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  deploymentJobs DeploymentJob[]
 
   @@index([template_name])
 }
@@ -609,4 +612,57 @@ enum TemplateType {
   NETWORK
   SECURITY
   OTHER
+}
+
+// ========= Deployment Management =========
+
+enum DeploymentStatus {
+  IN_PROGRESS
+  SUCCESS
+  PARTIAL_SUCCESS
+  FAILED
+}
+
+model DeploymentJob {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  template_id String?                @db.Uuid
+  template    ConfigurationTemplate? @relation(fields: [template_id], references: [id], onDelete: SetNull)
+
+  triggered_by_user String? @db.Uuid
+  user              User?   @relation(fields: [triggered_by_user], references: [id], onDelete: SetNull)
+
+  status          DeploymentStatus @default(IN_PROGRESS)
+  total_devices   Int              @default(0)
+  success_devices Int              @default(0)
+  failed_devices  Int              @default(0)
+
+  variables_json String? @db.Text
+  error_message  String? @db.Text
+
+  records DeploymentRecord[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model DeploymentRecord {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  job_id String        @db.Uuid
+  job    DeploymentJob @relation(fields: [job_id], references: [id], onDelete: Cascade)
+
+  device_id String        @db.Uuid
+  device    DeviceNetwork @relation(fields: [device_id], references: [id], onDelete: Cascade)
+
+  status          DeploymentStatus @default(IN_PROGRESS)
+  rendered_config String?          @db.Text
+  device_state    String?          @db.Text
+  error_message   String?          @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([job_id])
+  @@index([device_id])
 }

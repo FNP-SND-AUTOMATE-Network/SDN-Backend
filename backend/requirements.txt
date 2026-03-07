@@ -11,3 +11,5 @@ pyotp>=2.9.0
 httpx>=0.24.0
 apscheduler>=3.10.4
 scrapli[asyncssh]
+ntc-templates>=3.0.0
+Jinja2>=3.1.2

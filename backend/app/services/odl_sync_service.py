@@ -9,6 +9,7 @@ Flow:
 """
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+import asyncio
 from app.clients.odl_restconf_client import OdlRestconfClient
 from app.schemas.request_spec import RequestSpec
 from app.core.logging import logger
@@ -119,7 +120,7 @@ class OdlSyncService:
             logger.error(f"Failed to get ODL mounted nodes: {e}")
             raise
     
-    async def sync_devices_from_odl(self) -> Dict[str, Any]:
+    async def sync_netconf_devices_from_odl(self) -> Dict[str, Any]:
         """
         Sync ข้อมูล Device จาก ODL มา update ใน Database
         
@@ -544,3 +545,72 @@ class OdlSyncService:
             return "arista"
         else:
             return "other"
+
+    # ─── UNIFIED SYNC (NETCONF + OpenFlow) ────────────────────────
+    async def sync_all_devices(self) -> Dict[str, Any]:
+        """
+        Sync ข้อมูล Device ทั้ง NETCONF และ OpenFlow จาก ODL ในครั้งเดียว
+        ใช้ asyncio.gather() เพื่อรัน parallel ลด latency
+
+        Returns:
+            {
+                "netconf": { "synced": [...], "not_found": [...], "errors": [...] },
+                "openflow": { "synced": [...], "not_found": [...], "errors": [...] },
+                "summary": { "total_synced": N, "total_not_found": N, "total_errors": N },
+                "timestamp": "..."
+            }
+        """
+        # Run both syncs in parallel
+        netconf_result, openflow_result = await asyncio.gather(
+            self.sync_netconf_devices_from_odl(),
+            self.sync_openflow_devices_from_odl(),
+            return_exceptions=True,
+        )
+
+        # Handle exceptions from gather
+        if isinstance(netconf_result, Exception):
+            logger.error(f"NETCONF sync failed in unified sync: {netconf_result}")
+            netconf_result = {
+                "synced": [], "not_found": [],
+                "errors": [{"error": str(netconf_result)}],
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        if isinstance(openflow_result, Exception):
+            logger.error(f"OpenFlow sync failed in unified sync: {openflow_result}")
+            openflow_result = {
+                "synced": [], "not_found": [],
+                "errors": [{"error": str(openflow_result)}],
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+
+        # Build summary
+        nc_synced = len(netconf_result.get("synced", []))
+        of_synced = len(openflow_result.get("synced", []))
+        nc_not_found = len(netconf_result.get("not_found", []))
+        of_not_found = len(openflow_result.get("not_found", []))
+        nc_errors = len(netconf_result.get("errors", []))
+        of_errors = len(openflow_result.get("errors", []))
+
+        logger.info(
+            f"[UnifiedSync] NETCONF: {nc_synced} synced, {nc_not_found} not_found, {nc_errors} errors | "
+            f"OpenFlow: {of_synced} synced, {of_not_found} not_found, {of_errors} errors"
+        )
+
+        return {
+            "netconf": {
+                "synced": netconf_result.get("synced", []),
+                "not_found": netconf_result.get("not_found", []),
+                "errors": netconf_result.get("errors", []),
+            },
+            "openflow": {
+                "synced": openflow_result.get("synced", []),
+                "not_found": openflow_result.get("not_found", []),
+                "errors": openflow_result.get("errors", []),
+            },
+            "summary": {
+                "total_synced": nc_synced + of_synced,
+                "total_not_found": nc_not_found + of_not_found,
+                "total_errors": nc_errors + of_errors,
+            },
+            "timestamp": datetime.utcnow().isoformat(),
+        }

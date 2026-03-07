@@ -63,7 +63,7 @@ async def get_odl_mounted_nodes():
 
 
 @router.post("/odl/sync", response_model=SyncResponse)
-async def sync_devices_from_odl():
+async def sync_netconf_devices_from_odl():
     """
     Sync ข้อมูล Device จาก ODL มา update ใน Database
     
@@ -72,7 +72,7 @@ async def sync_devices_from_odl():
     - `DATABASE_ERROR`: Database update failed
     """
     try:
-        result = await odl_sync_service.sync_devices_from_odl()
+        result = await odl_sync_service.sync_netconf_devices_from_odl()
         
         has_errors = len(result.get("errors", [])) > 0
         synced_count = len(result.get("synced", []))
@@ -124,4 +124,50 @@ async def get_odl_config():
         message="ODL config loaded from .env",
         data=config,
     )
+
+
+@router.post("/odl/sync-all", response_model=SyncResponse)
+async def sync_all_devices():
+    """
+    Sync ข้อมูล Device ทั้ง NETCONF และ OpenFlow จาก ODL ในครั้งเดียว
+    รัน parallel เพื่อลด latency
+
+    **Response:**
+    - `netconf`: ผลลัพธ์จากการ sync NETCONF devices
+    - `openflow`: ผลลัพธ์จากการ sync OpenFlow devices
+    - `summary`: สรุปรวม (total_synced, total_not_found, total_errors)
+    """
+    try:
+        result = await odl_sync_service.sync_all_devices()
+
+        total_errors = result["summary"]["total_errors"]
+        total_synced = result["summary"]["total_synced"]
+        total_not_found = result["summary"]["total_not_found"]
+
+        return SyncResponse(
+            success=total_errors == 0,
+            code=ErrorCode.SUCCESS.value if total_errors == 0 else ErrorCode.DATABASE_ERROR.value,
+            message=(
+                f"Unified sync completed: {total_synced} devices synced, "
+                f"{total_not_found} not found in DB."
+            ),
+            data=result,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail={
+                "code": ErrorCode.ODL_TIMEOUT.value,
+                "message": "Unified sync timeout - ODL not responding",
+            },
+        )
+    except Exception as e:
+        logger.error(f"Unified sync failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": ErrorCode.ODL_CONNECTION_FAILED.value,
+                "message": f"Unified sync failed: {str(e)}",
+            },
+        )
 

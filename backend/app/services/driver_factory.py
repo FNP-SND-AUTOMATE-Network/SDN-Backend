@@ -58,11 +58,13 @@ class DriverFactory:
             "HUAWEI_VRP": HuaweiSystemDriver,
         }
         
-        # DHCP Drivers (Huawei only for now)
+        # DHCP Drivers
         from app.drivers.huawei.vrp8.dhcp import HuaweiDhcpDriver
+        from app.drivers.cisco.ios_xe.dhcp import CiscoDhcpDriver
         
         cls._dhcp_drivers = {
             "HUAWEI_VRP": HuaweiDhcpDriver,
+            "CISCO_IOS_XE": CiscoDhcpDriver,
         }
         
         cls._drivers_loaded = True

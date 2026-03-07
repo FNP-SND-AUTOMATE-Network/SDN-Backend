@@ -351,6 +351,13 @@ class IntentRegistry:
         optional_params=["gateway", "mask", "start_ip", "end_ip", "dns_servers"],
     )
     
+    DHCP_DELETE_ALL = IntentDefinition(
+        name="dhcp.delete_all",
+        category=IntentCategory.DHCP,
+        description="Delete all DHCP configuration (pools + excluded-address)",
+        required_params=[],
+    )
+    
     SHOW_DHCP_POOLS = IntentDefinition(
         name="show.dhcp_pools",
         category=IntentCategory.SHOW,
@@ -510,6 +517,7 @@ class Intents:
     class DHCP:
         CREATE_POOL = "dhcp.create_pool"
         DELETE_POOL = "dhcp.delete_pool"
+        DELETE_ALL = "dhcp.delete_all"
         UPDATE_POOL = "dhcp.update_pool"
 
     class FLOW:

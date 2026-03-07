@@ -36,13 +36,6 @@ class OdlRestconfClient:
             return f"{self.base_url}/rests/data{spec.path}"
 
     async def send(self, spec: RequestSpec) -> Dict[str, Any]:
-        from app.services.settings_service import SettingsService
-        odl_config = await SettingsService.get_odl_config()
-        self.base_url = odl_config.get("ODL_BASE_URL", self.base_url).rstrip("/")
-        self.auth = (odl_config.get("ODL_USERNAME", self.auth[0]), odl_config.get("ODL_PASSWORD", self.auth[1]))
-        self.timeout = odl_config.get("ODL_TIMEOUT_SEC", self.timeout)
-        self.retry = odl_config.get("ODL_RETRY", self.retry)
-
         url = self._full_url(spec)
         headers = dict(spec.headers) if spec.headers else {}
         
@@ -73,7 +66,7 @@ class OdlRestconfClient:
                             headers=headers
                         )
 
-                logger.info(f"ODL Response: {resp.status_code}")
+                logger.debug(f"ODL Response: {resp.status_code}")
 
                 if 200 <= resp.status_code < 300:
                     if resp.text:
@@ -91,7 +84,11 @@ class OdlRestconfClient:
 
             except Exception as e:
                 last_error = e
-                logger.info(f"ODL attempt {attempt+1} failed: {e}")
+                # Log concise retry message (hide verbose JSON body)
+                if isinstance(e, OdlRequestError):
+                    logger.debug(f"ODL attempt {attempt+1} failed: HTTP {e.status_code} — {e.details.get('body', '')[:80] if isinstance(e.details, dict) else ''}")
+                else:
+                    logger.debug(f"ODL attempt {attempt+1} failed: {e}")
 
         if isinstance(last_error, OdlRequestError):
             raise last_error

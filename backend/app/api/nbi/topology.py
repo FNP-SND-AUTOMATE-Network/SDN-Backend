@@ -1,26 +1,36 @@
-import requests
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Any, Dict, Optional
-from app.normalizers.topology import normalize_topology
 from app.services.topology_sync import sync_odl_topology_to_db
-
-from app.core.config import settings
+from app.core.logging import logger
 
 router = APIRouter()
 
 # ==========================================
-# 📦 Pydantic Models (Response Schemas)
+# Pydantic Models (Response Schemas)
 # ==========================================
-class LinkModel(BaseModel):
-    source: str
-    target: str
-    type: str
+class TopologyNodeResponse(BaseModel):
+    id: str
+    label: str
+    type: str  # "switch" | "router" | "firewall"
+    management_protocol: Optional[str] = None
+    vendor: Optional[str] = None
+    ip_address: Optional[str] = None
+    status: Optional[str] = None
+
+class TopologyLinkResponse(BaseModel):
+    id: str
+    source: str           # source node_id
+    target: str           # target node_id
+    sourcePort: str       # source interface name
+    targetPort: str       # target interface name
+    sourceTP: str         # raw tp_id (e.g. openflow:1:1)
+    targetTP: str         # raw tp_id
+    type: str             # "OPENFLOW" | "NETCONF"
 
 class TopologyResponse(BaseModel):
-    nodes: List[Dict[str, Any]]
-    links: List[Dict[str, Any]]
-
+    nodes: List[TopologyNodeResponse]
+    links: List[TopologyLinkResponse]
 
 class TopologySyncResponse(BaseModel):
     success: bool
@@ -53,92 +63,114 @@ async def get_hybrid_topology(
 ):
     """
     ดึงข้อมูล Topology ล่าสุดจาก Database (ที่ Sync ลงมาแล้ว)
+    คืน nodes (devices) และ links (เส้นเชื่อมระหว่าง interfaces) สำหรับวาดกราฟ
     """
     from app.database import get_prisma_client
     prisma = get_prisma_client()
-    
-    topology_map = {
-        "nodes": [],
-        "links": []
-    }
 
     try:
         # =========================================================
-        # 1. ค้นหา Devices (Nodes)
+        # 1. ค้นหา Devices (Nodes) ที่มี node_id
         # =========================================================
-        query_filter = {}
+        query_filter: Dict[str, Any] = {"node_id": {"not": None}}
         if local_site_id:
             query_filter["local_site_id"] = local_site_id
-            
-        devices = await prisma.devicenetwork.find_many(
-            where=query_filter
-        )
-        
-        valid_node_ids = set()
+
+        devices = await prisma.devicenetwork.find_many(where=query_filter)
+
+        nodes: List[TopologyNodeResponse] = []
+        valid_device_ids: set = set()   # device.id (UUID) ที่ผ่านเงื่อนไข
+
         for d in devices:
-            if d.node_id:
-                valid_node_ids.add(d.node_id)
-                
-                # Fetch interfaces for this device to show as standalone nodes if needed
-                interfaces = await prisma.interface.find_many(where={"device_id": d.id})
-                
-                # Add the device itself to the nodes list
-                topology_map["nodes"].append({
-                    "id": d.node_id,
-                    "label": d.device_name or d.node_id,
-                    "type": "router" if d.type in ["ROUTER", "FIREWALL"] else "switch"
-                })
-                
-                # Optionally add interfaces as sub-nodes or isolated nodes
-                for intf in interfaces:
-                    intf_id = intf.tp_id or f"{d.node_id}:{intf.name}"
-                    topology_map["nodes"].append({
-                        "id": intf_id,
-                        "label": intf.name,
-                        "type": "interface",
-                        "parent": d.node_id
-                    })
-                
+            valid_device_ids.add(d.id)
+            dtype = "switch"
+            if d.type in ("ROUTER", "FIREWALL"):
+                dtype = d.type.lower()
+
+            nodes.append(TopologyNodeResponse(
+                id=d.node_id,
+                label=d.device_name or d.node_id,
+                type=dtype,
+                management_protocol=d.management_protocol,
+                vendor=d.vendor,
+                ip_address=d.ip_address,
+                status=d.status,
+            ))
+
+        logger.debug(f"[GET topology] {len(nodes)} nodes, valid_device_ids={len(valid_device_ids)}")
+
         # =========================================================
-        # 2. ค้นหา Links ที่เกี่ยวข้อง
+        # 2. ค้นหา Links พร้อม Include source/target interface + device
         # =========================================================
-        # ดึง Link ทั้งหมดที่มี Source/Target Interface ผูกกับ Device เหล่านี้
-        links = await prisma.link.find_many(
+        # กรณีมี site filter → ดึงเฉพาะ links ที่ทั้ง 2 ฝั่งอยู่ใน site (DB-level)
+        link_where: Dict[str, Any] = {}
+        if local_site_id and valid_device_ids:
+            site_intfs = await prisma.interface.find_many(
+                where={"device_id": {"in": list(valid_device_ids)}},
+            )
+            site_intf_ids = [i.id for i in site_intfs]
+            link_where = {
+                "source_interface_id": {"in": site_intf_ids},
+                "target_interface_id": {"in": site_intf_ids},
+            }
+            logger.debug(f"[GET topology] site filter: {len(site_intf_ids)} interfaces for {len(valid_device_ids)} devices")
+
+        links_raw = await prisma.link.find_many(
+            where=link_where,
             include={
-                "source": { "include": { "device": True } },
-                "target": { "include": { "device": True } }
+                "source": {"include": {"device": True}},
+                "target": {"include": {"device": True}},
             }
         )
-        
-        for link in links:
-            src_node_id = link.source.device.node_id
-            tgt_node_id = link.target.device.node_id
-            
-            # กรอง Link: จะต้องมี Node_id ครบ และต้องอยู่ในเงื่อนไข site ของเรา (ถ้ามีการส่ง local_site_id มา)
-            if not src_node_id or not tgt_node_id:
+
+        seen_pairs: set = set()   # deduplicate bidirectional (safety net)
+        links: List[TopologyLinkResponse] = []
+
+        for link in links_raw:
+            src_intf = link.source
+            tgt_intf = link.target
+            if not src_intf or not tgt_intf:
                 continue
-                
-            if local_site_id:
-                if src_node_id not in valid_node_ids or tgt_node_id not in valid_node_ids:
-                    continue
-            
-            # เตรียม Source/Target TP ID (หากไม่มี ใช้ port name เป็น Fallback สำหรับวาดกราฟ)
-            src_tp = link.source.tp_id or f"{src_node_id}:{link.source.name}"
-            tgt_tp = link.target.tp_id or f"{tgt_node_id}:{link.target.name}"
-            protocol_type = f"{link.source.device.management_protocol}-L2"
-                
-            topology_map["links"].append({
-                "source": src_tp,
-                "target": tgt_tp,
-                "type": protocol_type
-            })
+
+            src_device = src_intf.device
+            tgt_device = tgt_intf.device
+            if not src_device or not tgt_device:
+                continue
+            if not src_device.node_id or not tgt_device.node_id:
+                continue
+
+            src_node = src_device.node_id
+            tgt_node = tgt_device.node_id
+            src_port = src_intf.name
+            tgt_port = tgt_intf.name
+            src_tp = src_intf.tp_id or f"{src_node}:{src_port}"
+            tgt_tp = tgt_intf.tp_id or f"{tgt_node}:{tgt_port}"
+
+            # Deduplicate bidirectional links (A→B == B→A)
+            pair_key = tuple(sorted([(src_node, src_port), (tgt_node, tgt_port)]))
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+
+            # Determine link protocol type
+            link_type = "OPENFLOW" if src_device.management_protocol == "OPENFLOW" and tgt_device.management_protocol == "OPENFLOW" else "NETCONF"
+
+            links.append(TopologyLinkResponse(
+                id=link.link_id,
+                source=src_node,
+                target=tgt_node,
+                sourcePort=src_port,
+                targetPort=tgt_port,
+                sourceTP=src_tp,
+                targetTP=tgt_tp,
+                type=link_type,
+            ))
+
+        logger.info(f"[GET topology] Returning {len(nodes)} nodes, {len(links)} links")
+
+        return TopologyResponse(nodes=nodes, links=links)
 
     except Exception as e:
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-
-    # Normalize data for frontend
-    normalized_data = normalize_topology(topology_map)
-    
-    return normalized_data

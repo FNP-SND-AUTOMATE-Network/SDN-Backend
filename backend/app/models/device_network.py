@@ -98,6 +98,13 @@ class DeviceNetworkBase(BaseModel):
             return v
         return validate_node_id(v)
 
+    @field_validator('datapath_id', mode='before')
+    @classmethod
+    def nullify_empty_datapath(cls, v):
+        if v == "" or (isinstance(v, str) and v.strip() == ""):
+            return None
+        return v
+
     @model_validator(mode='after')
     def validate_openflow_requires_ip(self):
         if self.management_protocol == ManagementProtocol.OPENFLOW and not self.ip_address:
@@ -147,6 +154,13 @@ class DeviceNetworkUpdate(BaseModel):
         if v is None:
             return v
         return validate_node_id(v)
+
+    @field_validator('datapath_id', mode='before')
+    @classmethod
+    def nullify_empty_datapath_update(cls, v):
+        if v == "" or (isinstance(v, str) and v.strip() == ""):
+            return None
+        return v
 
 # Related Info Models
 class RelatedTagInfo(BaseModel):

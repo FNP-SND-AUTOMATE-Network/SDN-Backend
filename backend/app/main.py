@@ -19,11 +19,11 @@ async def lifespan(app: FastAPI):
     scheduler = AsyncIOScheduler()
     sync_service = OdlSyncService()
     
-    # Run device sync every 1 minute
+    # Run device sync every 1 minute (NETCONF + OpenFlow)
     scheduler.add_job(
-        sync_service.sync_devices_from_odl, 
+        sync_service.sync_all_devices, 
         'interval', 
-        minutes=1,
+        minutes=3,
         id='sync_odl_devices',
         replace_existing=True
     )

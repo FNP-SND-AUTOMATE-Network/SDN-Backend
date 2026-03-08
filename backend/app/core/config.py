@@ -20,4 +20,8 @@ class Settings(BaseModel):
     SYNC_DEVICE_INTERVAL_SEC: int = int(os.getenv("SYNC_DEVICE_INTERVAL_SEC", "60"))   # Device status sync
     SYNC_TOPOLOGY_INTERVAL_SEC: int = int(os.getenv("SYNC_TOPOLOGY_INTERVAL_SEC", "300"))  # Topology sync
 
+    # ChatOps / Slack Integration
+    SLACK_WEBHOOK_URL: str = os.getenv("SLACK_WEBHOOK_URL", "")
+    CHATOPS_ENABLED: bool = os.getenv("CHATOPS_ENABLED", "true").lower() == "true"
+
 settings = Settings()

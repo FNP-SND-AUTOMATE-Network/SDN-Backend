@@ -1,13 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from app.api import health, auth, audit, users, device_credentials, local_sites, tags, operating_systems, policies, backups, configuration_templates, device_networks, nbi, interfaces, odl_probe, debug_env, ipam, device_backups, deployments
+from app.api import health, auth, audit, users, device_credentials, local_sites, tags, operating_systems, policies, backups, configuration_templates, device_networks, nbi, interfaces, odl_probe, debug_env, ipam, device_backups, deployments, chatops
 from app.database import set_prisma_client
 import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.services.odl_sync_service import OdlSyncService
 from app.core.config import settings as app_settings
 from app.core.logging import logger
+from app.core.event_bus import event_bus
 
 # Lock to prevent concurrent sync runs
 _sync_device_lock = asyncio.Lock()
@@ -26,6 +27,14 @@ async def _safe_sync_devices():
             total = result["summary"]["total_synced"]
             errors = result["summary"]["total_errors"]
             logger.info(f"[BG-Sync] Device sync completed: {total} synced, {errors} errors")
+
+            # ── ChatOps: Emit sync.completed event ──
+            await event_bus.emit("sync.completed", {
+                "sync_type": "device_sync (NETCONF + OpenFlow)",
+                "netconf": result.get("netconf", {}),
+                "openflow": result.get("openflow", {}),
+                "summary": result.get("summary", {}),
+            })
         except Exception as e:
             logger.error(f"[BG-Sync] Device sync failed: {e}")
 
@@ -51,6 +60,15 @@ async def lifespan(app: FastAPI):
     prisma_client = Prisma()
     await prisma_client.connect()
     set_prisma_client(prisma_client)
+
+    # ── ChatOps: Initialize event-driven pipeline ──
+    if app_settings.CHATOPS_ENABLED:
+        from app.services.chatops_service import chatops_service  # noqa: F811
+        logger.info(
+            f"[ChatOps] Initialized — Slack webhook {'configured' if app_settings.SLACK_WEBHOOK_URL else 'NOT configured'}"
+        )
+    else:
+        logger.info("[ChatOps] DISABLED (CHATOPS_ENABLED=false)")
 
     scheduler = None
 
@@ -136,3 +154,4 @@ app.include_router(odl_probe.router)
 app.include_router(debug_env.router)
 app.include_router(device_backups.router)
 app.include_router(deployments.router)
+app.include_router(chatops.router)

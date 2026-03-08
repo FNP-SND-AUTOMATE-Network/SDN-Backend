@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from app.api import health, auth, audit, users, device_credentials, local_sites, tags, operating_systems, policies, backups, configuration_templates, device_networks, nbi, interfaces, odl_probe, debug_env, ipam, device_backups, deployments, chatops
+from app.api import health, auth, audit, users, device_credentials, local_sites, tags, operating_systems, policies, backups, configuration_templates, device_networks, nbi, interfaces, odl_probe, debug_env, ipam, device_backups, deployments, chatops, zabbix_webhook
 from app.database import set_prisma_client
 import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -27,14 +27,6 @@ async def _safe_sync_devices():
             total = result["summary"]["total_synced"]
             errors = result["summary"]["total_errors"]
             logger.info(f"[BG-Sync] Device sync completed: {total} synced, {errors} errors")
-
-            # ── ChatOps: Emit sync.completed event ──
-            await event_bus.emit("sync.completed", {
-                "sync_type": "device_sync (NETCONF + OpenFlow)",
-                "netconf": result.get("netconf", {}),
-                "openflow": result.get("openflow", {}),
-                "summary": result.get("summary", {}),
-            })
         except Exception as e:
             logger.error(f"[BG-Sync] Device sync failed: {e}")
 
@@ -155,3 +147,4 @@ app.include_router(debug_env.router)
 app.include_router(device_backups.router)
 app.include_router(deployments.router)
 app.include_router(chatops.router)
+app.include_router(zabbix_webhook.router)

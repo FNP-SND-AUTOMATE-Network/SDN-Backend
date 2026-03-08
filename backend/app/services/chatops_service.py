@@ -54,8 +54,9 @@ class ChatOpsService:
     # ── Register Event Bus handlers ──────────────────────────────
     def _register_event_handlers(self):
         event_bus.subscribe("device.status_changed", self._on_device_status_changed)
-        event_bus.subscribe("sync.completed", self._on_sync_completed)
-        logger.info("[ChatOps] Event handlers registered on EventBus")
+        # Sync notification disabled — ใช้ Zabbix webhook แทน
+        # event_bus.subscribe("sync.completed", self._on_sync_completed)
+        logger.info("[ChatOps] Event handlers registered on EventBus (sync notification disabled)")
 
     # ── Handler: device.status_changed ───────────────────────────
     async def _on_device_status_changed(self, event: Event):

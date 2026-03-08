@@ -24,4 +24,7 @@ class Settings(BaseModel):
     SLACK_WEBHOOK_URL: str = os.getenv("SLACK_WEBHOOK_URL", "")
     CHATOPS_ENABLED: bool = os.getenv("CHATOPS_ENABLED", "true").lower() == "true"
 
+    # Zabbix Webhook Integration
+    ZABBIX_WEBHOOK_TOKEN: str = os.getenv("ZABBIX_WEBHOOK_TOKEN", "")  # ถ้าว่าง = ไม่ต้อง auth
+
 settings = Settings()

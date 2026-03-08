@@ -84,10 +84,27 @@ services:
       POSTGRES_DB: zabbix
       POSTGRES_USER: zabbix
       POSTGRES_PASSWORD: zabbixpass
+      ZBX_SERVER_HOST: zabbix-server
+      PHP_TZ: Asia/Bangkok
+      ZBX_STARTSNMPTRAPPER: 1
     ports:
       - "10051:10051"
+      - "161:161/udp"
+    volumes:
+      - snmptraps_data:/var/lib/zabbix/snmptraps
     depends_on:
       - zabbix-postgres-db
+    networks:
+      - default
+    restart: unless-stopped
+
+  zabbix-snmptraps:
+    image: zabbix/zabbix-snmptraps:latest
+    container_name: zabbix-snmptraps
+    ports:
+      - "162:162/udp"
+    volumes:
+      - snmptraps_data:/var/lib/zabbix/snmptraps
     networks:
       - default
     restart: unless-stopped
@@ -101,7 +118,7 @@ services:
       POSTGRES_USER: zabbix
       POSTGRES_PASSWORD: zabbixpass
       ZBX_SERVER_HOST: zabbix-server
-      PHP_TZ: Asia/Bangkok
+      TZ: Asia/Bangkok
     ports:
       - "8080:8080"
     depends_on:
@@ -113,6 +130,7 @@ services:
 volumes:
   postgres_data:
   pg_data:
+  snmptraps_data:
 
 
 networks:

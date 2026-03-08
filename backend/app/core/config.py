@@ -15,4 +15,9 @@ class Settings(BaseModel):
     ODL_TIMEOUT_SEC: float = float(os.getenv("ODL_TIMEOUT_SEC", "10"))
     ODL_RETRY: int = int(os.getenv("ODL_RETRY", "1"))
 
+    # Background Sync Settings
+    SYNC_ENABLED: bool = os.getenv("SYNC_ENABLED", "true").lower() == "true"
+    SYNC_DEVICE_INTERVAL_SEC: int = int(os.getenv("SYNC_DEVICE_INTERVAL_SEC", "60"))   # Device status sync
+    SYNC_TOPOLOGY_INTERVAL_SEC: int = int(os.getenv("SYNC_TOPOLOGY_INTERVAL_SEC", "300"))  # Topology sync
+
 settings = Settings()

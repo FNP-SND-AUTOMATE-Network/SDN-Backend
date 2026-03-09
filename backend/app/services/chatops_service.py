@@ -13,6 +13,7 @@ from datetime import datetime
 from app.core.logging import logger
 from app.core.event_bus import event_bus, Event
 from app.clients.slack_client import SlackClient
+from app.core.alert_dedup import alert_dedup
 from app.services.fault_detector import (
     FaultDetector,
     FaultEvent,
@@ -114,7 +115,23 @@ class ChatOpsService:
 
     # ── Slack message: Fault notification ────────────────────────
     async def _send_fault_notification(self, fault: FaultEvent):
-        """Format and send a fault notification to Slack."""
+        """Format and send a fault notification to Slack (with dedup check)."""
+        # ── Dedup check: skip if Zabbix already alerted this host ──
+        host_key = fault.device_name or fault.node_id
+        if alert_dedup.is_recently_alerted_by_zabbix(host_key):
+            logger.info(
+                f"[ChatOps] Skipped internal alert for '{host_key}' "
+                f"— Zabbix already notified within dedup window"
+            )
+            return
+        # Also check by node_id if different from device_name
+        if fault.node_id != host_key and alert_dedup.is_recently_alerted_by_zabbix(fault.node_id):
+            logger.info(
+                f"[ChatOps] Skipped internal alert for '{fault.node_id}' "
+                f"— Zabbix already notified within dedup window"
+            )
+            return
+
         emoji = SEVERITY_EMOJI.get(fault.severity, "⚪")
         label = FAULT_TYPE_LABEL.get(fault.fault_type, fault.fault_type.value)
 

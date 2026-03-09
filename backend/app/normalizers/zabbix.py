@@ -157,6 +157,13 @@ def _humanize_value(raw: str) -> str:
     if not raw:
         return raw
 
+    # Check for pure Link status from typical strings like "Link down" or "Link up"
+    low = raw.lower()
+    if "link down" in low or "down" in low:
+        return "Interface Down"
+    if "link up" in low or "up" in low:
+        return "Interface Up"
+
     VALUE_MAP = {
         "down(2)": "Interface Down",
         "up(1)": "Interface Up",
@@ -227,6 +234,26 @@ def _build_event_time(payload: Dict[str, Any]) -> str:
     return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _clean_zabbix_description(desc: str) -> str:
+    """
+    Clean up Zabbix boilerplate descriptions to get the actual meaning.
+    """
+    if not desc:
+        return ""
+    
+    # Remove the standard Zabbix template boilerplate
+    boilerplate = "This trigger expression works as follows:"
+    if boilerplate in desc:
+        # Give us whatever was written BEFORE the boilerplate, if any
+        parts = desc.split(boilerplate)
+        actual_desc = parts[0].strip()
+        if actual_desc:
+            return actual_desc
+        return "" # If it was ONLY the boilerplate, just return empty
+        
+    return desc.strip()
+
+
 def normalize_zabbix_event(payload: Dict[str, Any]) -> NormalizedZabbixEvent:
     """
     Normalize raw Zabbix webhook payload into a clean NormalizedZabbixEvent.
@@ -293,7 +320,18 @@ def normalize_zabbix_event(payload: Dict[str, Any]) -> NormalizedZabbixEvent:
     item_value = _humanize_value(
         str(payload.get("item_value") or payload.get("value") or "")
     )
-    description = payload.get("trigger_description") or payload.get("description") or ""
+    
+    # If the item_value is empty, but the trigger name tells us it's a link down/up, set it
+    trigger_lower = trigger_name.lower()
+    if not item_value:
+        if "link down" in trigger_lower or "is down" in trigger_lower:
+            item_value = "Interface Down"
+        elif "link up" in trigger_lower or "is up" in trigger_lower:
+            item_value = "Interface Up"
+
+    raw_description = payload.get("trigger_description") or payload.get("description") or ""
+    description = _clean_zabbix_description(raw_description)
+    
     trigger_url = payload.get("trigger_url") or payload.get("url") or ""
 
     # Tags

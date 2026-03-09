@@ -15,6 +15,7 @@ from app.core.logging import logger
 from app.core.event_bus import event_bus
 from app.clients.slack_client import SlackClient
 from app.core.ws_manager import ws_manager
+from app.core.alert_dedup import alert_dedup
 from app.normalizers.zabbix import (
     NormalizedZabbixEvent,
     ZabbixSeverity,
@@ -60,6 +61,11 @@ class ZabbixNotificationService:
         except Exception as ws_err:
             logger.warning(f"[ZabbixNotify] WebSocket broadcast failed (non-fatal): {ws_err}")
 
+        # Step 3.6: Record to dedup registry (ป้องกัน Internal Fault ส่ง Slack ซ้ำ)
+        alert_dedup.record_zabbix_alert(event.host_name)
+        if event.host_ip:
+            alert_dedup.record_zabbix_alert(event.host_ip)
+
         # Step 4: Emit to EventBus for audit / history
         await event_bus.emit("zabbix.event_received", event.to_dict())
 
@@ -97,15 +103,28 @@ class ZabbixNotificationService:
         """
         Build clean, structured Slack Block Kit message.
         """
+        # ── Extract Interface / Specific Issue from Trigger ──
+        # e.g., "Huawei VRP: Interface Ethernet1/0/3(): Link down" -> "Interface Ethernet1/0/3(): Link down"
+        # We try to strip the host prefix from the trigger if it exists
+        clean_trigger = event.trigger_name
+        if clean_trigger.startswith(f"{event.host_name}: "):
+            clean_trigger = clean_trigger[len(f"{event.host_name}: "):].strip()
+        elif ":" in clean_trigger:
+            # Fallback for "Huawei VRP: Interface Ethernet1/0/3(): Link down"
+            parts = clean_trigger.split(":", 1)
+            # If the first part looks like a template prefix, keep the rest
+            if "Huawei" in parts[0] or "Cisco" in parts[0] or "VRP" in parts[0]:
+                clean_trigger = parts[1].strip()
+
         # ── Header ──
         if event.is_resolved:
-            # RESOLVED: แสดงค่าปัจจุบันแทน trigger name เพื่อไม่ให้ดูขัดแย้ง
-            if event.item_value:
-                header_text = f"✅ RESOLVED: {event.host_name} — {event.item_value}"
-            else:
-                header_text = f"✅ RESOLVED: {event.host_name} — กลับสู่ปกติ"
+            # e.g., ✅ RESOLVED: NE40ET — Interface Ethernet1/0/3(): Link up 
+            # or ✅ RESOLVED: NE40ET — Interface Up
+            issue_text = clean_trigger if "up" in clean_trigger.lower() or "down" in clean_trigger.lower() else event.item_value or clean_trigger
+            header_text = f"✅ RESOLVED: {event.host_name} — {issue_text}"
         else:
-            header_text = f"{event.severity_emoji} PROBLEM: {event.trigger_name}"
+            # e.g., 🚨 PROBLEM: NE40ET — Interface Ethernet1/0/3(): Link down
+            header_text = f"{event.severity_emoji} PROBLEM: {event.host_name} — {clean_trigger}"
 
         if len(header_text) > 148:
             header_text = header_text[:145] + "..."
@@ -118,9 +137,13 @@ class ZabbixNotificationService:
         ]
 
         # ── Two-column info ──
+        severity_str = event.severity_label
+        if severity_str == "Not Classified":
+            severity_str = "Not Classified (ระดับทั่วไป)"
+
         fields = [
             {"type": "mrkdwn", "text": f"*Host:*\n`{event.host_name}`"},
-            {"type": "mrkdwn", "text": f"*Severity:*\n{event.severity_emoji} {event.severity_label}"},
+            {"type": "mrkdwn", "text": f"*Severity:*\n{event.severity_emoji} {severity_str}"},
             {"type": "mrkdwn", "text": f"*IP Address:*\n`{event.host_ip or 'N/A'}`"},
             {"type": "mrkdwn", "text": f"*Status:*\n{event.status_emoji} {event.status}"},
         ]
@@ -129,17 +152,19 @@ class ZabbixNotificationService:
         # ── Value / Description (concise) ──
         detail_lines = []
         if event.is_resolved:
-            # RESOLVED: แสดง trigger เดิมให้รู้ว่าปัญหาเดิมคืออะไร
             detail_lines.append(f"*Trigger:* {event.trigger_name}")
         if event.item_value and not event.is_resolved:
-            # PROBLEM: แสดง value เฉพาะตอนมีปัญหา
             detail_lines.append(f"*Value:* `{event.item_value}`")
+            
         if event.description:
-            # ตัดให้สั้นกระชับ เอาแค่ประโยคแรก
-            desc = event.description.split("\n")[0].strip()
-            if len(desc) > 150:
-                desc = desc[:147] + "..."
-            detail_lines.append(f"*Detail:* {desc}")
+            # We already cleaned the boilerplates in normalize_zabbix_event
+            # Just take the first meaningful line if there are multiple
+            desc_lines = [line.strip() for line in event.description.split("\n") if line.strip()]
+            if desc_lines:
+                desc = desc_lines[0]
+                if len(desc) > 150:
+                    desc = desc[:147] + "..."
+                detail_lines.append(f"*Detail:* {desc}")
 
         if detail_lines:
             blocks.append({

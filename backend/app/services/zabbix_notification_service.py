@@ -115,6 +115,9 @@ class ZabbixNotificationService:
             # If the first part looks like a template prefix, keep the rest
             if "Huawei" in parts[0] or "Cisco" in parts[0] or "VRP" in parts[0]:
                 clean_trigger = parts[1].strip()
+                
+        # Remove annoying (Configured_via_ODL) wrapper if present
+        clean_trigger = clean_trigger.replace("(Configured_via_ODL)", "")
 
         # ── Header ──
         if event.is_resolved:
@@ -138,8 +141,6 @@ class ZabbixNotificationService:
 
         # ── Two-column info ──
         severity_str = event.severity_label
-        if severity_str == "Not Classified":
-            severity_str = "Not Classified (ระดับทั่วไป)"
 
         fields = [
             {"type": "mrkdwn", "text": f"*Host:*\n`{event.host_name}`"},

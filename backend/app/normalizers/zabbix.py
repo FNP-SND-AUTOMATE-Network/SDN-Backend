@@ -38,7 +38,7 @@ class ZabbixSeverity(str, Enum):
 
 
 SEVERITY_LABEL = {
-    ZabbixSeverity.NOT_CLASSIFIED: "Not Classified",
+    ZabbixSeverity.NOT_CLASSIFIED: "Normal",
     ZabbixSeverity.INFORMATION: "Information",
     ZabbixSeverity.WARNING: "Warning",
     ZabbixSeverity.AVERAGE: "Average",

@@ -14,6 +14,7 @@ from datetime import datetime
 from app.core.logging import logger
 from app.core.event_bus import event_bus
 from app.clients.slack_client import SlackClient
+from app.core.ws_manager import ws_manager
 from app.normalizers.zabbix import (
     NormalizedZabbixEvent,
     ZabbixSeverity,
@@ -52,6 +53,12 @@ class ZabbixNotificationService:
 
         # Step 3: Send to Slack
         success = await self.slack.send_message(text=fallback_text, blocks=blocks)
+
+        # Step 3.5: Broadcast to WebSocket clients (real-time push to Frontend)
+        try:
+            await ws_manager.broadcast(event.to_dict())
+        except Exception as ws_err:
+            logger.warning(f"[ZabbixNotify] WebSocket broadcast failed (non-fatal): {ws_err}")
 
         # Step 4: Emit to EventBus for audit / history
         await event_bus.emit("zabbix.event_received", event.to_dict())

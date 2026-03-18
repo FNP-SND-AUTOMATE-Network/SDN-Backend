@@ -283,34 +283,31 @@ class OdlSyncService:
                     nodes_list = response.get("nodes", {}).get("node", [])
             except Exception as e:
                 error_str = str(e)
-                # 409 data-missing = ไม่มี OF switch เชื่อมต่อเลย → mark ทุกตัวเป็น OFFLINE
-                if "409" in error_str and "data-missing" in error_str:
-                    logger.warning("[OF-Sync] ODL returned 409 data-missing — no OF switches connected. Marking all OF devices OFFLINE.")
-                    db_of_devices = await prisma.devicenetwork.find_many(
-                        where={"management_protocol": "OPENFLOW"}
-                    )
-                    for d in db_of_devices:
-                        if d.status != "OFFLINE":
-                            await prisma.devicenetwork.update(
-                                where={"id": d.id},
-                                data={
-                                    "status": "OFFLINE",
-                                    "odl_connection_status": "UNABLE_TO_CONNECT",
-                                    "last_synced_at": datetime.utcnow()
-                                }
-                            )
-                            result["synced"].append({
-                                "device_id": d.id,
-                                "node_id": d.node_id,
+                # ไม่ว่า error อะไรก็ตาม → mark ทุก OF device เป็น OFFLINE
+                reason = "409 data-missing" if ("409" in error_str and "data-missing" in error_str) else f"ODL error: {error_str[:100]}"
+                logger.warning(f"[OF-Sync] ODL fetch failed ({reason}). Marking all OF devices OFFLINE.")
+                db_of_devices = await prisma.devicenetwork.find_many(
+                    where={"management_protocol": "OPENFLOW"}
+                )
+                for d in db_of_devices:
+                    if d.status != "OFFLINE":
+                        await prisma.devicenetwork.update(
+                            where={"id": d.id},
+                            data={
                                 "status": "OFFLINE",
-                                "note": "No OF switches in ODL inventory (409)"
-                            })
-                    logger.info(f"[OF-Sync] Marked {len(result['synced'])} OF devices OFFLINE (409 data-missing)")
-                    return result
-                else:
-                    logger.error(f"Failed to fetch OpenFlow inventory: {e}")
-                    result["errors"].append({"error": f"Failed to fetch from ODL: {error_str}"})
-                    return result
+                                "odl_connection_status": "UNABLE_TO_CONNECT",
+                                "last_synced_at": datetime.utcnow()
+                            }
+                        )
+                        result["synced"].append({
+                            "device_id": d.id,
+                            "node_id": d.node_id,
+                            "device_name": d.device_name,
+                            "status": "OFFLINE",
+                            "note": f"Marked OFFLINE ({reason})"
+                        })
+                logger.info(f"[OF-Sync] Marked {len(result['synced'])} OF devices OFFLINE")
+                return result
 
             odl_active_ips = set()
             odl_active_node_ids = set()   # ALL OF nodes in inventory (for offline detection)
@@ -658,3 +655,119 @@ class OdlSyncService:
             },
             "timestamp": datetime.utcnow().isoformat(),
         }
+
+    # ─── SINGLE DEVICE SYNC ───────────────────────────────────────
+    async def sync_single_device_status(self, node_id: str) -> Dict[str, Any]:
+        """
+        Sync connection status ของ device ตัวเดียวจาก ODL → DB
+
+        - NETCONF device: ดึงจาก topology-netconf
+        - OpenFlow device: ดึงจาก opendaylight-inventory
+
+        Returns:
+            {
+                "node_id": "...",
+                "previous_status": "OFFLINE",
+                "current_status": "ONLINE",
+                "connection_status": "connected",
+                "protocol": "NETCONF" | "OPENFLOW",
+                "timestamp": "..."
+            }
+        """
+        prisma = get_prisma_client()
+
+        # 1. ค้นหา device ใน DB
+        device = await prisma.devicenetwork.find_first(
+            where={"node_id": node_id}
+        )
+        if not device:
+            raise ValueError(f"Device with node_id '{node_id}' not found in database")
+
+        previous_status = device.status
+        protocol = device.management_protocol or "NETCONF"
+
+        try:
+            if protocol == "OPENFLOW" or node_id.startswith("openflow:"):
+                # ─── OpenFlow: ดึงจาก inventory ─────────────
+                connection_status, new_status = await self._check_openflow_status(node_id)
+            else:
+                # ─── NETCONF: ดึงจาก topology-netconf ────────
+                connection_status, new_status = await self._check_netconf_status(node_id)
+
+            db_connection_status = map_odl_status_to_enum(connection_status)
+
+            # 2. อัปเดต DB
+            await prisma.devicenetwork.update(
+                where={"id": device.id},
+                data={
+                    "status": new_status,
+                    "odl_connection_status": db_connection_status,
+                    "odl_mounted": connection_status == "connected" or new_status == "ONLINE",
+                    "last_synced_at": datetime.utcnow(),
+                }
+            )
+
+            logger.info(
+                f"[SingleSync] {node_id} ({protocol}): {previous_status} → {new_status} "
+                f"(connection: {connection_status})"
+            )
+
+            return {
+                "node_id": node_id,
+                "device_name": device.device_name,
+                "protocol": protocol,
+                "previous_status": previous_status,
+                "current_status": new_status,
+                "connection_status": connection_status,
+                "odl_connection_status": db_connection_status,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+
+        except Exception as e:
+            logger.error(f"[SingleSync] Failed to sync {node_id}: {e}")
+            raise
+
+    async def _check_netconf_status(self, node_id: str) -> tuple:
+        """ตรวจสอบ NETCONF device status จาก ODL topology-netconf"""
+        try:
+            odl_nodes = await self.get_odl_mounted_nodes()
+            odl_node = next((n for n in odl_nodes if n["node_id"] == node_id), None)
+
+            if odl_node:
+                conn = odl_node["connection_status"]
+                new_status = "ONLINE" if conn == "connected" else "OFFLINE"
+                return conn, new_status
+            else:
+                return "not-mounted", "OFFLINE"
+        except Exception as e:
+            logger.warning(f"[SingleSync] NETCONF check failed for {node_id}: {e}")
+            return "unable-to-connect", "OFFLINE"
+
+    async def _check_openflow_status(self, node_id: str) -> tuple:
+        """ตรวจสอบ OpenFlow device status จาก ODL inventory"""
+        try:
+            spec = RequestSpec(
+                method="GET",
+                path=self.OPENFLOW_INVENTORY_PATH,
+                datastore="operational",
+                headers={"Accept": "application/yang-data+json"}
+            )
+            response = await self.odl_client.send(spec)
+            nodes_list = response.get("opendaylight-inventory:nodes", {}).get("node", [])
+            if not nodes_list:
+                nodes_list = response.get("nodes", {}).get("node", [])
+
+            # ค้นหา node ของเราใน inventory
+            for node in nodes_list:
+                if node.get("id") == node_id:
+                    return "connected", "ONLINE"
+
+            return "not-in-inventory", "OFFLINE"
+
+        except Exception as e:
+            error_str = str(e)
+            if "409" in error_str and "data-missing" in error_str:
+                return "not-in-inventory", "OFFLINE"
+            logger.warning(f"[SingleSync] OpenFlow check failed for {node_id}: {e}")
+            return "unable-to-connect", "OFFLINE"
+

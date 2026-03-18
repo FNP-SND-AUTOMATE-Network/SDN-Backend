@@ -171,3 +171,55 @@ async def sync_all_devices():
             },
         )
 
+
+@router.post("/devices/{node_id}/sync-status")
+async def sync_single_device_status(node_id: str):
+    """
+    Sync connection status ของ device ตัวเดียวจาก ODL → DB
+
+    รองรับทั้ง NETCONF และ OpenFlow:
+    - **NETCONF**: ดึง connection-status จาก topology-netconf
+    - **OpenFlow**: ตรวจสอบว่ามีอยู่ใน opendaylight-inventory หรือไม่
+
+    **Response:**
+    - `previous_status`: สถานะก่อน sync
+    - `current_status`: สถานะหลัง sync
+    - `connection_status`: raw status จาก ODL (เช่น "connected", "not-mounted")
+    - `protocol`: NETCONF หรือ OPENFLOW
+
+    **Error Codes:**
+    - `404`: Device ไม่พบใน database
+    - `502`: ODL ไม่ตอบ
+    """
+    try:
+        result = await odl_sync_service.sync_single_device_status(node_id)
+        return {
+            "success": True,
+            "message": f"Device '{node_id}' status synced: {result['previous_status']} → {result['current_status']}",
+            "data": result,
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "DEVICE_NOT_FOUND",
+                "message": str(e),
+            },
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail={
+                "code": ErrorCode.ODL_TIMEOUT.value,
+                "message": f"Sync status timeout for {node_id} - ODL not responding",
+            },
+        )
+    except Exception as e:
+        logger.error(f"Single device sync failed for {node_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": ErrorCode.ODL_CONNECTION_FAILED.value,
+                "message": f"Failed to sync status for {node_id}: {str(e)}",
+            },
+        )

@@ -8,6 +8,18 @@ import difflib
 from scrapli import AsyncScrapli
 from scrapli.exceptions import ScrapliException
 
+import logging
+
+# ====== Add Scrapli Logging ======
+scrapli_logger = logging.getLogger("scrapli")
+scrapli_logger.setLevel(logging.DEBUG)
+if scrapli_logger.hasHandlers():
+    scrapli_logger.handlers.clear()
+file_handler = logging.FileHandler("scrapli_backup_debug.log")
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+scrapli_logger.addHandler(file_handler)
+# =================================
+
 # Import Prisma client and Enums based on your schema
 from prisma.enums import ConfigType, ConfigFormat, BackupJobStatus, DeviceVendor
 
@@ -80,6 +92,30 @@ class DeviceBackupService:
                 scrapli_driver = self.map_vendor_to_scrapli_driver(device.vendor)
                 command = self._get_backup_command(device.vendor, config_type)
 
+                asyncssh_options = {
+                    "server_host_key_algs": [
+                        "ssh-rsa",
+                        "ssh-dss",
+                        "rsa-sha2-256",
+                        "rsa-sha2-512",
+                        "ecdsa-sha2-nistp256",
+                        "ecdsa-sha2-nistp384",
+                        "ecdsa-sha2-nistp521",
+                        "ssh-ed25519"
+                    ],
+                    "kex_algs": [
+                        "diffie-hellman-group1-sha1",
+                        "diffie-hellman-group14-sha1",
+                        "diffie-hellman-group-exchange-sha1",
+                        "diffie-hellman-group-exchange-sha256",
+                        "curve25519-sha256",
+                        "curve25519-sha256@libssh.org"
+                    ]
+                }
+                
+                if device.vendor == DeviceVendor.HUAWEI:
+                    asyncssh_options["request_pty"] = False
+
                 device_dict = {
                     "host": device.netconf_host,
                     "platform": scrapli_driver,
@@ -88,8 +124,12 @@ class DeviceBackupService:
                     "auth_password": password,
                     "auth_strict_key": False,
                     "transport": "asyncssh",
-                    "timeout_socket": 15.0,
-                    "timeout_transport": 15.0,
+                    "timeout_socket": 30.0,
+                    "timeout_transport": 30.0,
+                    "timeout_ops": 30.0,
+                    "transport_options": {
+                        "asyncssh": asyncssh_options
+                    }
                 }
 
                 async with AsyncScrapli(**device_dict) as conn:

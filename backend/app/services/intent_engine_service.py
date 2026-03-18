@@ -100,6 +100,29 @@ class IntentEngineService:
                 ntc_platform = self.map_platform_to_ntc(device.vendor)
 
                 # Connect via Scrapli
+                asyncssh_options = {
+                    "server_host_key_algs": [
+                        "ssh-rsa",
+                        "ssh-dss",
+                        "rsa-sha2-256",
+                        "rsa-sha2-512",
+                        "ecdsa-sha2-nistp256",
+                        "ecdsa-sha2-nistp384",
+                        "ecdsa-sha2-nistp521",
+                        "ssh-ed25519"
+                    ],
+                    "kex_algs": [
+                        "diffie-hellman-group1-sha1",
+                        "diffie-hellman-group14-sha1",
+                        "diffie-hellman-group-exchange-sha1",
+                        "diffie-hellman-group-exchange-sha256",
+                        "curve25519-sha256",
+                        "curve25519-sha256@libssh.org"
+                    ]
+                }
+                if device.vendor == DeviceVendor.HUAWEI:
+                    asyncssh_options["request_pty"] = False
+
                 device_conn = {
                     "host": device.netconf_host,
                     "platform": scrapli_driver,
@@ -108,6 +131,9 @@ class IntentEngineService:
                     "auth_password": password,
                     "auth_strict_key": False,
                     "transport": "asyncssh",
+                    "transport_options": {
+                        "asyncssh": asyncssh_options
+                    }
                 }
 
                 device_dict = {

@@ -86,7 +86,7 @@ class OdlRestconfClient:
                 last_error = e
                 # Log concise retry message (hide verbose JSON body)
                 if isinstance(e, OdlRequestError):
-                    logger.debug(f"ODL attempt {attempt+1} failed: HTTP {e.status_code} — {e.details.get('body', '')[:80] if isinstance(e.details, dict) else ''}")
+                    logger.debug(f"ODL attempt {attempt+1} failed: HTTP {e.status_code} — {e.detail.get('body', '')[:80] if isinstance(e.detail, dict) else ''}")
                 else:
                     logger.debug(f"ODL attempt {attempt+1} failed: {e}")
 

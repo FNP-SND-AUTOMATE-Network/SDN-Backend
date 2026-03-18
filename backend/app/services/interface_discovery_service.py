@@ -414,7 +414,9 @@ class InterfaceDiscoveryService:
                 continue
                 
             admin_status = entry.get("ifAdminStatus", "down")
-            oper_status = entry.get("ifOperStatus", "down")
+            # Huawei huawei-ifm YANG model often omits ifOperStatus via ODL
+            # Fallback to ifAdminStatus when ifOperStatus is not available
+            oper_status = entry.get("ifOperStatus") or admin_status
             
             # Extract IPv4
             ipv4 = None

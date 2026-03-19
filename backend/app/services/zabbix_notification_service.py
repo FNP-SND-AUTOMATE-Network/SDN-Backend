@@ -183,19 +183,19 @@ class ZabbixNotificationService:
             return trigger
 
         replacements = [
-            (r"\blink down\b", "link up"),
-            (r"\binterface down\b", "interface up"),
+            (r"\blink down\b", "Link up"),
+            (r"\binterface down\b", "Interface up"),
             (r"\bis down\b", "is up"),
-            (r"\bunavailable by icmp\b", "reachable by icmp"),
-            (r"\bnot reachable\b", "reachable"),
-            (r"\bhigh cpu utilization\b", "cpu utilization back to normal"),
-            (r"\bcpu is too high\b", "cpu utilization back to normal"),
-            (r"\black of free memory\b", "memory level back to normal"),
-            (r"\bmemory utilization\b", "memory utilization back to normal"),
-            (r"\bhigh temperature\b", "temperature back to normal"),
-            (r"\btemperature is above\b", "temperature back to normal"),
-            (r"\bfan failure\b", "fan recovered"),
-            (r"\bpower supply\b", "power supply normal"),
+            (r"\bunavailable by icmp\b", "Reachable by ICMP"),
+            (r"\bnot reachable\b", "Reachable"),
+            (r"\bhigh cpu utilization\b", "CPU utilization back to normal"),
+            (r"\bcpu is too high\b", "CPU utilization back to normal"),
+            (r"\black of free memory\b", "Memory level back to normal"),
+            (r"\bmemory utilization\b", "Memory utilization back to normal"),
+            (r"\bhigh temperature\b", "Temperature back to normal"),
+            (r"\btemperature is above\b", "Temperature back to normal"),
+            (r"\bfan failure\b", "Fan recovered"),
+            (r"\bpower supply\b", "Power supply normal"),
         ]
 
         transformed = trigger

@@ -568,7 +568,7 @@ class DeviceManager:
 
             node_data = node_list[0]
 
-            # Update cache ด้วย (ฟรี เพราะ GET มาแล้ว)
+            # Update cache ด้วย 
             device_info = self._parse_node(node_data)
             self._cache[node_id] = device_info
 

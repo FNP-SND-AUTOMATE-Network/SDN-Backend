@@ -312,42 +312,93 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
             except Exception as oc_err:
                 logger.debug(f"  [{node_id}] OpenConfig LLDP exception: {oc_err}, trying IOS-XE fallback")
 
-            # ── Fallback: Cisco IOS-XE native LLDP ──
+            # ── Fallback: Vendor-specific Native LLDP ──
             if not oc_success:
-                iosxe_url = f"{ODL_BASE}/rests/data/network-topology:network-topology/topology=topology-netconf/node={node_id}/yang-ext:mount/Cisco-IOS-XE-lldp-oper:lldp-entries?content=nonconfig"
-                try:
-                    res_ios = requests.get(iosxe_url, auth=AUTH, headers=HEADERS, timeout=TIMEOUT)
-                    if res_ios.status_code == 200:
-                        raw_nodes.add(node_id)
-                        ios_data = res_ios.json()
-                        entries = ios_data.get("Cisco-IOS-XE-lldp-oper:lldp-entries", {}).get("lldp-entry", [])
-                        for entry in entries:
-                            remote_id = entry.get('device-id', '')
-                            local_intf = entry.get('local-interface')
-                            remote_intf = entry.get('connecting-interface')
+                vendor = device.vendor if hasattr(device, 'vendor') and device.vendor else "OTHER"
+                
+                if vendor == "CISCO":
+                    iosxe_url = f"{ODL_BASE}/rests/data/network-topology:network-topology/topology=topology-netconf/node={node_id}/yang-ext:mount/Cisco-IOS-XE-lldp-oper:lldp-entries?content=nonconfig"
+                    try:
+                        res_ios = requests.get(iosxe_url, auth=AUTH, headers=HEADERS, timeout=TIMEOUT)
+                        if res_ios.status_code == 200:
+                            raw_nodes.add(node_id)
+                            ios_data = res_ios.json()
+                            entries = ios_data.get("Cisco-IOS-XE-lldp-oper:lldp-entries", {}).get("lldp-entry", [])
+                            for entry in entries:
+                                remote_id = entry.get('device-id', '')
+                                local_intf = entry.get('local-interface')
+                                remote_intf = entry.get('connecting-interface')
 
-                            if remote_id and "openflow" in remote_id:
-                                pass   # keep as-is (e.g. "openflow:1")
-                            elif remote_id:
-                                remote_id = remote_id.split('.')[0]
+                                if remote_id and "openflow" in remote_id:
+                                    pass   # keep as-is (e.g. "openflow:1")
+                                elif remote_id:
+                                    remote_id = remote_id.split('.')[0]
 
-                            if remote_intf:
-                                remote_intf = _expand_interface_name(remote_intf)
+                                if remote_intf:
+                                    remote_intf = _expand_interface_name(remote_intf)
 
-                            link_src = f"{node_id}:{local_intf}"
-                            link_tgt = f"{remote_id}:{remote_intf}"
-                            raw_links.append({
-                                "link_id": f"{link_src}-to-{link_tgt}",
-                                "source": link_src,
-                                "target": link_tgt,
-                                "type": "NETCONF"
-                            })
-                            lldp_neighbors_found += 1
-                            logger.info(f"  [{node_id}] LLDP(IOS-XE): {local_intf} → {remote_id}:{remote_intf}")
-                    else:
-                        logger.warning(f"  [{node_id}] IOS-XE LLDP returned HTTP {res_ios.status_code}")
-                except Exception as ex:
-                    logger.warning(f"  [{node_id}] Failed to fetch LLDP (both OpenConfig & IOS-XE): {ex}")
+                                link_src = f"{node_id}:{local_intf}"
+                                link_tgt = f"{remote_id}:{remote_intf}"
+                                raw_links.append({
+                                    "link_id": f"{link_src}-to-{link_tgt}",
+                                    "source": link_src,
+                                    "target": link_tgt,
+                                    "type": "NETCONF"
+                                })
+                                lldp_neighbors_found += 1
+                                logger.info(f"  [{node_id}] LLDP(IOS-XE): {local_intf} → {remote_id}:{remote_intf}")
+                            
+                            if lldp_neighbors_found > 0:
+                                oc_success = True
+                        else:
+                            logger.debug(f"  [{node_id}] IOS-XE LLDP returned HTTP {res_ios.status_code}")
+                    except Exception as ex:
+                        logger.debug(f"  [{node_id}] Failed to fetch IOS-XE LLDP: {ex}")
+
+                elif vendor == "HUAWEI":
+                    huawei_url = f"{ODL_BASE}/rests/data/network-topology:network-topology/topology=topology-netconf/node={node_id}/yang-ext:mount/huawei-lldp:lldp?content=nonconfig"
+                    try:
+                        res_hw = requests.get(huawei_url, auth=AUTH, headers=HEADERS, timeout=TIMEOUT)
+                        if res_hw.status_code == 200:
+                            raw_nodes.add(node_id)
+                            hw_data = res_hw.json()
+                            interfaces = hw_data.get("huawei-lldp:lldp", {}).get("lldpInterfaces", {}).get("lldpInterface", [])
+                            for intf in interfaces:
+                                local_intf = intf.get("ifName")
+                                neighbors = intf.get("lldpNeighbor", [])
+                                if not neighbors and "lldpNeighbors" in intf:
+                                    neighbors = intf.get("lldpNeighbors", {}).get("lldpNeighbor", [])
+                                    
+                                for neighbor in neighbors:
+                                    remote_id = neighbor.get("sysName", "")
+                                    remote_intf = neighbor.get("portId", "")
+
+                                    if remote_id and "openflow" not in remote_id:
+                                        remote_id = remote_id.split('.')[0]
+
+                                    if remote_intf:
+                                        remote_intf = _expand_interface_name(remote_intf)
+
+                                    link_src = f"{node_id}:{local_intf}"
+                                    link_tgt = f"{remote_id}:{remote_intf}"
+                                    raw_links.append({
+                                        "link_id": f"{link_src}-to-{link_tgt}",
+                                        "source": link_src,
+                                        "target": link_tgt,
+                                        "type": "NETCONF"
+                                    })
+                                    lldp_neighbors_found += 1
+                                    logger.info(f"  [{node_id}] LLDP(Huawei): {local_intf} → {remote_id}:{remote_intf}")
+                            
+                            if lldp_neighbors_found > 0:
+                                oc_success = True
+                        else:
+                            logger.warning(f"  [{node_id}] Huawei LLDP returned HTTP {res_hw.status_code}")
+                    except Exception as ex:
+                        logger.warning(f"  [{node_id}] Failed to fetch Huawei LLDP: {ex}")
+                
+                else:
+                    logger.debug(f"  [{node_id}] OpenConfig LLDP failed and no specific native LLDP parser implemented for vendor '{vendor}'")
 
             if lldp_neighbors_found == 0:
                 # ยัง add เข้า raw_nodes เพื่อให้ device แสดงใน topology (แม้ไม่มี link)

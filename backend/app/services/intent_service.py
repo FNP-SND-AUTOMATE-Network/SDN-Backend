@@ -45,11 +45,9 @@ from app.drivers.cisco.ios_xe.interface import CiscoInterfaceDriver
 from app.drivers.huawei.vrp8.interface import HuaweiInterfaceDriver
 
 # System Drivers
-# System Drivers
 from app.drivers.cisco.ios_xe.system import CiscoSystemDriver
 from app.drivers.huawei.vrp8.system import HuaweiSystemDriver
 
-# Routing Drivers
 # Routing Drivers
 from app.drivers.cisco.ios_xe.routing import CiscoRoutingDriver
 from app.drivers.huawei.vrp8.routing import HuaweiRoutingDriver

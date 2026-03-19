@@ -14,6 +14,7 @@ from datetime import datetime
 from app.core.logging import logger
 from app.core.event_bus import event_bus
 from app.clients.slack_client import SlackClient
+from app.core.config import settings
 from app.core.ws_manager import ws_manager
 from app.core.alert_dedup import alert_dedup
 from app.normalizers.zabbix import (
@@ -52,8 +53,13 @@ class ZabbixNotificationService:
         blocks = self._build_slack_blocks(event)
         fallback_text = self._build_fallback_text(event)
 
-        # Step 3: Send to Slack
-        success = await self.slack.send_message(text=fallback_text, blocks=blocks)
+        # Step 3: Send to Slack only when ChatOps is enabled and webhook is configured.
+        slack_attempted = settings.CHATOPS_ENABLED and bool(self.slack.webhook_url)
+        if slack_attempted:
+            success = await self.slack.send_message(text=fallback_text, blocks=blocks)
+        else:
+            success = False
+            logger.info("[ZabbixNotify] Slack send skipped (ChatOps disabled or webhook not configured)")
 
         # Step 3.5: Broadcast to WebSocket clients (real-time push to Frontend)
         try:
@@ -72,6 +78,7 @@ class ZabbixNotificationService:
         # Step 5: Track history
         record = {
             **event.to_dict(),
+            "slack_attempted": slack_attempted,
             "slack_sent": success,
             "processed_at": datetime.utcnow().isoformat(),
         }
@@ -84,13 +91,20 @@ class ZabbixNotificationService:
                 f"[ZabbixNotify] Sent to Slack: event_id={event.event_id} "
                 f"host={event.host_name} status={event.status}"
             )
-        else:
+        elif slack_attempted:
             logger.error(
                 f"[ZabbixNotify] Failed to send to Slack: event_id={event.event_id}"
             )
 
+        if slack_attempted and success:
+            status = "sent"
+        elif slack_attempted:
+            status = "failed"
+        else:
+            status = "accepted"
+
         return {
-            "status": "sent" if success else "failed",
+            "status": status,
             "event_id": event.event_id,
             "host": event.host_name,
             "severity": event.severity_label,
@@ -300,6 +314,7 @@ class ZabbixNotificationService:
             "total_events_processed": total,
             "problems": problems,
             "resolved": resolved,
+            "chatops_enabled": settings.CHATOPS_ENABLED,
             "failed_slack_sends": failed_sends,
             "webhook_active": bool(self.slack.webhook_url),
         }

@@ -7,6 +7,7 @@ Flow:
   Frontend → REST API → ZabbixMonitoringService → ZabbixClient → Zabbix JSON-RPC API
 """
 
+import asyncio
 import time
 from typing import Any, Dict, List, Optional
 from app.clients.zabbix_client import zabbix_client, ZabbixAPIError
@@ -45,6 +46,25 @@ class ZabbixMonitoringService:
     รวม logic ในการจัดรูปแบบข้อมูลจาก Zabbix API
     """
 
+    def __init__(self):
+        # Small in-memory cache to reduce repetitive polling load from frontend.
+        self._cache: Dict[str, Dict[str, Any]] = {}
+
+    def _cache_get(self, key: str) -> Optional[Any]:
+        entry = self._cache.get(key)
+        if not entry:
+            return None
+        if entry["expires_at"] < time.time():
+            self._cache.pop(key, None)
+            return None
+        return entry["value"]
+
+    def _cache_set(self, key: str, value: Any, ttl_seconds: int) -> None:
+        self._cache[key] = {
+            "value": value,
+            "expires_at": time.time() + ttl_seconds,
+        }
+
     # ── Dashboard Overview ───────────────────────────────────────
 
     async def get_dashboard_overview(self) -> Dict[str, Any]:
@@ -52,11 +72,16 @@ class ZabbixMonitoringService:
         สรุปภาพรวม Dashboard: จำนวน hosts, problems, severity breakdown
         ใช้แสดงหน้า Dashboard หลัก
         """
+        cached = self._cache_get("overview")
+        if cached is not None:
+            return cached
+
         try:
-            # Fetch data in parallel-like manner
-            hosts = await zabbix_client.get_hosts()
-            problems = await zabbix_client.get_problems()
-            host_groups = await zabbix_client.get_host_groups()
+            hosts, problems, host_groups = await asyncio.gather(
+                zabbix_client.get_hosts(),
+                zabbix_client.get_problems(),
+                zabbix_client.get_host_groups(),
+            )
 
             # Count hosts by availability
             # Zabbix 7.x: availability อยู่ใน interface, ไม่ใช่ host-level
@@ -95,7 +120,7 @@ class ZabbixMonitoringService:
                     "count": count,
                 })
 
-            return {
+            result = {
                 "hosts": {
                     "total": len(hosts),
                     "available": hosts_available,
@@ -112,6 +137,8 @@ class ZabbixMonitoringService:
                 ],
                 "timestamp": int(time.time()),
             }
+            self._cache_set("overview", result, ttl_seconds=20)
+            return result
 
         except ZabbixAPIError as e:
             logger.error(f"[ZabbixMonitor] Dashboard overview failed: {e}")
@@ -127,6 +154,11 @@ class ZabbixMonitoringService:
         """
         ดึง hosts ทั้งหมด พร้อม format ข้อมูลให้อ่านง่าย
         """
+        cache_key = f"hosts:{group_id or ''}:{search or ''}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         group_ids = [group_id] if group_id else None
         hosts = await zabbix_client.get_hosts(group_ids=group_ids, search=search)
 
@@ -174,6 +206,7 @@ class ZabbixMonitoringService:
                 ],
             })
 
+        self._cache_set(cache_key, result, ttl_seconds=20)
         return result
 
     # ── Host Detail ──────────────────────────────────────────────
@@ -262,6 +295,11 @@ class ZabbixMonitoringService:
 
         Returns time-series data พร้อมค่า in/out bytes
         """
+        cache_key = f"traffic:{host_id}:{period_hours}:{interface_name or ''}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         # Search for traffic-related SNMP items
         all_items = await zabbix_client.get_items(host_id)
 
@@ -287,11 +325,13 @@ class ZabbixMonitoringService:
                 traffic_items.append(item)
 
         if not traffic_items:
-            return {
+            result = {
                 "host_id": host_id,
                 "interfaces": [],
                 "message": "No traffic items found for this host",
             }
+            self._cache_set(cache_key, result, ttl_seconds=15)
+            return result
 
         # Get history for traffic items
         time_from = int(time.time()) - (period_hours * 3600)
@@ -340,13 +380,15 @@ class ZabbixMonitoringService:
                 "history": history_by_item.get(iid, []),
             })
 
-        return {
+        result = {
             "host_id": host_id,
             "period_hours": period_hours,
             "time_from": time_from,
             "time_till": int(time.time()),
             "interfaces": interfaces_data,
         }
+        self._cache_set(cache_key, result, ttl_seconds=15)
+        return result
 
     # ── Problems Summary ─────────────────────────────────────────
 
@@ -401,6 +443,11 @@ class ZabbixMonitoringService:
         """
         สรุป SNMP items ทั้งหมดของ host — grouped by category
         """
+        cache_key = f"snmp:{host_id}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         snmp_items = await zabbix_client.get_snmp_items(host_id)
 
         # Categorize by item key pattern
@@ -442,11 +489,13 @@ class ZabbixMonitoringService:
             else:
                 categories["other"].append(formatted)
 
-        return {
+        result = {
             "host_id": host_id,
             "total_snmp_items": len(snmp_items),
             "categories": categories,
         }
+        self._cache_set(cache_key, result, ttl_seconds=20)
+        return result
 
 
 # ── Singleton ────────────────────────────────────────────────────

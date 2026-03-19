@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from app.api import health, auth, audit, users, device_credentials, local_sites, tags, operating_systems, policies, backups, configuration_templates, device_networks, nbi, interfaces, odl_probe, debug_env, ipam, device_backups, deployments, chatops, zabbix_webhook, ws_alerts
+from app.api import health, auth, audit, users, device_credentials, local_sites, tags, operating_systems, policies, backups, configuration_templates, device_networks, nbi, interfaces, odl_probe, debug_env, ipam, device_backups, deployments, chatops, zabbix_webhook, zabbix_dashboard, ws_alerts
 from app.database import set_prisma_client
 import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -148,4 +148,5 @@ app.include_router(device_backups.router)
 app.include_router(deployments.router)
 app.include_router(chatops.router)
 app.include_router(zabbix_webhook.router)
+app.include_router(zabbix_dashboard.router)
 app.include_router(ws_alerts.router)

@@ -98,6 +98,84 @@ class ZabbixNotificationService:
             "processed_at": record["processed_at"],
         }
 
+    def _humanize_alert_text(self, trigger: str, value: str, is_resolved: bool) -> str:
+        """
+        แปล/ปรับประโยค Zabbix Trigger ให้อ่านเป็นภาษามนุษย์ (ภาษาไทย)
+        เพื่อให้ผู้ดูแลระบบ(Network Admin) เข้าใจได้ทันที
+        """
+        t_low = trigger.lower()
+        
+        # 1. กลุ่ม CPU 
+        if "cpu utilization" in t_low or "cpu is too high" in t_low:
+            if is_resolved:
+                return f"การทำงานของ CPU กลับสู่ระดับปกติ (ปัจจุบัน: {value})" if value else "การทำงานของ CPU กลับสู่ระดับปกติ"
+            else:
+                return f"การทำงานของ CPU สูงผิดปกติ (ตรวจพบ: {value})" if value else "การทำงานของ CPU สูงผิดปกติ"
+                
+        # 2. กลุ่ม Memory
+        if "memory utilization" in t_low or "lack of free memory" in t_low:
+            if is_resolved:
+                return f"หน่วยความจำ (Memory) กลับสู่ระดับปกติ (ปัจจุบัน: {value})" if value else "หน่วยความจำ (Memory) กลับสู่ระดับปกติ"
+            else:
+                return f"หน่วยความจำ (Memory) ถูกใช้งานสูงผิดปกติ (ตรวจพบ: {value})" if value else "หน่วยความจำ (Memory) ถูกใช้งานสูงผิดปกติ"
+
+        # 3. กลุ่ม Ping / Network Status / ICMP
+        if "ping loss" in t_low:
+            if is_resolved:
+                return f"สถานะ Ping กลับสู่ปกติ (Loss: {value})" if value else "สถานะ Ping กลับสู่ปกติ"
+            else:
+                return f"พบการสูญหายของแพ็กเกจ Ping สูง (Loss: {value})" if value else "พบการสูญหายของแพ็กเกจ Ping สูง"
+                
+        if "ping response time" in t_low:
+            if is_resolved:
+                return f"เวลาตอบสนองของ Ping กลับสู่ปกติ (เวลา: {value})" if value else "เวลาตอบสนองของ Ping กลับสู่ปกติ"
+            else:
+                return f"เวลาตอบสนองของ Ping สูงเกินไป (เวลา: {value})" if value else "เวลาตอบสนองของ Ping สูงเกินไป"
+                
+        if "unavailable by icmp" in t_low:
+            if is_resolved:
+                return f"อุปกรณ์สามารถเชื่อมต่อผ่านระยะไกล (ICMP) ได้ปกติ"
+            else:
+                return f"อุปกรณ์ไม่สามารถเชื่อมต่อผ่านการ Ping (ICMP) ได้ (Down)"
+
+        # 4. กลุ่ม Reboot / Uptime
+        if "restarted" in t_low or "has been restarted" in t_low:
+            if is_resolved:
+                return f"อุปกรณ์สถานะปกติหลังจากการเริ่มระบบ (Uptime: {value})" if value else "อุปกรณ์สถานะปกติหลังจากการเริ่มระบบ"
+            else:
+                return f"อุปกรณ์เพิ่งถูกเริ่มระบบใหม่ (Uptime: {value})" if value else "อุปกรณ์เพิ่งถูกเริ่มระบบใหม่ (Restarted)"
+
+        # 5. กลุ่ม Interface/Port/Link
+        if "link down" in t_low or "is down" in t_low:
+            return f"พอร์ต/รอยต่อหยุดทำงาน ({trigger})"
+            
+        if "link up" in t_low or "is up" in t_low:
+            return f"พอร์ต/รอยต่อกลับมาทำงานปกติ ({trigger})"
+
+        # 6. กลุ่ม Temperature
+        if "temperature is above" in t_low or "high temperature" in t_low:
+            if is_resolved:
+                return f"อุณหภูมิของอุปกรณ์ลดลงสู่ระดับปกติ (ปัจจุบัน: {value})" if value else "อุณหภูมิของอุปกรณ์ลดลงสู่ระดับปกติ"
+            else:
+                return f"อุณหภูมิของอุปกรณ์สูงผิดปกติ (ตรวจพบ: {value})" if value else "อุณหภูมิของอุปกรณ์สูงผิดปกติ"
+
+        # 7. กลุ่ม Power Supply / Fan / Hardware
+        if "power supply" in t_low:
+            return f"ระบบการจ่ายไฟ (Power Supply) กลับมาทำงานปกติ" if is_resolved else f"พบความผิดปกติของระบบการจ่ายไฟ (Power Supply)!"
+        if "fan is" in t_low or "fan failure" in t_low:
+            return f"พัดลมระบายความร้อนกลับมาทำงานปกติ" if is_resolved else f"พบความผิดปกติของพัดลมระบายความร้อน (Fan)!"
+            
+        # 8. กลุ่ม BGP/OSPF/Routing
+        if "bgp session" in t_low or "ospf neighbor" in t_low:
+            proto = "BGP" if "bgp" in t_low else "OSPF"
+            return f"การเชื่อมต่อเส้นทาง {proto} กลับสู่สถานะปกติ" if is_resolved else f"สายสำรอง/เส้นทาง {proto} ขัดข้อง (Down)!"
+
+        # กรณีอื่น ๆ (Fallback)
+        if is_resolved:
+            return f"แจ้งเตือนเข้าสู่สภาวะปกติ: {trigger} (ค่าล่าสุด: {value})" if value else f"แจ้งเตือนเข้าสู่สภาวะปกติ: {trigger}"
+        else:
+            return f"แจ้งเตือนปัญหา: {trigger} (ปัจจุบัน: {value})" if value else f"แจ้งเตือนปัญหา: {trigger}"
+
     # ── Build Slack Block Kit message (clean & clear) ──────────
     def _build_slack_blocks(self, event: NormalizedZabbixEvent) -> List[Dict]:
         """
@@ -120,14 +198,12 @@ class ZabbixNotificationService:
         clean_trigger = clean_trigger.replace("(Configured_via_ODL)", "")
 
         # ── Header ──
+        humanized_issue = self._humanize_alert_text(clean_trigger, event.item_value, event.is_resolved)
+        
         if event.is_resolved:
-            # e.g., ✅ RESOLVED: NE40ET — Interface Ethernet1/0/3(): Link up 
-            # or ✅ RESOLVED: NE40ET — Interface Up
-            issue_text = clean_trigger if "up" in clean_trigger.lower() or "down" in clean_trigger.lower() else event.item_value or clean_trigger
-            header_text = f"✅ RESOLVED: {event.host_name} — {issue_text}"
+            header_text = f"✅ RESOLVED: {event.host_name} — {humanized_issue}"
         else:
-            # e.g., 🚨 PROBLEM: NE40ET — Interface Ethernet1/0/3(): Link down
-            header_text = f"{event.severity_emoji} PROBLEM: {event.host_name} — {clean_trigger}"
+            header_text = f"{event.severity_emoji} PROBLEM: {event.host_name} — {humanized_issue}"
 
         if len(header_text) > 148:
             header_text = header_text[:145] + "..."

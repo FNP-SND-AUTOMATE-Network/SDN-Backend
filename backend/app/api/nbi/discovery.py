@@ -73,6 +73,14 @@ async def discover_interfaces(
         prisma = get_prisma_client()
         try:
             db_device_id = device.device_id
+            
+            # Pre-fetch for IPAM deduplication (Step 3)
+            db_dev = await prisma.devicenetwork.find_unique(where={"id": db_device_id})
+            mgmt_ip = db_dev.netconf_host if db_dev else None
+            mgmt_phpipam_id = db_dev.phpipam_address_id if db_dev else None
+            from app.services.phpipam_service import PhpipamService
+            phpipam_svc = PhpipamService()
+            
             for intf in interfaces:
                 intf_name = intf.get("name")
                 if intf_name:
@@ -105,38 +113,49 @@ async def discover_interfaces(
                     else:
                         intf_type = "OTHER"
 
+                    # IPAM Auto-Sync for Interface IPs
+                    phpipam_address_id = None
+                    if ipv4_addr:
+                        # Split "192.168.1.10 (255.255.255.0)" or similar formats if present
+                        clean_ip = ipv4_addr.split(" ")[0].strip()
+                        phpipam_address_id = await phpipam_svc.auto_sync_discovered_ip(
+                            ip_address=clean_ip,
+                            hostname=f"{device.device_name or node_id}-{intf_name}",
+                            mac_address=mac_address,
+                            is_interface=True,
+                            device_mgmt_ip=mgmt_ip,
+                            device_mgmt_phpipam_id=mgmt_phpipam_id
+                        )
+
                     # Handle Interface Upsert
                     intf_record = await prisma.interface.find_first(
                         where={"device_id": db_device_id, "name": intf_name}
                     )
                     
+                    data_payload = {
+                        "tp_id": tp_id,
+                        "description": description,
+                        "status": admin_status,
+                        "ip_address": ipv4_addr.split(" ")[0].strip() if ipv4_addr else None,
+                        "subnet_mask": subnet_mask,
+                        "mac_address": mac_address,
+                        "port_number": port_number,
+                        "type": intf_type
+                    }
+                    if phpipam_address_id:
+                        data_payload["phpipam_address_id"] = phpipam_address_id
+
                     if intf_record:
                         await prisma.interface.update(
                             where={"id": intf_record.id},
-                            data={
-                                "tp_id": tp_id,
-                                "description": description,
-                                "status": admin_status,
-                                "ip_address": ipv4_addr,
-                                "subnet_mask": subnet_mask,
-                                "mac_address": mac_address,
-                                "port_number": port_number,
-                                "type": intf_type
-                            }
+                            data=data_payload
                         )
                     else:
                         await prisma.interface.create(
                             data={
                                 "device_id": db_device_id,
                                 "name": intf_name,
-                                "tp_id": tp_id,
-                                "description": description,
-                                "status": admin_status,
-                                "ip_address": ipv4_addr,
-                                "subnet_mask": subnet_mask,
-                                "mac_address": mac_address,
-                                "port_number": port_number,
-                                "type": intf_type
+                                **data_payload
                             }
                         )
         except Exception as db_e:

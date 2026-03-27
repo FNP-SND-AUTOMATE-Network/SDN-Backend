@@ -2,6 +2,7 @@ import httpx
 import os
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
+import ipaddress
 
 
 class PhpipamService:
@@ -338,3 +339,59 @@ class PhpipamService:
     
     async def release_ip(self, address_id: str) -> bool:
         return await self.delete_ip_address(address_id)
+
+    # ========= Auto Discovery Helper =========
+    
+    async def auto_sync_discovered_ip(
+        self,
+        ip_address: str,
+        hostname: str,
+        mac_address: Optional[str] = None,
+        is_interface: bool = False,
+        device_mgmt_ip: Optional[str] = None,
+        device_mgmt_phpipam_id: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Auto-book an IP in phpIPAM if it is discovered.
+        Includes deduplication: If it's an interface IP but matches the device's Mgmt IP, 
+        it just returns the device's phpipam_address_id without recreating.
+        """
+        if not ip_address or not self.enabled:
+            return None
+            
+        # 1. Deduplication Check: Is this interface IP actually the management IP?
+        if is_interface and device_mgmt_ip and ip_address == device_mgmt_ip:
+            if device_mgmt_phpipam_id:
+                return device_mgmt_phpipam_id
+        
+        try:
+            # 2. Check if IP already exists in phpIPAM
+            existing_ip = await self.search_ip(ip_address)
+            if existing_ip and existing_ip.get("id"):
+                return str(existing_ip.get("id"))
+                
+            # 3. If not found, try to find a subnet that matches the IP and allocate it
+            target_ip = ipaddress.ip_address(ip_address)
+            subnets = await self.get_subnets()
+            
+            for subnet in subnets:
+                try:
+                    network = ipaddress.ip_network(f"{subnet['subnet']}/{subnet['mask']}")
+                    if target_ip in network:
+                        # Create IP in this subnet
+                        desc = "[Auto-Discovery] Interface IP" if is_interface else "[Auto-Discovery] Management IP"
+                        new_ip = await self.create_ip_address(
+                            subnet_id=str(subnet["id"]),
+                            ip_address=ip_address,
+                            hostname=hostname,
+                            mac_address=mac_address,
+                            description=f"{desc} for {hostname}"
+                        )
+                        if new_ip and new_ip.get("id"):
+                            return str(new_ip.get("id"))
+                except ValueError:
+                    continue  # Ignore invalid subnets
+        except Exception as e:
+            print(f"[phpIPAM] Error auto-syncing IP {ip_address}: {e}")
+            
+        return None

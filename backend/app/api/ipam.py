@@ -125,6 +125,39 @@ async def get_subnet_addresses(
         )
 
 
+@router.get("/subnets/{subnet_id}/first_free", response_model=dict)
+async def get_first_free_ip(
+    subnet_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """ดึง IP แรกที่ว่างอยู่ใน subnet นี้ เพื่อนำไป auto-suggest ใน UI"""
+    try:
+        phpipam_svc = get_phpipam_service()
+        
+        if not phpipam_svc.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="phpIPAM integration is not enabled"
+            )
+        
+        ip_address = await phpipam_svc.get_first_free_ip(subnet_id)
+        
+        if not ip_address:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No free IP available in this subnet"
+            )
+            
+        return {"ip_address": ip_address}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching free IP: {str(e)}"
+        )
+
 # ========= Device IP Management =========
 
 @router.post("/devices/{device_id}/assign-ip", response_model=IpAssignmentResponse)

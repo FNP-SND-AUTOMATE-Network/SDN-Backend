@@ -96,9 +96,9 @@ class OdlMountService:
                     "netconf-node-topology:password": password,
                     # Stability parameters for ODL Potassium
                     "netconf-node-topology:tcp-only": False,
-                    "netconf-node-topology:keepalive-delay": 60, 
+                    "netconf-node-topology:keepalive-delay": 120, 
                     "netconf-node-topology:connection-timeout-millis": 20000,
-                    "netconf-node-topology:default-request-timeout-millis": 120000,
+                    "netconf-node-topology:default-request-timeout-millis": 180000,
                     "netconf-node-topology:max-connection-attempts": 3,
                 }
             ]

@@ -32,15 +32,22 @@ async def _safe_sync_devices():
 
 
 async def _safe_sync_topology():
-    """Background job: sync topology จาก ODL (with lock)"""
+    """Background job: sync topology จาก ODL (with lock + total timeout)"""
     if _sync_topology_lock.locked():
         logger.debug("[BG-Sync] Topology sync skipped — previous run still in progress")
         return
     async with _sync_topology_lock:
         try:
             from app.services.topology_sync import sync_odl_topology_to_db
-            await sync_odl_topology_to_db()
+            # Total timeout = 80% of interval เพื่อป้องกัน sync ทำงานยาวกว่า interval
+            total_timeout = app_settings.SYNC_TOPOLOGY_INTERVAL_SEC * 0.8
+            await asyncio.wait_for(sync_odl_topology_to_db(), timeout=total_timeout)
             logger.info("[BG-Sync] Topology sync completed")
+        except asyncio.TimeoutError:
+            logger.error(
+                f"[BG-Sync] Topology sync TIMEOUT after {app_settings.SYNC_TOPOLOGY_INTERVAL_SEC * 0.8:.0f}s "
+                f"— consider increasing SYNC_TOPOLOGY_INTERVAL_SEC"
+            )
         except Exception as e:
             logger.error(f"[BG-Sync] Topology sync failed: {e}")
 

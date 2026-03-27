@@ -1,4 +1,5 @@
 import httpx
+import asyncio
 from typing import Any, Dict, Optional
 from app.core.config import settings
 from app.core.errors import OdlRequestError
@@ -89,6 +90,12 @@ class OdlRestconfClient:
                     logger.debug(f"ODL attempt {attempt+1} failed: HTTP {e.status_code} — {e.detail.get('body', '')[:80] if isinstance(e.detail, dict) else ''}")
                 else:
                     logger.debug(f"ODL attempt {attempt+1} failed: {e}")
+                
+                # Exponential backoff before next retry (1s, 2s, 4s, ...)
+                if attempt < self.retry:
+                    backoff = min(2 ** attempt, 8)
+                    logger.debug(f"ODL retry backoff: {backoff}s before attempt {attempt+2}")
+                    await asyncio.sleep(backoff)
 
         if isinstance(last_error, OdlRequestError):
             raise last_error

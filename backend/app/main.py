@@ -87,13 +87,16 @@ async def lifespan(app: FastAPI):
             replace_existing=True
         )
 
-        # Topology sync
+        # Topology sync (staggered start: offset by half device_interval to avoid overlap)
+        from datetime import datetime, timedelta
+        topo_first_run = datetime.now() + timedelta(seconds=device_interval // 2)
         scheduler.add_job(
             _safe_sync_topology,
             'interval',
             seconds=topo_interval,
             id='sync_odl_topology',
-            replace_existing=True
+            replace_existing=True,
+            next_run_time=topo_first_run
         )
 
         scheduler.start()

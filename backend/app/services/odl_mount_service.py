@@ -99,7 +99,7 @@ class OdlMountService:
                     "netconf-node-topology:keepalive-delay": 10,
                     "netconf-node-topology:connection-timeout-millis": 20000,
                     "netconf-node-topology:default-request-timeout-millis": 60000,
-                    "netconf-node-topology:max-connection-attempts": 0,
+                    "netconf-node-topology:max-connection-attempts": 3,
                 }
             ]
         }

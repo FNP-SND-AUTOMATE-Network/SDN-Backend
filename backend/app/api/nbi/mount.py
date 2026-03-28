@@ -3,7 +3,7 @@ NBI Mount/Unmount Endpoints
 Device mount, unmount, and status endpoints
 """
 import asyncio
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Query
 from typing import Dict, Any
 from app.services.odl_mount_service import OdlMountService
 from app.core.logging import logger
@@ -243,4 +243,208 @@ async def check_device_status(
                 "code": ErrorCode.ODL_CONNECTION_FAILED.value,
                 "message": f"Status check failed: {str(e)}"
             }
+        )
+
+@router.get("/devices/{node_id}/wait-ready")
+async def wait_for_device_ready(
+    node_id: str,
+    max_wait_seconds: int = Query(
+        120,
+        ge=5,
+        le=300,
+        description="Maximum seconds to wait for ODL to finish mounting (default 120s). "
+                    "Cisco ASR hardware typically needs 30–90 s to download YANG modules."
+    ),
+    check_interval: int = Query(
+        5,
+        ge=2,
+        le=30,
+        description="Polling interval in seconds (default 5s)"
+    ),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """
+    ⏳ Poll ODL until the device becomes **fully connected** (or timeout).
+
+    Use this endpoint **immediately after** `POST /devices/{node_id}/mount` to
+    wait for ODL to finish downloading and compiling all YANG modules before
+    issuing any data-plane requests (get-interfaces, push-config, etc.).
+
+    ### Why this matters
+    ODL reports HTTP 201 / 200 as soon as the mount entry is written to the
+    *configuration* datastore.  The actual NETCONF session establishment and
+    YANG schema compilation happen **asynchronously** in the background and can
+    take 30–120 seconds on real Cisco ASR hardware.  Sending NETCONF RPCs
+    (e.g. `get-config`) while `connection_status == 'connecting'` floods the
+    internal RPC queue, which causes ODL to tear down the session permanently
+    and leaves the node in a stuck state that survives unmount/remount.
+
+    ### Flow
+    ```
+    POST /mount  → 200 OK (mount entry created)
+          ↓
+    GET  /wait-ready  → polls every {check_interval}s
+          ↓  (when connected)
+    GET  /interfaces/discover  → safe to call
+    ```
+
+    ### Response codes
+    | `ready` | `connection_status`    | Meaning                              |
+    |---------|------------------------|--------------------------------------|
+    | `true`  | `connected`            | Safe to call interface / config APIs |
+    | `false` | `connecting`           | Timed out — keep polling             |
+    | `false` | `unable-to-connect`    | Auth / reachability failure          |
+    """
+    try:
+        result = await odl_mount_service.wait_until_connected(
+            node_id=node_id,
+            max_wait_seconds=max_wait_seconds,
+            check_interval=check_interval,
+        )
+
+        conn = result.get("connection_status", "unknown")
+
+        if result.get("ready"):
+            code = ErrorCode.SUCCESS
+        elif conn == "connecting":
+            code = ErrorCode.DEVICE_CONNECTING
+        else:
+            code = ErrorCode.DEVICE_NOT_CONNECTED
+
+        return MountResponse(
+            success=result["ready"],
+            code=code.value,
+            message=result["message"],
+            node_id=node_id,
+            connection_status=conn,
+            device_status="ONLINE" if result["ready"] else "OFFLINE",
+            ready_for_intent=result["ready"],
+            data={
+                "node_id": node_id,
+                "waited_seconds": result.get("waited_seconds", 0),
+                "max_wait_seconds": max_wait_seconds,
+            },
+        )
+
+    except ValueError as e:
+        error_msg = str(e)
+        status_code = (
+            status.HTTP_404_NOT_FOUND if "not found" in error_msg.lower()
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=status_code, detail={
+            "code": ErrorCode.DEVICE_NOT_FOUND.value if "not found" in error_msg.lower()
+                    else ErrorCode.INVALID_PARAMS.value,
+            "message": error_msg,
+        })
+    except Exception as e:
+        logger.error(f"wait-ready failed for {node_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": ErrorCode.ODL_CONNECTION_FAILED.value, "message": str(e)},
+        )
+
+
+@router.post("/devices/{node_id}/force-remount", response_model=MountResponse)
+async def force_remount_device(
+    node_id: str,
+    request: MountRequest = MountRequest(),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """
+    🔄 Force-remount a stuck device in ODL.
+
+    Use this when a device node is **stuck** in ODL (e.g. it survived `unmount`
+    and cannot be mounted again).  This endpoint:
+
+    1. `DELETE` the node from ODL **config** datastore
+    2. Waits 10 seconds for ODL to fully tear down the NETCONF session
+    3. Verifies the node is gone from **operational** datastore
+    4. Re-mounts the device using credentials from the database
+    5. Polls until `connected` (respects `max_wait_seconds`)
+
+    ### When to use
+    - Keepalive RPCs are flooding the log with “session is disconnected”
+    - `GET /status` returns `connection_status: none` or `unable-to-connect`
+      even though you already called `unmount` + `mount`
+    - The node is visible in ODL operational DS but not in config DS
+
+    ### Difference from regular mount
+    Regular `POST /mount` skips the DELETE step if the node looks clean in
+    config DS.  `force-remount` **always** deletes first, regardless of the
+    current state, making it safe to call on any stuck node.
+    """
+    import asyncio
+
+    try:
+        user_id = current_user["id"]
+        logger.info(f"[force-remount] Starting force-remount for {node_id}")
+
+        # Step 1: Hard-delete from ODL config (ignore 404 if not there)
+        try:
+            await odl_mount_service.unmount_device(node_id)
+            logger.info(f"[force-remount] Unmounted {node_id} successfully")
+        except Exception as unmount_err:
+            logger.warning(
+                f"[force-remount] Unmount step failed for {node_id} "
+                f"(may already be clean): {unmount_err}"
+            )
+
+        # Step 2: Give ODL time to fully release the NETCONF session
+        CLEANUP_WAIT = 10
+        logger.info(f"[force-remount] Waiting {CLEANUP_WAIT}s for ODL session teardown")
+        await asyncio.sleep(CLEANUP_WAIT)
+
+        # Step 3: Verify node is gone from ODL
+        residual = await odl_mount_service.get_connection_status(node_id)
+        if residual.get("mounted"):
+            logger.warning(
+                f"[force-remount] Node {node_id} still visible in ODL after "
+                f"{CLEANUP_WAIT}s — proceeding anyway"
+            )
+
+        # Step 4 + 5: Mount (and wait)
+        result = await odl_mount_service.mount_and_wait(
+            node_id=node_id,
+            user_id=user_id,
+            max_wait_seconds=request.max_wait_seconds,
+        )
+
+        code = ErrorCode.SUCCESS if result.get("success") else ErrorCode.ODL_MOUNT_FAILED
+
+        return MountResponse(
+            success=result.get("success", False),
+            code=code.value,
+            message=result.get("message", ""),
+            node_id=result.get("node_id"),
+            connection_status=result.get("connection_status"),
+            device_status=result.get("device_status"),
+            ready_for_intent=result.get("ready_for_intent", False),
+            data={
+                "node_id": node_id,
+                "wait_time_seconds": result.get("wait_time_seconds"),
+                "force_remount": True,
+            },
+        )
+
+    except ValueError as e:
+        error_msg = str(e)
+        status_code = (
+            status.HTTP_404_NOT_FOUND if "not found" in error_msg.lower()
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=status_code, detail={
+            "code": ErrorCode.DEVICE_NOT_FOUND.value if "not found" in error_msg.lower()
+                    else ErrorCode.INVALID_PARAMS.value,
+            "message": error_msg,
+        })
+    except Exception as e:
+        logger.error(f"[force-remount] Failed for {node_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": ErrorCode.ODL_MOUNT_FAILED.value,
+                "message": f"Force-remount failed: {str(e)}",
+                "suggestion": "Check ODL logs for NETCONF session errors",
+            },
         )

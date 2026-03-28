@@ -95,11 +95,18 @@ class OdlMountService:
                     "netconf-node-topology:username": username,
                     "netconf-node-topology:password": password,
                     # Stability parameters for ODL Potassium
+                    # NOTE: Real Cisco ASR hardware requires much longer timeouts
+                    # because ODL must download + compile a large set of YANG modules
+                    # before reporting 'connected'. Typical time: 30–120 seconds.
                     "netconf-node-topology:tcp-only": False,
-                    "netconf-node-topology:keepalive-delay": 120, 
-                    "netconf-node-topology:connection-timeout-millis": 20000,
-                    "netconf-node-topology:default-request-timeout-millis": 180000,
+                    "netconf-node-topology:keepalive-delay": 120,
+                    # Increased from 20 000 → 60 000 ms to accommodate ASR YANG download
+                    "netconf-node-topology:connection-timeout-millis": 60000,
+                    # Increased from 180 000 → 300 000 ms for large config responses
+                    "netconf-node-topology:default-request-timeout-millis": 300000,
                     "netconf-node-topology:max-connection-attempts": 3,
+                    # Between-attempt delay (ms) — avoids immediate retry storm
+                    "netconf-node-topology:between-attempts-timeout-millis": 5000,
                 }
             ]
         }
@@ -183,7 +190,16 @@ class OdlMountService:
                             headers={"Accept": "application/yang-data+json"}
                         )
                         await self.odl_client.send(stale_spec)
-                        await asyncio.sleep(1)  # ให้ ODL cleanup
+                        # Increased from 1 → 5 seconds: ODL needs time to tear down
+                        # the NETCONF session and release the node from operational DS
+                        await asyncio.sleep(5)
+                        # Verify the stale node is actually gone before proceeding
+                        verify_status = await self.get_connection_status(device.node_id)
+                        if verify_status.get("mounted"):
+                            logger.warning(
+                                f"Stale node {device.node_id} still visible in ODL after DELETE. "
+                                "Proceeding with remount anyway — ODL may clean up asynchronously."
+                            )
                     except Exception as cleanup_err:
                         logger.warning(f"Failed to cleanup stale mount: {cleanup_err}")
             
@@ -288,7 +304,7 @@ class OdlMountService:
             if not device.node_id:
                 raise ValueError("node_id is required for unmounting")
             
-            # 2. Send unmount request to ODL (DELETE)
+            # 2. Send unmount request to ODL (DELETE from config datastore)
             node_path = f"{self.TOPOLOGY_PATH}/node={device.node_id}"
             
             spec = RequestSpec(
@@ -301,7 +317,20 @@ class OdlMountService:
             logger.info(f"Unmounting device {device.node_id} from ODL...")
             await self.odl_client.send(spec)
             
-            # 3. Update database (ใช้ device.id เพราะต้องเป็น UUID เสมอ)
+            # 3. Verify ODL actually removed the node from operational datastore
+            # ODL may take a few seconds to tear down the NETCONF session
+            await asyncio.sleep(3)
+            verify_status = await self.get_connection_status(device.node_id)
+            if verify_status.get("mounted"):
+                logger.warning(
+                    f"Node {device.node_id} still reported as mounted in ODL operational DS "
+                    "after DELETE. The NETCONF session may still be tearing down. "
+                    "DB will be updated to OFFLINE; ODL will clean up asynchronously."
+                )
+            else:
+                logger.info(f"Node {device.node_id} confirmed removed from ODL operational DS.")
+            
+            # 4. Update database (ใช้ device.id เพราะต้องเป็น UUID เสมอ)
             await prisma.devicenetwork.update(
                 where={"id": device.id},
                 data={
@@ -432,12 +461,88 @@ class OdlMountService:
             logger.error(f"Failed to sync status: {e}")
             raise
     
+    async def wait_until_connected(
+        self,
+        node_id: str,
+        max_wait_seconds: int = 120,
+        check_interval: int = 5,
+    ) -> Dict[str, Any]:
+        """
+        Poll ODL until the node reports 'connected' (or timeout/failure).
+
+        This is the ONLY safe gate before issuing any NETCONF RPC (get-config,
+        get-interface, etc.) against a mounted node.  Calling those RPCs while
+        ODL is still in the 'connecting' state forces it to queue the requests
+        internally; if too many queue up the NETCONF session is torn down and
+        the node becomes permanently stuck.
+
+        Args:
+            node_id: ODL node-id (e.g. "ASR02XE")
+            max_wait_seconds: How long to poll before giving up (default 120 s).
+                              Real Cisco ASR hardware typically needs 30–90 s to
+                              download and compile its full YANG schema set.
+            check_interval: Seconds between each status poll (default 5 s).
+
+        Returns:
+            {
+                "ready": True/False,
+                "connection_status": "connected" | "connecting" | "unable-to-connect" | "unknown",
+                "waited_seconds": int,
+                "message": str
+            }
+        """
+        elapsed = 0
+        while elapsed < max_wait_seconds:
+            status = await self.get_connection_status(node_id)
+            conn = status.get("connection_status", "unknown")
+
+            logger.info(
+                f"[wait_until_connected] {node_id}: status={conn}, "
+                f"elapsed={elapsed}s / {max_wait_seconds}s"
+            )
+
+            if conn == "connected":
+                return {
+                    "ready": True,
+                    "connection_status": conn,
+                    "waited_seconds": elapsed,
+                    "message": f"Device {node_id} is fully connected and ready.",
+                }
+
+            if conn == "unable-to-connect":
+                return {
+                    "ready": False,
+                    "connection_status": conn,
+                    "waited_seconds": elapsed,
+                    "message": (
+                        f"ODL reported 'unable-to-connect' for {node_id}. "
+                        "Check NETCONF credentials and device reachability."
+                    ),
+                }
+
+            # Still 'connecting' — wait and try again
+            await asyncio.sleep(check_interval)
+            elapsed += check_interval
+
+        # Timed out while still connecting
+        final = await self.get_connection_status(node_id)
+        return {
+            "ready": False,
+            "connection_status": final.get("connection_status", "unknown"),
+            "waited_seconds": elapsed,
+            "message": (
+                f"Timeout ({max_wait_seconds}s) waiting for {node_id} to become connected. "
+                "ODL may still be downloading YANG modules. "
+                "Call GET /status again in a few seconds or increase max_wait_seconds."
+            ),
+        }
+
     async def mount_and_wait(
         self, 
         node_id: str, 
         user_id: str,
-        max_wait_seconds: int = 30,
-        check_interval: int = 3
+        max_wait_seconds: int = 120,
+        check_interval: int = 5
     ) -> Dict[str, Any]:
         """
         Mount device และรอจนกว่าจะ connected (หรือ timeout)

@@ -2,7 +2,14 @@
 Interface Discovery Service
 ดึง interface list จาก device ผ่าน ODL แล้ว cache ไว้ใน memory
 Merge ข้อมูลจาก Config (native) + Operational (interfaces-oper) ให้ครบใน API เดียว
+
+Protection layers (จากนอกเข้าใน):
+  1. TTL Cache          — ถ้า cache ยังไม่หมดอายุ return ทันที ไม่ยิง ODL เลย
+  2. Request Coalescing — ถ้า fetch กำลังทำงานอยู่ request ใหม่ "รอ" แทนที่จะยิง ODL ซ้ำ
+  3. ODL Readiness Gate — ตรวจ connection_status ก่อนยิง RPC ทุกครั้ง
+  4. force_refresh Cooldown — จำกัดว่า force refresh ได้ไม่เกินทุก N วินาที
 """
+import asyncio
 import time
 from typing import Any, Dict, List, Optional
 from app.clients.odl_restconf_client import OdlRestconfClient
@@ -10,17 +17,32 @@ from app.builders.odl_paths import odl_mount_base
 from app.schemas.request_spec import RequestSpec
 from app.core.logging import logger
 
+# Lazy import to avoid circular dependency with odl_mount_service
+def _get_mount_service():
+    from app.services.odl_mount_service import OdlMountService
+    return OdlMountService()
 
-# ===== In-memory TTL Cache =====
+
+# ===== Module-level shared state (ใช้ร่วมกันทุก instance ใน process) =====
+
+# TTL Cache: { node_id: { "interfaces": [...], "fetched_at": float } }
 _cache: Dict[str, Dict[str, Any]] = {}
 DEFAULT_TTL_SECONDS = 300  # 5 minutes
+
+# In-flight locks: { node_id: asyncio.Lock }
+# ป้องกันไม่ให้มี ODL request ซ้ำพร้อมกันสำหรับ node เดียวกัน
+_in_flight: Dict[str, asyncio.Lock] = {}
+
+# force_refresh cooldown tracking: { node_id: last_force_refresh_timestamp }
+_last_force_refresh: Dict[str, float] = {}
+FORCE_REFRESH_COOLDOWN_SECONDS = 30  # force refresh ได้ไม่เกินทุก 30 วินาที
 
 
 class InterfaceDiscoveryService:
     """
     Discover and cache available interfaces on network devices.
     Merges config + operational data for a complete view.
-    
+
     Supports:
     - Cisco IOS-XE (native YANG model + interfaces-oper)
     - Huawei (future)
@@ -40,29 +62,84 @@ class InterfaceDiscoveryService:
     ) -> List[Dict[str, Any]]:
         """
         Get full interface list for a device (config + operational merged).
-        Returns cached data if available and not expired.
+
+        Protection layers (ทำงานตามลำดับ):
+          1. Cache check  — ถ้ายังไม่หมดอายุ return ทันที
+          2. Cooldown     — force_refresh ถูกจำกัดทุก 30 วินาที
+          3. Lock acquire — ถ้ามี fetch ค้างอยู่ให้รอผลนั้น (request coalescing)
+          4. Cache check อีกครั้ง — อาจมี fetch เสร็จระหว่างรอ lock
+          5. ODL gate    — ตรวจ connection_status ก่อนยิง RPC
+          6. Fetch & cache
         """
-        # Check cache
+        # ── Layer 1: Cache (fast path) ───────────────────────────────────────
         if not force_refresh:
             cached = self._get_cached(node_id)
             if cached is not None:
-                logger.info(f"InterfaceDiscovery: cache hit for {node_id}")
+                logger.info(f"InterfaceDiscovery: cache hit for '{node_id}'")
                 return cached
 
-        # Fetch from device
-        logger.info(f"InterfaceDiscovery: fetching interfaces from {node_id}")
+        # ── Layer 2: force_refresh cooldown ──────────────────────────────────
+        if force_refresh:
+            now = time.time()
+            last = _last_force_refresh.get(node_id, 0.0)
+            remaining = FORCE_REFRESH_COOLDOWN_SECONDS - (now - last)
+            if remaining > 0:
+                logger.warning(
+                    f"InterfaceDiscovery: force_refresh for '{node_id}' throttled. "
+                    f"Please wait {remaining:.0f}s before forcing a refresh."
+                )
+                # Return stale cache if available, otherwise proceed normally
+                stale = _cache.get(node_id)
+                if stale:
+                    logger.info(f"InterfaceDiscovery: returning stale cache for '{node_id}' due to cooldown")
+                    return stale["interfaces"]
+                # No cache at all — allow the fetch to proceed (cold start)
+                force_refresh = False
 
-        vendor_upper = str(vendor).upper()
-        if vendor_upper in ("HUAWEI_VRP", "HUAWEI"):
-            interfaces = await self._discover_huawei(node_id)
-        elif vendor_upper in ("CISCO_IOS_XE", "CISCO", "CISCO_IOS", "CISCO_NXOS", "CISCO_ASA", "CISCO_NEXUS", "CISCO_IOS_XR"):
-            interfaces = await self._discover_cisco(node_id)
-        else:
-            interfaces = await self._discover_cisco(node_id)
+        # ── Layer 3: Request coalescing via per-node asyncio.Lock ─────────────
+        # Only ONE coroutine may hold the lock per node_id.
+        # Any other coroutine that arrives while a fetch is in-progress will
+        # block here; when the lock is released it will hit Layer 4 (cache)
+        # and return without touching ODL at all.
+        if node_id not in _in_flight:
+            _in_flight[node_id] = asyncio.Lock()
+        lock = _in_flight[node_id]
 
-        # Cache result
-        self._set_cache(node_id, interfaces)
-        return interfaces
+        async with lock:
+            # ── Layer 4: Double-checked cache (after acquiring lock) ──────────
+            # The previous holder of the lock already fetched and cached the data.
+            if not force_refresh:
+                cached = self._get_cached(node_id)
+                if cached is not None:
+                    logger.info(
+                        f"InterfaceDiscovery: cache hit for '{node_id}' "
+                        "(after lock — coalesced with in-flight request)"
+                    )
+                    return cached
+
+            # ── Layer 5: ODL Readiness Gate ───────────────────────────────────
+            await self._assert_node_connected(node_id)
+
+            # ── Layer 6: Fetch ────────────────────────────────────────────────
+            logger.info(f"InterfaceDiscovery: fetching interfaces from '{node_id}'")
+
+            vendor_upper = str(vendor).upper()
+            if vendor_upper in ("HUAWEI_VRP", "HUAWEI"):
+                interfaces = await self._discover_huawei(node_id)
+            elif vendor_upper in (
+                "CISCO_IOS_XE", "CISCO", "CISCO_IOS",
+                "CISCO_NXOS", "CISCO_ASA", "CISCO_NEXUS", "CISCO_IOS_XR"
+            ):
+                interfaces = await self._discover_cisco(node_id)
+            else:
+                interfaces = await self._discover_cisco(node_id)
+
+            # Cache + update force_refresh timestamp
+            self._set_cache(node_id, interfaces)
+            if force_refresh:
+                _last_force_refresh[node_id] = time.time()
+
+            return interfaces
 
     async def get_interface_names(
         self,
@@ -83,6 +160,70 @@ class InterfaceDiscoveryService:
         """Clear all cached data"""
         _cache.clear()
         logger.info("InterfaceDiscovery: cleared all cache")
+
+    # ===== ODL Readiness Gate =====
+
+    async def _assert_node_connected(self, node_id: str) -> None:
+        """
+        Raise NodeNotReadyError if ODL has not finished mounting the node.
+
+        ODL connection states (operational datastore):
+          - 'connecting'        → NETCONF hello / YANG download in progress
+                                   DO NOT send any RPC — it stacks up and
+                                   causes session teardown
+          - 'connected'         → Safe to issue get-config / get-interfaces
+          - 'unable-to-connect' → Auth failure or unreachable host
+          - not mounted at all   → Must call /mount first
+        """
+        try:
+            mount_svc = _get_mount_service()
+            status = await mount_svc.get_connection_status(node_id)
+        except Exception as e:
+            # If we can't reach ODL at all, fail loudly
+            raise RuntimeError(
+                f"Cannot check ODL status for '{node_id}': {e}"
+            ) from e
+
+        conn = status.get("connection_status", "unknown")
+        mounted = status.get("mounted", False)
+
+        logger.info(
+            f"InterfaceDiscovery: ODL readiness check for '{node_id}' → "
+            f"mounted={mounted}, connection_status='{conn}'"
+        )
+
+        if not mounted:
+            raise ValueError(
+                f"Device '{node_id}' is not mounted in ODL. "
+                "Please call POST /devices/{node_id}/mount first."
+            )
+
+        if conn == "connecting":
+            raise ValueError(
+                f"Device '{node_id}' is still initializing in ODL "
+                f"(connection_status='connecting'). "
+                "ODL is currently downloading and compiling YANG modules. "
+                "This can take 30–120 seconds for Cisco ASR hardware. "
+                "Please wait and retry, or poll GET /devices/{node_id}/status "
+                "until connection_status becomes 'connected'."
+            )
+
+        if conn in ("unable-to-connect", "failed"):
+            raise ValueError(
+                f"ODL cannot connect to device '{node_id}' "
+                f"(connection_status='{conn}'). "
+                "Verify NETCONF credentials and device reachability, "
+                "then unmount and remount the device."
+            )
+
+        if conn != "connected":
+            # Unknown / unexpected status — refuse to continue
+            raise ValueError(
+                f"Device '{node_id}' has unexpected ODL status '{conn}'. "
+                "Cannot safely fetch interfaces. "
+                "Poll GET /devices/{node_id}/status for more details."
+            )
+        # conn == 'connected' — safe to proceed
 
     # ===== Cisco Discovery (Config + Oper merged) =====
 

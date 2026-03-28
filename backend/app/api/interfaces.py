@@ -13,12 +13,12 @@ Network Interfaces API
   GET    /interfaces/odl/{node_id}            → อ่านจาก DB by node_id (~5ms)
   GET    /interfaces/odl/{node_id}/sync       → ODL fetch → DB upsert → DB read-back
   GET    /interfaces/odl/{node_id}/names      → เฉพาะชื่อ interface (dropdown)
-  DELETE /interfaces/odl/{node_id}/cache      → ล้าง in-memory cache
 
 หมายเหตุ:
   - Interface data ต้องมาจาก device จริง (ผ่าน ODL sync) เท่านั้น
   - ไม่มี POST (create) / PUT (update) — ข้อมูลต้องตรงกับ device
-  - Frontend ควรใช้ /odl/{node_id} เป็น default
+  - /sync จะยิง ODL จริงทุกครั้ง (force_refresh=True) ไม่ใช้ cache
+  - Frontend ควรใช้ /odl/{node_id} เป็น default (อ่านจาก DB เร็ว)
     และเรียก /odl/{node_id}/sync เฉพาะตอน mount ใหม่ / push config / กด Refresh
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -172,7 +172,7 @@ async def delete_interface(
 
 
 # =====================================================================
-#  ODL Sync & Discovery Endpoints (no auth — used by automation/frontend)
+#  ODL Sync & Discovery Endpoints (requires auth — used by frontend)
 # =====================================================================
 
 @router.get(
@@ -187,6 +187,7 @@ async def delete_interface(
 async def get_interfaces_from_db(
     node_id: str,
     include_down: bool = Query(True, description="รวม interface ที่ status=DOWN ด้วย"),
+    current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """
     📦 Get interface list from Database (no ODL contact).
@@ -289,7 +290,7 @@ async def get_interfaces_from_db(
 )
 async def sync_interfaces(
     node_id: str,
-    force_refresh: bool = Query(False, description="Force refresh cache"),
+    current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """
     🔄 Synchronous interface sync: ODL → DB → read-back → return.
@@ -325,7 +326,7 @@ async def sync_interfaces(
         interfaces = await discovery_service.discover(
             node_id=device.node_id,
             vendor=vendor,
-            force_refresh=force_refresh,
+            force_refresh=True,  # sync = ยิง ODL จริงเสมอ
         )
 
         # ── Step 3: Upsert to DB (hard error if fails) ───────────────────
@@ -493,6 +494,7 @@ async def sync_interfaces(
 async def get_interface_names(
     node_id: str,
     force_refresh: bool = Query(False, description="Force refresh cache"),
+    current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """
     Get only interface names for dropdown.
@@ -537,20 +539,3 @@ async def get_interface_names(
         )
 
 
-@router.delete(
-    "/odl/{node_id}/cache",
-    summary="Invalidate interface cache",
-    description="ล้าง cache interface list ของ device",
-)
-async def invalidate_cache(node_id: str):
-    """Invalidate cached interfaces for a device"""
-    try:
-        discovery_service.invalidate(node_id)
-
-        return {
-            "success": True,
-            "message": f"Cache invalidated for {node_id}",
-        }
-    except Exception as e:
-        logger.error(f"Cache invalidation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))

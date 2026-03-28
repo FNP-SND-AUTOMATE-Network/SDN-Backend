@@ -251,12 +251,19 @@ class OdlMountService:
                 }
             )
             
+            is_connected = connection_status == "connected"
+            
             return {
-                "success": True,
-                "message": f"Device {device.node_id} mounted successfully",
+                "success": is_connected,
+                "message": (
+                    f"Device {device.node_id} mounted and connected"
+                    if is_connected
+                    else f"Device {device.node_id} mount request sent but status is '{connection_status}'"
+                ),
                 "node_id": device.node_id,
                 "connection_status": connection_status,
-                "device_status": device_status
+                "device_status": device_status,
+                "ready_for_intent": is_connected,
             }
             
         except Exception as e:

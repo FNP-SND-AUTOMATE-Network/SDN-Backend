@@ -172,13 +172,14 @@ class ZabbixClient:
 
     async def get_items(
         self,
-        host_id: str,
+        host_id: Optional[str] = None,
+        host_ids: Optional[List[str]] = None,
         search_key: Optional[str] = None,
         item_type: Optional[int] = None,
         limit: int = 500,
     ) -> List[Dict[str, Any]]:
         """
-        Fetch items for a host.
+        Fetch items for a host or list of hosts.
 
         item_type values:
             0 = Zabbix agent
@@ -192,13 +193,17 @@ class ZabbixClient:
             "output": [
                 "itemid", "name", "key_", "type", "value_type",
                 "lastvalue", "lastclock", "units", "description",
-                "status", "state", "error",
+                "status", "state", "error", "hostid"
             ],
-            "hostids": [host_id],
             "sortfield": "name",
             "limit": limit,
             "filter": {"status": "0"},  # Only enabled items
         }
+
+        if host_ids:
+            params["hostids"] = host_ids
+        elif host_id:
+            params["hostids"] = [host_id]
 
         if search_key:
             params["search"] = {"key_": search_key}
@@ -207,13 +212,13 @@ class ZabbixClient:
 
         return await self._call("item.get", params)
 
-    async def get_snmp_items(self, host_id: str) -> List[Dict[str, Any]]:
+    async def get_snmp_items(self, host_id: Optional[str] = None, host_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """Get only SNMP agent items (type=20 for SNMPv1/v2/v3 agent)."""
         # Type 20 = SNMP agent ใน Zabbix 6.0+
         # Type 4 = SNMP agent ใน Zabbix < 6.0
         # ดึงทั้ง type 4 และ 20 เพื่อ compatibility
-        items_v2 = await self.get_items(host_id, item_type=4)
-        items_v3 = await self.get_items(host_id, item_type=20)
+        items_v2 = await self.get_items(host_id=host_id, host_ids=host_ids, item_type=4)
+        items_v3 = await self.get_items(host_id=host_id, host_ids=host_ids, item_type=20)
         return items_v2 + items_v3
 
     # ── History ──────────────────────────────────────────────────

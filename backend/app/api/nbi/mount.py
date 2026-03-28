@@ -47,27 +47,55 @@ async def mount_device(
         else:
             result = await odl_mount_service.mount_device(node_id, user_id=user_id)
         
-        # Determine response code
-        if result.get("success"):
-            code = ErrorCode.SUCCESS
-        elif result.get("already_mounted"):
-            code = ErrorCode.DEVICE_ALREADY_MOUNTED
-        else:
-            code = ErrorCode.ODL_MOUNT_FAILED
+        # Determine response based on result
+        is_success = result.get("success", False)
+        already_mounted = result.get("already_mounted", False)
         
-        return MountResponse(
-            success=result.get("success", False),
-            code=code.value,
-            message=result.get("message", ""),
-            node_id=result.get("node_id"),
-            connection_status=result.get("connection_status"),
-            device_status=result.get("device_status"),
-            ready_for_intent=result.get("ready_for_intent", False),
-            data={
-                "wait_time_seconds": result.get("wait_time_seconds"),
-                "node_id": node_id
-            }
-        )
+        if is_success:
+            # ✅ Device mounted AND connected → 200 OK
+            return MountResponse(
+                success=True,
+                code=ErrorCode.SUCCESS.value,
+                message=result.get("message", ""),
+                node_id=result.get("node_id"),
+                connection_status=result.get("connection_status"),
+                device_status=result.get("device_status"),
+                ready_for_intent=result.get("ready_for_intent", False),
+                data={
+                    "wait_time_seconds": result.get("wait_time_seconds"),
+                    "node_id": node_id
+                }
+            )
+        elif already_mounted:
+            # Device already mounted and connected → 200 OK (idempotent)
+            return MountResponse(
+                success=True,
+                code=ErrorCode.DEVICE_ALREADY_MOUNTED.value,
+                message=result.get("message", ""),
+                node_id=result.get("node_id"),
+                connection_status=result.get("connection_status"),
+                device_status=result.get("device_status"),
+                ready_for_intent=True,
+                data={"node_id": node_id}
+            )
+        else:
+            # ❌ Mount sent but NOT connected → non-200
+            connection_status = result.get("connection_status", "unknown")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "code": ErrorCode.ODL_MOUNT_FAILED.value,
+                    "message": result.get("message", f"Mount failed: device status is '{connection_status}'"),
+                    "node_id": node_id,
+                    "connection_status": connection_status,
+                    "device_status": result.get("device_status"),
+                    "suggestion": (
+                        "Device may still be connecting. "
+                        "Use GET /api/v1/nbi/devices/{node_id}/status to check, "
+                        "or retry with wait_for_connection=true"
+                    )
+                }
+            )
         
     except ValueError as e:
         error_msg = str(e)

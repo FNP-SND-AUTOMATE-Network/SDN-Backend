@@ -77,7 +77,25 @@ async def get_dashboard_overview():
         raise HTTPException(status_code=502, detail=f"Zabbix API error: {e.message}")
 
 
+@router.get("/top-metrics")
+async def get_dashboard_top_metrics(
+    limit: int = Query(5, description="Number of top items to return", ge=1, le=20)
+):
+    """
+    ดึงข้อมูล Top N แบบเรียลไทม์ (ใช้งานหนาแน่นที่สุด) สำหรับหน้า Dashboard
+    ประกอบด้วย:
+    - top_bandwidth (Interface traffic In/Out)
+    - top_cpu (Device CPU utilization)
+    - top_memory (Device RAM utilization)
+    - top_uptime (Recently rebooted devices)
+    """
+    try:
+        return await zabbix_monitoring_service.get_top_metrics(limit=limit)
+    except ZabbixAPIError as e:
+        raise HTTPException(status_code=502, detail=f"Zabbix API error: {e.message}")
+
 # ── Hosts ────────────────────────────────────────────────────────
+
 
 @router.get("/hosts")
 async def get_hosts(

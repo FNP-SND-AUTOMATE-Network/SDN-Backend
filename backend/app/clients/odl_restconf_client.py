@@ -77,9 +77,12 @@ class OdlRestconfClient:
                             return {"raw": resp.text}
                     return {"ok": True}
 
+                from app.utils.odl_error_parser import parse_odl_error
+                friendly_message = parse_odl_error(resp.status_code, resp.text)
+
                 raise OdlRequestError(
                     status_code=resp.status_code,
-                    message="ODL RESTCONF request failed",
+                    message=friendly_message,
                     details={"url": url, "status": resp.status_code, "body": resp.text}
                 )
 

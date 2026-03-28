@@ -498,5 +498,134 @@ class ZabbixMonitoringService:
         return result
 
 
+    # ── Top Metrics Dashboard ──────────────────────────────────────
+
+    async def get_top_metrics(self, limit: int = 5) -> Dict[str, Any]:
+        """
+        วิเคราะห์และดึงค่า Top N (Bandwidth, CPU, Memory, Uptime)
+        """
+        cache_key = f"top_metrics:{limit}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        # 1. Get all active hosts
+        hosts = await self.get_all_hosts()
+        active_hosts = [h for h in hosts if h["status"] == "enabled"]
+        host_ids = [h["hostid"] for h in active_hosts]
+        host_map = {h["hostid"]: h["hostname"] for h in active_hosts}
+
+        if not host_ids:
+            return {"top_cpu": [], "top_memory": [], "top_bandwidth": [], "top_uptime": []}
+
+        # 2. Fetch all SNMP items for these hosts
+        # Type 20 = Zabbix 6.0+, Type 4 = older
+        items_v2 = await zabbix_client.get_items(host_ids=host_ids, item_type=4, limit=0)
+        items_v3 = await zabbix_client.get_items(host_ids=host_ids, item_type=20, limit=0)
+        all_items = items_v2 + items_v3
+
+        top_cpu = []
+        top_memory = []
+        top_traffic = []
+        top_uptime = []
+
+        for item in all_items:
+            hostid = item.get("hostid")
+            if not hostid:
+                continue
+            
+            hostname = host_map.get(str(hostid), f"Host {hostid}")
+            key = item.get("key_", "").lower()
+            name = item.get("name", "").lower()
+            lastvalue = item.get("lastvalue", "0")
+            
+            try:
+                val = float(lastvalue) if lastvalue else 0.0
+            except ValueError:
+                val = 0.0
+
+            if val <= 0:
+                continue
+
+            # CPU filter (looks for 'cpu' or 'processor' and expects percentage)
+            if any(k in key or k in name for k in ["cpu", "processor", "load"]) and "%" in item.get("units", "%"):
+                # Avoid dupes per host, or just collect all? Let's collect all and we can deduplicate later if needed.
+                # Usually we want the *highest* CPU core or average.
+                top_cpu.append({"host": hostname, "name": item.get("name"), "value": round(val, 2), "unit": "%"})
+                    
+            # Memory filter
+            elif any(k in key or k in name for k in ["memory utilization", "mem util", "pused"]):
+                unit = item.get("units", "%")
+                top_memory.append({"host": hostname, "name": item.get("name"), "value": round(val, 2), "unit": unit})
+
+            # Traffic filter (convert bits or octets)
+            elif any(k in key for k in ["ifinoctets", "ifoutoctets", "net.if.in", "net.if.out"]):
+                if "octets" in key or "octets" in name:
+                    # Octets = bytes -> bps
+                    mbps = (val * 8) / 1_000_000
+                else:
+                    # Often bits directly if it's zabbix agent, but we are querying SNMP which is octets.
+                    # ifHCInOctets, ifInOctets. Assume octets (bytes) -> bps.
+                    mbps = (val * 8) / 1_000_000
+
+                if mbps > 0.01:  # Only significant traffic
+                    direction = "Inbound" if "in" in key.lower() else "Outbound"
+                    # clean up interface name
+                    interface_name = item.get("name").replace("Bits received", "").replace("Bits sent", "").replace("Interface", "").strip()
+                    top_traffic.append({
+                        "host": hostname, 
+                        "interface": interface_name, 
+                        "direction": direction,
+                        "value": round(mbps, 2), 
+                        "unit": "Mbps"
+                    })
+
+            # Uptime filter
+            elif any(k in key or k in name for k in ["sysuptime", "uptime"]):
+                if "sysuptime" in key or "sysuptime" in name.lower():
+                    # Check if units is timeticks
+                    if item.get("units") == "uptime":
+                        # Zabbix uptime value is natively in seconds actually, or timeticks.
+                        # Usually sysUpTime is in hundredths of a second (Timeticks)
+                        days = round(val / 8640000, 1)
+                    else:
+                        days = round(val / 8640000, 1)
+                else:
+                    days = round(val / 86400, 1) # assuming seconds
+                
+                # Deduplicate uptime (hosts might have multiple, only keep one)
+                if not any(u["host"] == hostname for u in top_uptime):
+                    top_uptime.append({"host": hostname, "name": item.get("name"), "value": days, "unit": "Days"})
+
+        # Group bandwidth by interface (IN + OUT)?? For simplicity, Top Traffic can just be top ports regardless of direction, or max of in/out.
+        # Let's just sort and take top limit.
+        top_traffic = sorted(top_traffic, key=lambda x: x["value"], reverse=True)[:limit]
+        
+        # Deduplicate CPU & Memory (take highest per host)
+        top_cpu_dedup = []
+        for c in sorted(top_cpu, key=lambda x: x["value"], reverse=True):
+            if not any(x["host"] == c["host"] for x in top_cpu_dedup):
+                top_cpu_dedup.append(c)
+                if len(top_cpu_dedup) >= limit: break
+
+        top_mem_dedup = []
+        for m in sorted(top_memory, key=lambda x: x["value"], reverse=True):
+            if not any(x["host"] == m["host"] for x in top_mem_dedup):
+                top_mem_dedup.append(m)
+                if len(top_mem_dedup) >= limit: break
+
+        top_uptime = sorted(top_uptime, key=lambda x: x["value"])[:limit] # Lowest uptime first (recently rebooted)
+
+        result = {
+            "top_cpu": top_cpu_dedup,
+            "top_memory": top_mem_dedup,
+            "top_bandwidth": top_traffic,
+            "top_uptime": top_uptime,
+        }
+        
+        self._cache_set(cache_key, result, ttl_seconds=30)
+        return result
+
+
 # ── Singleton ────────────────────────────────────────────────────
 zabbix_monitoring_service = ZabbixMonitoringService()

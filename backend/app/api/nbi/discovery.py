@@ -100,10 +100,12 @@ async def get_interfaces_from_db(
                 "subnet_mask": intf.subnet_mask,
                 "mac_address": intf.mac_address,
                 "tp_id": intf.tp_id,
-                # Oper fields not stored in DB — use /discover for live data
+                # Synced from ODL during last discover (not real-time)
+                "speed": intf.speed,          # Mbps เช่น 1000, 10000
+                "duplex": intf.duplex,         # "full" | "half" | "auto"
+                "mtu": intf.mtu,               # bytes เช่น 1500
+                # Real-time only — always None here, use /discover for live value
                 "oper_status": None,
-                "speed": None,
-                "duplex": None,
             })
 
         return {
@@ -211,6 +213,20 @@ async def discover_interfaces(
                 port_num_str = intf.get("number")
                 port_number = int(port_num_str) if port_num_str and str(port_num_str).isdigit() else None
 
+                # Parse speed (convert to int Mbps if possible)
+                raw_speed = intf.get("speed")
+                speed_mbps = None
+                if raw_speed is not None:
+                    try:
+                        speed_int = int(raw_speed)
+                        # ODL รายงานเป็น bps → แปลงเป็น Mbps
+                        speed_mbps = speed_int // 1_000_000 if speed_int > 1_000_000 else speed_int
+                    except (ValueError, TypeError):
+                        pass
+
+                raw_mtu = intf.get("mtu")
+                mtu_val = int(raw_mtu) if raw_mtu is not None else None
+
                 rows_to_upsert.append({
                     "device_id": db_device_id,
                     "name": intf_name,
@@ -222,6 +238,9 @@ async def discover_interfaces(
                     "mac_address": intf.get("mac_address"),
                     "port_number": port_number,
                     "type": intf_type,
+                    "speed": speed_mbps,
+                    "duplex": intf.get("duplex"),
+                    "mtu": mtu_val,
                 })
 
             if rows_to_upsert:
@@ -248,6 +267,9 @@ async def discover_interfaces(
                             "mac_address": row["mac_address"],
                             "port_number": row["port_number"],
                             "type": row["type"],
+                            "speed": row["speed"],
+                            "duplex": row["duplex"],
+                            "mtu": row["mtu"],
                         },
                     )
 

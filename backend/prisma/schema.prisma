@@ -287,6 +287,11 @@ model Interface {
   port_number BigInt? // หมายเลขพอร์ตที่ใช้เขียน rule (เช่น 1, 2, 3 หรือค่าใหญ่ๆ เช่น 4294967294)
   mac_address String? // MAC address ของ Interface (ถ้าจำเป็น)
 
+  // ODL Operational Fields (synced จาก discover — ไม่ real-time แต่ใกล้เคียง)
+  speed       Int?    // ความเร็ว Mbps (เช่น 1000, 10000) — จาก ietf-interfaces oper
+  duplex      String? // "full" | "half" | "auto" — จาก Cisco native YANG
+  mtu         Int?    // MTU bytes (เช่น 1500) — จาก ietf-interfaces
+
   // phpIPAM Integration
   phpipam_address_id String? // phpIPAM address ID
   ip_address         String? // Cached IP from phpIPAM

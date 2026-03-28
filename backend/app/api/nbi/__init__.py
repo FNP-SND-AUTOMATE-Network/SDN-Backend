@@ -8,6 +8,15 @@ Flow:
 3. Check/Sync Connection Status
 4. ใช้งาน Intent API
 
+Swagger Tags:
+- NBI — Health Check
+- NBI — Devices          : Device listing, detail, capabilities
+- NBI — Mount            : Mount / Unmount / Wait-ready / Force-remount
+- NBI — ODL Sync         : ODL node listing, device status sync
+- NBI — Intents          : Intent execution & discovery
+- NBI — Topology         : Topology sync & query
+- NBI — OpenFlow Flows   : Flow rule CRUD, templates, sync
+
 Error Codes สำหรับ Frontend:
 - 200: Success
 - 400: Bad Request (ข้อมูลไม่ครบ/ไม่ถูกต้อง)
@@ -19,16 +28,6 @@ Error Codes สำหรับ Frontend:
 - 502: Bad Gateway (ODL connection failed)
 - 503: Service Unavailable (ODL not available)
 - 504: Gateway Timeout (ODL timeout)
-
-Structure:
-- models.py     - Error codes, Request/Response models
-- helpers.py    - Helper functions
-- intents.py    - Intent execution endpoints
-- devices.py    - Device listing/detail endpoints
-- odl.py        - ODL sync endpoints
-- mount.py      - Mount/Unmount endpoints
-- health.py     - Health check endpoint
-- flows.py      - OpenFlow flow management endpoints
 """
 from fastapi import APIRouter
 
@@ -38,7 +37,7 @@ from .devices import router as devices_router
 from .odl import router as odl_router
 from .mount import router as mount_router
 from .health import router as health_router
-from .discovery import router as discovery_router
+# discovery.py ถูกย้ายไป /interfaces/ แล้ว — ดู app/api/interfaces.py
 from .topology import router as topology_router
 from .flows import router as flows_router
 
@@ -57,15 +56,16 @@ from .models import (
 
 from .helpers import create_error_response, create_success_response
 
-# Create main router
-router = APIRouter(prefix="/api/v1/nbi", tags=["NBI"])
+# Create main router (no default tag — each sub-router has its own)
+router = APIRouter(prefix="/api/v1/nbi")
 
-# Include all sub-routers
-router.include_router(intents_router)
-router.include_router(devices_router)
-router.include_router(odl_router)
-router.include_router(mount_router)
-router.include_router(health_router)
-router.include_router(discovery_router)
-router.include_router(topology_router)
-router.include_router(flows_router)
+# Include all sub-routers with dedicated Swagger tags
+router.include_router(health_router,    tags=["NBI — Health Check"])
+router.include_router(devices_router,   tags=["NBI — Devices"])
+router.include_router(mount_router,     tags=["NBI — Mount"])
+router.include_router(odl_router,       tags=["NBI — ODL Sync"])
+router.include_router(intents_router,   tags=["NBI — Intents"])
+router.include_router(topology_router,  tags=["NBI — Topology"])
+router.include_router(flows_router,     tags=["NBI — OpenFlow Flows"])
+# discovery_router ถูกย้ายไป /interfaces/ แล้ว
+

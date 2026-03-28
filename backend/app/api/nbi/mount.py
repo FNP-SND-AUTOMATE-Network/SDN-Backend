@@ -285,7 +285,7 @@ async def wait_for_device_ready(
           ↓
     GET  /wait-ready  → polls every {check_interval}s
           ↓  (when connected)
-    GET  /interfaces/discover  → safe to call
+    GET  /interfaces/sync     → safe to call
     ```
 
     ### Response codes

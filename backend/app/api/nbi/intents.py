@@ -4,7 +4,7 @@ Intent execution and discovery endpoints
 """
 import asyncio
 from fastapi import APIRouter, HTTPException, status
-from app.schemas.intent import IntentRequest, IntentResponse
+from app.schemas.intent import IntentRequest, IntentResponse, IntentBulkRequest, IntentBulkResponse
 from app.services.intent_service import IntentService
 from app.core.intent_registry import IntentRegistry
 from app.core.logging import logger
@@ -166,3 +166,85 @@ async def get_intent_info(intent_name: str):
             "is_read_only": intent.is_read_only,
         }
     }
+
+
+@router.post(
+    "/intents/bulk",
+    response_model=IntentBulkResponse,
+    summary="Bulk execute intents (Fail-Fast)",
+    description=(
+        "Execute multiple intents sequentially on one or more devices.\n\n"
+        "**Fail-Fast Behavior:** If any intent fails, all subsequent intents "
+        "in the queue are immediately cancelled and marked as `CANCELLED`.\n\n"
+        "Returns `200` if all intents succeed, `207 Multi-Status` if there are partial failures."
+    ),
+)
+async def handle_bulk_intent(req: IntentBulkRequest):
+    """
+    Bulk Intent Execution (Draft & Push)
+
+    **Use Case:** Frontend collects multiple configuration drafts
+    (e.g., set hostname + set interface IP + add static route) and
+    submits them in a single request.
+
+    **Example Request:**
+    ```json
+    {
+        "intents": [
+            {
+                "intent": "system.set_hostname",
+                "node_id": "CSR1000vT",
+                "params": { "hostname": "CORE-RTR-01" }
+            },
+            {
+                "intent": "interface.set_ipv4",
+                "node_id": "CSR1000vT",
+                "params": { "interface": "GigabitEthernet2", "ip": "10.0.0.1", "mask": "255.255.255.0" }
+            },
+            {
+                "intent": "routing.static_route.add",
+                "node_id": "CSR1000vT",
+                "params": { "prefix": "192.168.1.0", "mask": "255.255.255.0", "next_hop": "10.0.0.2" }
+            }
+        ]
+    }
+    ```
+
+    **Example Response (partial failure at index 1):**
+    ```json
+    {
+        "success": false,
+        "total": 3,
+        "succeeded": 1,
+        "failed": 1,
+        "cancelled": 1,
+        "results": [
+            { "index": 0, "status": "SUCCESS", "intent": "system.set_hostname", ... },
+            { "index": 1, "status": "FAILED",  "intent": "interface.set_ipv4", "error": "..." },
+            { "index": 2, "status": "CANCELLED", "intent": "routing.static_route.add", "error": "Cancelled due to previous failure" }
+        ]
+    }
+    ```
+    """
+    try:
+        result = await intent_service.handle_bulk(req)
+
+        # Return 207 Multi-Status if there are partial failures
+        if not result.success:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=207,
+                content=result.model_dump()
+            )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Bulk intent execution failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": ErrorCode.ODL_REQUEST_FAILED.value,
+                "message": f"Bulk intent execution failed: {str(e)}"
+            }
+        )

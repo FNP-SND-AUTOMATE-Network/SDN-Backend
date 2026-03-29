@@ -26,7 +26,11 @@ Flow:
 import asyncio
 import ipaddress
 from typing import Dict, Any, Optional
-from app.schemas.intent import IntentRequest, IntentResponse
+from app.schemas.intent import (
+    IntentRequest, IntentResponse,
+    IntentBulkRequest, IntentBulkResponse,
+    BulkIntentItemResult, BulkIntentStatus
+)
 from app.services.device_profile_service_db import DeviceProfileService
 from app.services.driver_factory import DriverFactory
 from app.clients.odl_restconf_client import OdlRestconfClient
@@ -664,3 +668,85 @@ class IntentService:
     def get_supported_intents(self) -> Dict[str, Any]:
         """Get list of all supported intents (for API discovery)"""
         return IntentRegistry.get_supported_intents()
+
+    async def handle_bulk(self, req: IntentBulkRequest) -> IntentBulkResponse:
+        """
+        Handle bulk intent request using Fail-Fast pattern.
+        
+        Iterates through intents sequentially. On first failure:
+        - Records the failed intent
+        - Marks ALL remaining intents as CANCELLED
+        - Returns immediately with partial results
+        
+        This prevents pushing inconsistent configurations to the device.
+        """
+        results: list[BulkIntentItemResult] = []
+        succeeded = 0
+        failed = 0
+        cancelled = 0
+        abort = False
+
+        for idx, intent_req in enumerate(req.intents):
+            if abort:
+                # Mark remaining intents as CANCELLED
+                results.append(BulkIntentItemResult(
+                    index=idx,
+                    status=BulkIntentStatus.CANCELLED,
+                    intent=intent_req.intent,
+                    node_id=intent_req.node_id,
+                    error="Cancelled due to previous failure (Fail-Fast)"
+                ))
+                cancelled += 1
+                continue
+
+            try:
+                # Execute via the existing single-intent handler
+                response = await self.handle(intent_req)
+
+                results.append(BulkIntentItemResult(
+                    index=idx,
+                    status=BulkIntentStatus.SUCCESS,
+                    intent=intent_req.intent,
+                    node_id=intent_req.node_id,
+                    driver_used=response.driver_used,
+                    result=response.result
+                ))
+                succeeded += 1
+
+            except Exception as e:
+                # Record the failure and activate Fail-Fast abort
+                error_msg = str(e)
+                # Extract detail from HTTPException if available
+                detail = getattr(e, 'detail', None)
+                if detail and isinstance(detail, dict):
+                    error_msg = detail.get('message', error_msg)
+
+                results.append(BulkIntentItemResult(
+                    index=idx,
+                    status=BulkIntentStatus.FAILED,
+                    intent=intent_req.intent,
+                    node_id=intent_req.node_id,
+                    error=error_msg
+                ))
+                failed += 1
+                abort = True  # Trigger Fail-Fast
+
+                logger.warning(
+                    f"[BulkIntent] Fail-Fast triggered at index {idx}: "
+                    f"intent={intent_req.intent}, node={intent_req.node_id}, error={error_msg}"
+                )
+
+        all_success = failed == 0
+        logger.info(
+            f"[BulkIntent] Completed: {succeeded} succeeded, {failed} failed, "
+            f"{cancelled} cancelled out of {len(req.intents)} total"
+        )
+
+        return IntentBulkResponse(
+            success=all_success,
+            total=len(req.intents),
+            succeeded=succeeded,
+            failed=failed,
+            cancelled=cancelled,
+            results=results
+        )

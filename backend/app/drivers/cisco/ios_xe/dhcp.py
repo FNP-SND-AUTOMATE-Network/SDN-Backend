@@ -37,6 +37,8 @@ class CiscoDhcpDriver(BaseDriver):
         Intents.DHCP.DELETE_POOL,
         Intents.DHCP.DELETE_ALL,
         Intents.DHCP.UPDATE_POOL,
+        Intents.DHCP.ADD_EXCLUDED_ADDRESS,
+        Intents.DHCP.DELETE_EXCLUDED_ADDRESS,
         Intents.SHOW.DHCP_POOLS,
     }
 
@@ -54,6 +56,12 @@ class CiscoDhcpDriver(BaseDriver):
 
         if intent == Intents.DHCP.UPDATE_POOL:
             return self._build_dhcp_create_pool(mount, params)
+
+        if intent == Intents.DHCP.ADD_EXCLUDED_ADDRESS:
+            return self._build_dhcp_add_excluded_address(mount, params)
+            
+        if intent == Intents.DHCP.DELETE_EXCLUDED_ADDRESS:
+            return self._build_dhcp_delete_excluded_address(mount, params)
 
         if intent == Intents.SHOW.DHCP_POOLS:
             return self._build_show_dhcp_pools(mount)
@@ -76,13 +84,46 @@ class CiscoDhcpDriver(BaseDriver):
         pool_name = params.get("pool_name")
         network = params.get("network")
         mask = params.get("mask")
-        default_router = params.get("default_router")
+        default_router = params.get("default_router") or params.get("gateway")
         dns_servers = params.get("dns_servers", [])
         excluded_addresses = params.get("excluded_addresses", [])
+        
+        # Support Unified Interface (Huawei-style)
+        start_ip = params.get("start_ip")
+        end_ip = params.get("end_ip")
+        
+        if not network and default_router and mask:
+            import ipaddress
+            try:
+                # Calculate network from gateway and mask
+                net = ipaddress.IPv4Network(f"{default_router}/{mask}", strict=False)
+                network = str(net.network_address)
+                
+                # Auto-calculate excluded address range if start_ip and end_ip are provided
+                if start_ip and end_ip and not excluded_addresses:
+                    start_ip_obj = ipaddress.IPv4Address(start_ip)
+                    end_ip_obj = ipaddress.IPv4Address(end_ip)
+                    
+                    usable_first = net.network_address + 1
+                    usable_last = net.broadcast_address - 1
+                    
+                    if start_ip_obj > usable_first:
+                        excluded_addresses.append({
+                            "low": str(usable_first),
+                            "high": str(start_ip_obj - 1)
+                        })
+                    
+                    if end_ip_obj < usable_last:
+                        excluded_addresses.append({
+                            "low": str(end_ip_obj + 1),
+                            "high": str(usable_last)
+                        })
+            except Exception:
+                pass
 
         if not pool_name or not network or not mask or not default_router:
             raise DriverBuildError(
-                "params require pool_name, network, mask, default_router"
+                "params require pool_name, network, mask, default_router (or unified gateway/start_ip/end_ip)"
             )
 
         # ── Build pool entry ──
@@ -164,6 +205,62 @@ class CiscoDhcpDriver(BaseDriver):
             driver=self.name,
         )
 
+    # ─── ADD EXCLUDED ADDRESS ─────────────────────────────────────────
+    def _build_dhcp_add_excluded_address(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """Add a global excluded address range"""
+        low = params.get("low_address")
+        high = params.get("high_address")
+        
+        if not low or not high:
+             raise DriverBuildError("params require low_address, high_address")
+
+        payload = {
+            "Cisco-IOS-XE-native:dhcp": {
+                "Cisco-IOS-XE-dhcp:excluded-address": {
+                    "low-high-address-list": [
+                        {
+                            "low-address": low,
+                            "high-address": high
+                        }
+                    ]
+                }
+            }
+        }
+        
+        path = f"{mount}/Cisco-IOS-XE-native:native/ip/dhcp"
+        
+        return RequestSpec(
+            method="PATCH",
+            datastore="config",
+            path=path,
+            payload=payload,
+            headers={"content-type": "application/yang-data+json"},
+            intent=Intents.DHCP.ADD_EXCLUDED_ADDRESS,
+            driver=self.name,
+        )
+
+    # ─── DELETE EXCLUDED ADDRESS ──────────────────────────────────────
+    def _build_dhcp_delete_excluded_address(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """Delete a global excluded address range"""
+        low = params.get("low_address")
+        high = params.get("high_address")
+        
+        if not low or not high:
+             raise DriverBuildError("params require low_address, high_address")
+
+        # Need fully qualified path with keys string
+        path = f"{mount}/Cisco-IOS-XE-native:native/ip/dhcp/Cisco-IOS-XE-dhcp:excluded-address/low-high-address-list={low},{high}"
+        
+        return RequestSpec(
+            method="DELETE",
+            datastore="config",
+            path=path,
+            payload=None,
+            headers={"content-type": "application/yang-data+json"},
+            intent=Intents.DHCP.DELETE_EXCLUDED_ADDRESS,
+            driver=self.name,
+        )
+
     # ─── DELETE ALL DHCP ─────────────────────────────────────────────
     def _build_dhcp_delete_all(self, mount: str) -> RequestSpec:
         """Delete all DHCP configuration (pool + excluded-address)"""
@@ -186,7 +283,7 @@ class CiscoDhcpDriver(BaseDriver):
 
         return RequestSpec(
             method="GET",
-            datastore="operational",
+            datastore="config",
             path=path,
             payload=None,
             headers={"accept": "application/yang-data+json"},

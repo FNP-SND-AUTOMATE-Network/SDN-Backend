@@ -477,7 +477,7 @@ class DeviceManager:
         },
         "dhcp": {
             "cisco":  [],
-            "huawei": ["huawei-dhcps"],
+            "huawei": ["huawei-ip-pool"],
         },
         "show": {
             "cisco":  ["Cisco-IOS-XE-native"],

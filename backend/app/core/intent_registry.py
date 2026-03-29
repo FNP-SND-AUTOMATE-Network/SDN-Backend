@@ -29,6 +29,7 @@ class IntentDefinition:
     optional_params: List[str] = field(default_factory=list)  # params ทางเลือก
     is_read_only: bool = False          # True = GET operation (ไม่เปลี่ยน config)
     needs_normalization: bool = True    # True = ต้อง normalize response (Default True for Unified JSON)
+    vendor_params: Dict[str, Dict[str, List[str]]] = field(default_factory=dict) # vendor specific overrides
 
 
 class IntentRegistry:
@@ -334,6 +335,16 @@ class IntentRegistry:
         description="Create DHCP pool",
         required_params=["pool_name", "gateway", "mask", "start_ip", "end_ip"],
         optional_params=["dns_servers", "lease_days"],
+        vendor_params={
+            "cisco": {
+                "required_params": ["pool_name", "network", "mask", "default_router"],
+                "optional_params": ["dns_servers", "excluded_addresses"]
+            },
+            "huawei": {
+                "required_params": ["pool_name", "gateway", "mask", "start_ip", "end_ip"],
+                "optional_params": ["dns_servers", "lease_days"]
+            }
+        }
     )
     
     DHCP_DELETE_POOL = IntentDefinition(
@@ -349,6 +360,16 @@ class IntentRegistry:
         description="Update DHCP pool",
         required_params=["pool_name"],
         optional_params=["gateway", "mask", "start_ip", "end_ip", "dns_servers"],
+        vendor_params={
+            "cisco": {
+                "required_params": ["pool_name"],
+                "optional_params": ["network", "mask", "default_router", "dns_servers", "excluded_addresses"]
+            },
+            "huawei": {
+                "required_params": ["pool_name"],
+                "optional_params": ["gateway", "mask", "start_ip", "end_ip", "dns_servers", "lease_days"]
+            }
+        }
     )
     
     DHCP_DELETE_ALL = IntentDefinition(
@@ -356,6 +377,20 @@ class IntentRegistry:
         category=IntentCategory.DHCP,
         description="Delete all DHCP configuration (pools + excluded-address)",
         required_params=[],
+    )
+    
+    DHCP_ADD_EXCLUDED_ADDRESS = IntentDefinition(
+        name="dhcp.add_excluded_address",
+        category=IntentCategory.DHCP,
+        description="Add a global DHCP excluded address range",
+        required_params=["low_address", "high_address"],
+    )
+
+    DHCP_DELETE_EXCLUDED_ADDRESS = IntentDefinition(
+        name="dhcp.delete_excluded_address",
+        category=IntentCategory.DHCP,
+        description="Delete a global DHCP excluded address range",
+        required_params=["low_address", "high_address"],
     )
     
     SHOW_DHCP_POOLS = IntentDefinition(
@@ -519,6 +554,8 @@ class Intents:
         DELETE_POOL = "dhcp.delete_pool"
         DELETE_ALL = "dhcp.delete_all"
         UPDATE_POOL = "dhcp.update_pool"
+        ADD_EXCLUDED_ADDRESS = "dhcp.add_excluded_address"
+        DELETE_EXCLUDED_ADDRESS = "dhcp.delete_excluded_address"
 
     class FLOW:
         ADD = "flow.add"

@@ -121,6 +121,21 @@ async def get_intent_info(intent_name: str):
             }
         )
     
+    from app.services.driver_factory import DriverFactory
+    intents_by_os = DriverFactory.get_intents_by_os()
+    
+    vendors_response = {}
+    for os_str, os_data in intents_by_os.items():
+        if intent_name in os_data.get("intents", []):
+            vendor_prefix = os_str.split("_")[0].lower()
+            if vendor_prefix in intent.vendor_params:
+                vendors_response[vendor_prefix] = intent.vendor_params[vendor_prefix]
+            elif vendor_prefix not in vendors_response:
+                vendors_response[vendor_prefix] = {
+                    "required_params": intent.required_params,
+                    "optional_params": intent.optional_params
+                }
+
     return {
         "success": True,
         "code": ErrorCode.SUCCESS.value,
@@ -131,6 +146,7 @@ async def get_intent_info(intent_name: str):
             "description": intent.description,
             "required_params": intent.required_params,
             "optional_params": intent.optional_params,
+            "vendors": vendors_response,
             "is_read_only": intent.is_read_only,
         }
     }

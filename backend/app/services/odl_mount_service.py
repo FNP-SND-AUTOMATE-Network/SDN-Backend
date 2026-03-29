@@ -112,7 +112,7 @@ class OdlMountService:
                     "netconf-node-topology:sleep-factor": 1.5,
                     "netconf-node-topology:reconnect-on-changed-schema": True,
                     "netconf-node-topology:schemaless": False,
-                    "netconf-node-topology:concurrent-rpc-limit": 2
+                    "netconf-node-topology:lock-datastore": False
                 }
             ]
         }

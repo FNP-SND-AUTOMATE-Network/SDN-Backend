@@ -11,6 +11,14 @@ from typing import Any, Dict, List, Optional
 from app.schemas.unified import UnifiedInterfaceStatus, UnifiedInterfaceList, InterfaceConfig
 
 
+def _netmask_to_prefix(mask: str) -> str:
+    """Convert dotted decimal netmask to CIDR prefix length (e.g. 255.255.255.0 -> 24)"""
+    try:
+        return str(sum([bin(int(x)).count('1') for x in mask.split('.')]))
+    except Exception:
+        return mask
+
+
 class InterfaceNormalizer:
     """
     Normalize interface responses from different vendors to unified format
@@ -67,7 +75,8 @@ class InterfaceNormalizer:
             ip = primary.get("address")
             mask = primary.get("mask")
             if ip and mask:
-                ipv4.append(f"{ip} ({mask})")
+                prefix = _netmask_to_prefix(mask)
+                ipv4.append(f"{ip}/{prefix}")
         # Also check secondary addresses
         secondary_list = address_block.get("secondary", [])
         if isinstance(secondary_list, dict):
@@ -76,7 +85,8 @@ class InterfaceNormalizer:
             ip = sec.get("address")
             mask = sec.get("mask")
             if ip and mask:
-                ipv4.append(f"{ip} ({mask}) secondary")
+                prefix = _netmask_to_prefix(mask)
+                ipv4.append(f"{ip}/{prefix} secondary")
         
         # Extract IPv6 from ipv6.address.prefix-list
         ipv6 = []
@@ -214,7 +224,8 @@ class InterfaceNormalizer:
             ip = addr.get("ip")
             mask = addr.get("mask")
             if ip and mask:
-                ipv4.append(f"{ip} ({mask})")
+                prefix = _netmask_to_prefix(mask)
+                ipv4.append(f"{ip}/{prefix}")
         
         # Extract IPv6
         ipv6 = []
@@ -346,6 +357,8 @@ class InterfaceNormalizer:
         if primary:
             ip = primary.get("address")
             mask = primary.get("mask")
+            if mask:
+                mask = _netmask_to_prefix(mask)
         
         return InterfaceConfig(
             name=name,
@@ -387,6 +400,8 @@ class InterfaceNormalizer:
             first_addr = am4_cfg_addr[0]
             ip = first_addr.get("ifIpAddr")
             mask = first_addr.get("subnetMask")
+            if mask:
+                mask = _netmask_to_prefix(mask)
         
         return InterfaceConfig(
             name=name,

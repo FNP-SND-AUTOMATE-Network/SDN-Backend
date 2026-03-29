@@ -10,7 +10,7 @@ Flow:
 """
 
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 from app.core.logging import logger
 from app.core.event_bus import event_bus
@@ -23,6 +23,7 @@ from app.normalizers.zabbix import (
     ZabbixSeverity,
     normalize_zabbix_event,
 )
+from app.database import get_prisma_client
 
 
 class ZabbixNotificationService:
@@ -31,10 +32,53 @@ class ZabbixNotificationService:
     จัดรูปแบบ Slack Block Kit message แล้วส่งออก
     """
 
+    # Regex: "Interface TEN GI 4/0(): Link down" → "TEN GI 4/0"
+    _RE_IFACE_NAME = re.compile(
+        r'Interface\s+([\w\s\/\-\.]+?)(?:\([^)]*\))?\s*:', re.IGNORECASE,
+    )
+    # Fallback: "Link down on TEN GI 4/0"
+    _RE_IFACE_FALLBACK = re.compile(
+        r'(?:Link down|Link up|is down|is up)\s+(?:on\s+)?([\w\s\/\-\.]+)', re.IGNORECASE,
+    )
+    # Fallback 2: "TEN GI 4/0 is down"
+    _RE_IFACE_FALLBACK2 = re.compile(
+        r'^([\w\s\/\-\.]+?)\s+is\s+(?:down|up)', re.IGNORECASE,
+    )
+
+    # Cisco / Huawei prefix broad mapping
+    # Maps fuzzy/short prefixes to exact ODL standard names regardless of spaces/casing
+    _IFACE_PREFIX_MAP = {
+        # 100G
+        "hu": "HundredGigE", "hundredgige": "HundredGigE", "hundredgigabitethernet": "HundredGigE",
+        # 40G
+        "fo": "FortyGigabitEthernet", "fortygige": "FortyGigabitEthernet", "fortygigabitethernet": "FortyGigabitEthernet",
+        # 25G
+        "tw": "TwentyFiveGigE", "twentyfivegige": "TwentyFiveGigE",
+        # 10G
+        "te": "TenGigabitEthernet", "tengi": "TenGigabitEthernet", 
+        "tengigabit": "TenGigabitEthernet", "tengigabitethernet": "TenGigabitEthernet",
+        "tengige": "TenGigabitEthernet", "xge": "10GE", "10ge": "10GE",
+        # 1G
+        "gi": "GigabitEthernet", "ge": "GigabitEthernet", "gig": "GigabitEthernet",
+        "gigabit": "GigabitEthernet", "gigabitethernet": "GigabitEthernet",
+        # 100M
+        "fa": "FastEthernet", "fast": "FastEthernet", "fastethernet": "FastEthernet",
+        # Ethernet / Mgmt
+        "eth": "Ethernet", "ethernet": "Ethernet",
+        "meth": "MEth", "mgmt": "MgmtEth", "mgmteth": "MgmtEth",
+        # Logical
+        "lo": "Loopback", "loopback": "Loopback",
+        "vl": "Vlan", "vlan": "Vlan", "vlanif": "Vlanif",
+        "tu": "Tunnel", "tunnel": "Tunnel",
+        "se": "Serial", "serial": "Serial",
+        "po": "Port-channel", "portchannel": "Port-channel",
+    }
+
     def __init__(self):
         self.slack = SlackClient()
         self._event_history: List[Dict[str, Any]] = []
         self._max_history = 200
+        self._db_updates = 0
 
     async def handle_zabbix_event(self, raw_payload: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -68,6 +112,9 @@ class ZabbixNotificationService:
             alert_dedup.record_zabbix_alert(event.host_ip)
 
         await event_bus.emit("zabbix.event_received", event.to_dict())
+
+        # 5. Real-time DB update (Interface/Device status from Zabbix event)
+        await self._update_db_from_event(event)
 
         record = {
             **event.to_dict(),
@@ -325,6 +372,306 @@ class ZabbixNotificationService:
             f"Severity: {event.severity_label} · Event ID: {event.event_id}"
         )
 
+    # ────────────────────────────────────────────────────────────────
+    # Real-time DB Update from Zabbix Events
+    # ────────────────────────────────────────────────────────────────
+
+    async def _update_db_from_event(self, event: NormalizedZabbixEvent) -> None:
+        """
+        Real-time DB update from Zabbix event.
+
+        Non-blocking, fail-safe — errors logged but never break notification flow.
+        ODL sync remains ground truth; Zabbix events provide fast interim updates.
+
+        Handles:
+        - Interface link down/up → Interface.status = UP/DOWN
+        - ICMP unreachable      → DeviceNetwork.status = OFFLINE/ONLINE
+        """
+        try:
+            prisma = get_prisma_client()
+            trigger_lower = event.trigger_name.lower()
+
+            # 1. Find matching device in DB
+            device = await self._find_device_by_event(prisma, event)
+            if not device:
+                logger.debug(
+                    f"[ZabbixDB] No matching device for host='{event.host_name}' "
+                    f"ip='{event.host_ip}' — skipping DB update"
+                )
+                return
+
+            updated = False
+
+            # 2a. Interface link events
+            is_iface_event = any(
+                kw in trigger_lower
+                for kw in ("link down", "link up", "is down", "is up", "operational status")
+            )
+            if is_iface_event:
+                updated = await self._handle_interface_event(prisma, device, event)
+
+            # 2b. Device-level ICMP reachability events
+            is_icmp_event = any(
+                kw in trigger_lower
+                for kw in ("unavailable by icmp", "unreachable", "not reachable")
+            )
+            if is_icmp_event:
+                updated = await self._handle_reachability_event(prisma, device, event) or updated
+
+            # 2c. Device reboot events (just log — ODL handles actual status)
+            if "has been restarted" in trigger_lower or "restarted" in trigger_lower:
+                if event.is_problem:
+                    logger.info(
+                        f"[ZabbixDB] Device {device.device_name} has been restarted "
+                        f"(event_id={event.event_id}). ODL will re-sync connection status."
+                    )
+                    try:
+                        await ws_manager.broadcast({
+                            "type": "device_reboot",
+                            "device_name": device.device_name,
+                            "device_id": device.id,
+                            "source": "zabbix",
+                            "event_id": event.event_id,
+                        })
+                    except Exception:
+                        pass
+
+            if updated:
+                self._db_updates += 1
+                logger.info(
+                    f"[ZabbixDB] ✓ Real-time update applied: device={device.device_name} "
+                    f"event_id={event.event_id}"
+                )
+
+        except Exception as e:
+            # Never let DB failures break the Slack/WebSocket notification pipeline
+            logger.warning(f"[ZabbixDB] DB update failed (non-fatal): {e}")
+
+    async def _find_device_by_event(self, prisma, event: NormalizedZabbixEvent):
+        """
+        Match Zabbix host → DB device using multiple fallback strategies:
+          1. host_name → device_name
+          2. host_name → node_id
+          3. host_ip   → ip_address
+          4. host_ip   → netconf_host
+        """
+        hn = event.host_name.strip()
+        ip = event.host_ip.strip()
+
+        if hn:
+            device = await prisma.devicenetwork.find_first(where={"device_name": hn})
+            if device:
+                return device
+            device = await prisma.devicenetwork.find_first(where={"node_id": hn})
+            if device:
+                return device
+
+        if ip:
+            device = await prisma.devicenetwork.find_first(where={"ip_address": ip})
+            if device:
+                return device
+            device = await prisma.devicenetwork.find_first(where={"netconf_host": ip})
+            if device:
+                return device
+
+        return None
+
+    def _extract_interface_name(self, event: NormalizedZabbixEvent) -> Optional[str]:
+        """
+        Extract physical interface name from Zabbix event.
+
+        Priority:
+          1. Zabbix tag "interface" (most reliable, e.g. "Gi4")
+          2. Regex from trigger_name (e.g. "Interface Ethernet1/0/2(): Link down")
+
+        Sub-interfaces (e.g. Ethernet1/0/2.4094) are filtered out.
+        """
+        # Priority 1: Zabbix tags (most reliable source)
+        iface_from_tag = event.tags.get("interface", "").strip()
+        if iface_from_tag:
+            # Tags might contain sub-interfaces too — filter them
+            if "." in iface_from_tag:
+                parts = iface_from_tag.rsplit(".", 1)
+                if parts[-1].isdigit():
+                    logger.debug(f"[ZabbixDB] Skipping sub-interface from tag: {iface_from_tag}")
+                    return None
+            return iface_from_tag
+
+        # Priority 2: Regex extraction from trigger_name
+        for pattern in (self._RE_IFACE_NAME, self._RE_IFACE_FALLBACK, self._RE_IFACE_FALLBACK2):
+            match = pattern.search(event.trigger_name)
+            if match:
+                iface = match.group(1).strip()
+                if "." in iface:
+                    parts = iface.rsplit(".", 1)
+                    if parts[-1].isdigit():
+                        logger.debug(f"[ZabbixDB] Skipping sub-interface: {iface}")
+                        return None
+                return iface
+        return None
+
+    def _expand_interface_name(self, raw_name: str) -> List[str]:
+        """
+        Broadly parses and expands interface names, forgiving whitespace and formatting.
+        Handles: "TEN GI 4/0" → ["TEN GI 4/0", "TenGigabitEthernet4/0"]
+                 "Gi0/0/1"    → ["Gi0/0/1", "GigabitEthernet0/0/1"]
+                 "10GE 1"     → ["10GE 1", "10GE1"]
+        """
+        # Remove spaces and convert to lowercase for easy matching
+        clean_name = re.sub(r'\s+', '', raw_name).lower()
+        candidates = [raw_name.strip()]
+
+        # Find longest matching prefix
+        matched_prefix = None
+        for p in sorted(self._IFACE_PREFIX_MAP.keys(), key=len, reverse=True):
+            if clean_name.startswith(p):
+                matched_prefix = p
+                break
+                
+        if matched_prefix:
+            std_name = self._IFACE_PREFIX_MAP[matched_prefix]
+            suffix_clean = clean_name[len(matched_prefix):]
+            if suffix_clean:
+                candidates.append(f"{std_name}{suffix_clean}")
+                
+        return list(dict.fromkeys(candidates))
+
+    async def _find_interface_in_db(self, prisma, device_id: str, iface_name: str):
+        """
+        Find interface in DB trying multiple name variants.
+
+        Lookup order (stops at first match):
+          1. Exact match: "Gi4"
+          2. Expanded name: "GigabitEthernet4"
+          3. Contains (startswith): name starts with expanded prefix
+        """
+        candidates = self._expand_interface_name(iface_name)
+
+        for name in candidates:
+            interface = await prisma.interface.find_first(
+                where={"device_id": device_id, "name": name}
+            )
+            if interface:
+                return interface
+
+        # Last resort: startswith match (handles "GigabitEthernet4" vs "GigabitEthernet4/0")
+        for name in candidates:
+            interface = await prisma.interface.find_first(
+                where={
+                    "device_id": device_id,
+                    "name": {"startswith": name},
+                }
+            )
+            if interface:
+                return interface
+
+        return None
+
+    async def _handle_interface_event(
+        self, prisma, device, event: NormalizedZabbixEvent
+    ) -> bool:
+        """
+        Update Interface.status based on link up/down event.
+        Returns True if a DB row was actually changed.
+
+        Uses tag-based interface name (primary) with short→full expansion
+        to match Zabbix abbreviated names (Gi4) to ODL full names (GigabitEthernet4).
+        """
+        iface_name = self._extract_interface_name(event)
+        if not iface_name:
+            logger.debug(
+                f"[ZabbixDB] Could not extract interface from: "
+                f"'{event.trigger_name[:80]}'"
+            )
+            return False
+
+        # RESOLVED = problem cleared → port is back UP
+        new_status = "UP" if event.is_resolved else "DOWN"
+
+        # Look up interface with multi-strategy name matching
+        interface = await self._find_interface_in_db(prisma, device.id, iface_name)
+        if not interface:
+            candidates = self._expand_interface_name(iface_name)
+            logger.debug(
+                f"[ZabbixDB] Interface not found for {device.device_name}. "
+                f"Tried: {candidates}"
+            )
+            return False
+
+        # Skip no-op (avoid unnecessary DB writes)
+        if interface.status == new_status:
+            return False
+
+        old_status = interface.status
+        await prisma.interface.update(
+            where={"id": interface.id},
+            data={"status": new_status},
+        )
+        logger.info(
+            f"[ZabbixDB] Interface {device.device_name}/{interface.name}: "
+            f"{old_status} → {new_status} (zabbix name: {iface_name})"
+        )
+
+        # Broadcast to WebSocket for real-time Frontend update
+        try:
+            await ws_manager.broadcast({
+                "type": "interface_status_change",
+                "device_name": device.device_name,
+                "device_id": device.id,
+                "interface_name": interface.name,
+                "interface_id": interface.id,
+                "old_status": old_status,
+                "new_status": new_status,
+                "source": "zabbix",
+                "event_id": event.event_id,
+            })
+        except Exception:
+            pass
+
+        return True
+
+    async def _handle_reachability_event(
+        self, prisma, device, event: NormalizedZabbixEvent
+    ) -> bool:
+        """
+        Update DeviceNetwork.status based on ICMP reachability event.
+        Returns True if a DB row was actually changed.
+        """
+        new_status = "ONLINE" if event.is_resolved else "OFFLINE"
+
+        if device.status == new_status:
+            return False
+
+        old_status = device.status
+        await prisma.devicenetwork.update(
+            where={"id": device.id},
+            data={"status": new_status},
+        )
+        logger.info(
+            f"[ZabbixDB] Device {device.device_name}: "
+            f"{old_status} → {new_status} (ICMP reachability)"
+        )
+
+        # Broadcast to WebSocket
+        try:
+            await ws_manager.broadcast({
+                "type": "device_status_change",
+                "device_name": device.device_name,
+                "device_id": device.id,
+                "old_status": old_status,
+                "new_status": new_status,
+                "source": "zabbix",
+                "event_id": event.event_id,
+            })
+        except Exception:
+            pass
+
+        return True
+
+    # ────────────────────────────────────────────────────────────────
+    # History & Stats
+    # ────────────────────────────────────────────────────────────────
+
     def get_recent_events(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Get recently processed Zabbix events."""
         return self._event_history[-limit:]
@@ -342,6 +689,7 @@ class ZabbixNotificationService:
             "resolved": resolved,
             "chatops_enabled": settings.CHATOPS_ENABLED,
             "failed_slack_sends": failed_sends,
+            "db_updates": self._db_updates,
             "webhook_active": bool(self.slack.webhook_url),
         }
 

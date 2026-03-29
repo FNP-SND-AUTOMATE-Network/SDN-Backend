@@ -24,7 +24,9 @@ class Settings(BaseModel):
     SLACK_WEBHOOK_URL: str = os.getenv("SLACK_WEBHOOK_URL", "")
     CHATOPS_ENABLED: bool = os.getenv("CHATOPS_ENABLED", "true").lower() == "true"
 
-    # Zabbix Webhook Integration
+    # Zabbix Integration (shared token สำหรับทั้ง webhook + dashboard API)
     ZABBIX_WEBHOOK_TOKEN: str = os.getenv("ZABBIX_WEBHOOK_TOKEN", "")  # ถ้าว่าง = ไม่ต้อง auth
+    ZABBIX_API_URL: str = os.getenv("ZABBIX_API_URL", "http://zabbix-web:8080/api_jsonrpc.php")
+    ZABBIX_API_TOKEN: str = os.getenv("ZABBIX_API_TOKEN", "")
 
 settings = Settings()

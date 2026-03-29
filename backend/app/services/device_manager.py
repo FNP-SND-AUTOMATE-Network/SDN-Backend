@@ -1,8 +1,9 @@
 """
 DeviceManager — In-memory Capability Cache & Guard
 
-จัดการข้อมูล capabilities ของอุปกรณ์จาก ODL NETCONF topology
-ใช้ synchronous `requests` + Basic Auth
+import httpx
+import asyncio
+from typing import Any, Dict, List, Optional, Tuple
 
 Features:
 - In-memory Dictionary cache (node_id → capabilities, status, sync time)
@@ -17,8 +18,8 @@ Usage:
     dm.get_device_status("NE40E-R1")                     # ดูสถานะ
 """
 
-import time
-import requests
+import asyncio
+import httpx
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
@@ -78,10 +79,10 @@ class DeviceManager:
     def _auth(self) -> Tuple[str, str]:
         return (self._init_username or settings.ODL_USERNAME, self._init_password or settings.ODL_PASSWORD)
 
-    # ── HTTP helper (sync, requests) ────────────────────────
-    def _request(self, method: str, path: str, json_body: Optional[dict] = None) -> requests.Response:
+    # ── HTTP helper (async, httpx) ────────────────────────
+    async def _request(self, method: str, path: str, json_body: Optional[dict] = None) -> httpx.Response:
         """
-        ส่ง HTTP request ไปยัง ODL RESTCONF
+        ส่ง HTTP request ไปยัง ODL RESTCONF (async)
         ใช้ Basic Auth จาก .env settings
         """
         url = f"{self._base_url}/rests/data{path}"
@@ -91,21 +92,21 @@ class DeviceManager:
         }
 
         try:
-            resp = requests.request(
-                method=method,
-                url=url,
-                headers=headers,
-                auth=self._auth,
-                json=json_body,
-                timeout=settings.ODL_TIMEOUT_SEC,
-            )
-            return resp
-        except requests.exceptions.RequestException as e:
+            async with httpx.AsyncClient(timeout=settings.ODL_TIMEOUT_SEC) as client:
+                resp = await client.request(
+                    method=method,
+                    url=url,
+                    headers=headers,
+                    auth=self._auth,
+                    json=json_body,
+                )
+                return resp
+        except httpx.RequestError as e:
             logger.error(f"[DeviceManager] HTTP {method} {url} failed: {e}")
             raise
 
     # ── Topology sync ───────────────────────────────────────
-    def sync_all(self) -> Dict[str, Dict[str, Any]]:
+    async def sync_all(self) -> Dict[str, Dict[str, Any]]:
         """
         ดึง topology ทั้งหมดจาก ODL แล้ว cache
         สำหรับ device ที่ยัง connecting จะ poll รอจนกว่าจะ connected
@@ -117,7 +118,7 @@ class DeviceManager:
 
         # GET topology จาก ODL
         path = "/network-topology:network-topology/topology=topology-netconf"
-        resp = self._request("GET", path)
+        resp = await self._request("GET", path)
 
         if resp.status_code != 200:
             logger.error(f"[DeviceManager] Failed to fetch topology: {resp.status_code} {resp.text[:200]}")
@@ -157,13 +158,13 @@ class DeviceManager:
             else:
                 # Device ยัง connecting → poll รอ
                 logger.info(f"[DeviceManager] {node_id}: status={status}, starting poll...")
-                device_info = self._poll_until_connected(node_id)
+                device_info = await self._poll_until_connected(node_id)
                 self._cache[node_id] = device_info
 
         logger.info(f"[DeviceManager] Sync complete. {len(self._cache)} devices cached.")
         return self._cache
 
-    def _poll_until_connected(self, node_id: str) -> Dict[str, Any]:
+    async def _poll_until_connected(self, node_id: str) -> Dict[str, Any]:
         """
         Polling loop: รอ device mount + schema load เสร็จ
         ตรวจสอบทุก poll_interval วินาที สูงสุด poll_max_retries รอบ
@@ -176,12 +177,12 @@ class DeviceManager:
                 f"[DeviceManager] Polling {node_id} "
                 f"(attempt {attempt}/{self._poll_max_retries})..."
             )
-            time.sleep(self._poll_interval)
+            await asyncio.sleep(self._poll_interval)
 
             # ดึงข้อมูล node เดียว
             path = f"/network-topology:network-topology/topology=topology-netconf/node={node_id}"
             try:
-                resp = self._request("GET", path)
+                resp = await self._request("GET", path)
             except Exception:
                 continue
 
@@ -383,7 +384,7 @@ class DeviceManager:
         ]
 
     # ── Refresh single device ───────────────────────────────
-    def refresh(self, node_id: str) -> Dict[str, Any]:
+    async def refresh(self, node_id: str) -> Dict[str, Any]:
         """
         Refresh single device จาก ODL แล้ว update cache
 
@@ -399,7 +400,7 @@ class DeviceManager:
         logger.info(f"[DeviceManager] Refreshing {node_id}...")
 
         path = f"/network-topology:network-topology/topology=topology-netconf/node={node_id}"
-        resp = self._request("GET", path)
+        resp = await self._request("GET", path)
 
         if resp.status_code == 404:
             # ถ้า node ไม่มีใน ODL → ลบออกจาก cache
@@ -422,7 +423,7 @@ class DeviceManager:
             device_info = self._parse_node(node_data)
         else:
             # ยัง connecting → poll
-            device_info = self._poll_until_connected(node_id)
+            device_info = await self._poll_until_connected(node_id)
 
         self._cache[node_id] = device_info
         logger.info(
@@ -505,7 +506,7 @@ class DeviceManager:
         return []
 
     # ── Post-Error Diagnosis ────────────────────────────────
-    def diagnose_error(
+    async def diagnose_error(
         self, node_id: str, intent: str, vendor: str, odl_error: str = ""
     ) -> Dict[str, Any]:
         """
@@ -545,12 +546,12 @@ class DeviceManager:
                 f"/topology=topology-netconf/node={node_id}"
             )
             url = f"{self._base_url}/rests/data{path}"
-            resp = requests.get(
-                url,
-                auth=self._auth,
-                headers={"Accept": "application/yang-data+json"},
-                timeout=5,
-            )
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(
+                    url,
+                    auth=self._auth,
+                    headers={"Accept": "application/yang-data+json"},
+                )
 
             if resp.status_code != 200:
                 diagnosis["suggestion"] = (
@@ -568,7 +569,7 @@ class DeviceManager:
 
             node_data = node_list[0]
 
-            # Update cache ด้วย (ฟรี เพราะ GET มาแล้ว)
+            # Update cache ด้วย 
             device_info = self._parse_node(node_data)
             self._cache[node_id] = device_info
 
@@ -623,7 +624,7 @@ class DeviceManager:
 
             return diagnosis
 
-        except requests.exceptions.Timeout:
+        except httpx.TimeoutException:
             diagnosis["suggestion"] = (
                 f"Diagnosis timed out (5s). ODL may be overloaded."
             )

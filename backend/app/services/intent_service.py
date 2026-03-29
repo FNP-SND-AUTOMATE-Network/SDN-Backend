@@ -45,11 +45,9 @@ from app.drivers.cisco.ios_xe.interface import CiscoInterfaceDriver
 from app.drivers.huawei.vrp8.interface import HuaweiInterfaceDriver
 
 # System Drivers
-# System Drivers
 from app.drivers.cisco.ios_xe.system import CiscoSystemDriver
 from app.drivers.huawei.vrp8.system import HuaweiSystemDriver
 
-# Routing Drivers
 # Routing Drivers
 from app.drivers.cisco.ios_xe.routing import CiscoRoutingDriver
 from app.drivers.huawei.vrp8.routing import HuaweiRoutingDriver
@@ -439,15 +437,12 @@ class IntentService:
         self, node_id: str, intent: str, vendor: str, odl_error: str
     ) -> Optional[Dict[str, Any]]:
         """
-        Run DeviceManager diagnosis in a thread (non-blocking)
-        ใช้ asyncio.to_thread() เพื่อไม่ block event loop
+        Run DeviceManager diagnosis (async, non-blocking)
         """
         try:
             dm = self._get_device_manager()
-            # Run sync diagnose_error in thread pool (5s timeout inside)
-            diagnosis = await asyncio.to_thread(
-                dm.diagnose_error, node_id, intent, vendor, odl_error
-            )
+            # diagnose_error is now async — no need for to_thread()
+            diagnosis = await dm.diagnose_error(node_id, intent, vendor, odl_error)
             if diagnosis and diagnosis.get("diagnosed"):
                 logger.info(
                     f"[Diagnosis] {node_id}/{intent}: {diagnosis.get('suggestion', '')}"

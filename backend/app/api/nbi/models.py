@@ -66,14 +66,12 @@ class APIResponse(BaseModel):
 class MountRequest(BaseModel):
     """Request body สำหรับ mount device"""
     wait_for_connection: bool = Field(
-        default=True, 
-        description="รอจนกว่าจะ connected (max 30s)"
+        default=True,
     )
     max_wait_seconds: int = Field(
-        default=30,
+        default=120,
         ge=5,
-        le=120,
-        description="เวลารอสูงสุด (วินาที) - 5 ถึง 120"
+        le=300,
     )
 
 

@@ -86,12 +86,6 @@ async def receive_zabbix_event(
       - severity: ระดับความรุนแรง
       - trigger: ชื่อ trigger
     """
-    if not settings.CHATOPS_ENABLED:
-        raise HTTPException(
-            status_code=400,
-            detail="ChatOps is disabled (CHATOPS_ENABLED=false)",
-        )
-
     # Verify token
     _verify_token(authorization)
 

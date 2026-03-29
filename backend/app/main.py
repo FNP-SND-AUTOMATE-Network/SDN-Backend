@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from app.api import health, auth, audit, users, device_credentials, local_sites, tags, operating_systems, policies, backups, configuration_templates, device_networks, nbi, interfaces, odl_probe, debug_env, ipam, device_backups, deployments, chatops, zabbix_webhook, ws_alerts
+from app.api import health, auth, audit, users, device_credentials, local_sites, tags, operating_systems, policies, backups, configuration_templates, device_networks, nbi, interfaces, ipam, device_backups, deployments, chatops, zabbix_webhook, zabbix_dashboard, ws_alerts
 from app.database import set_prisma_client
 import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -32,15 +32,22 @@ async def _safe_sync_devices():
 
 
 async def _safe_sync_topology():
-    """Background job: sync topology จาก ODL (with lock)"""
+    """Background job: sync topology จาก ODL (with lock + total timeout)"""
     if _sync_topology_lock.locked():
         logger.debug("[BG-Sync] Topology sync skipped — previous run still in progress")
         return
     async with _sync_topology_lock:
         try:
             from app.services.topology_sync import sync_odl_topology_to_db
-            await sync_odl_topology_to_db()
+            # Total timeout = 80% of interval เพื่อป้องกัน sync ทำงานยาวกว่า interval
+            total_timeout = app_settings.SYNC_TOPOLOGY_INTERVAL_SEC * 0.8
+            await asyncio.wait_for(sync_odl_topology_to_db(), timeout=total_timeout)
             logger.info("[BG-Sync] Topology sync completed")
+        except asyncio.TimeoutError:
+            logger.error(
+                f"[BG-Sync] Topology sync TIMEOUT after {app_settings.SYNC_TOPOLOGY_INTERVAL_SEC * 0.8:.0f}s "
+                f"— consider increasing SYNC_TOPOLOGY_INTERVAL_SEC"
+            )
         except Exception as e:
             logger.error(f"[BG-Sync] Topology sync failed: {e}")
 
@@ -80,13 +87,16 @@ async def lifespan(app: FastAPI):
             replace_existing=True
         )
 
-        # Topology sync
+        # Topology sync (staggered start: offset by half device_interval to avoid overlap)
+        from datetime import datetime, timedelta
+        topo_first_run = datetime.now() + timedelta(seconds=device_interval // 2)
         scheduler.add_job(
             _safe_sync_topology,
             'interval',
             seconds=topo_interval,
             id='sync_odl_topology',
-            replace_existing=True
+            replace_existing=True,
+            next_run_time=topo_first_run
         )
 
         scheduler.start()
@@ -104,6 +114,14 @@ async def lifespan(app: FastAPI):
     if scheduler:
         scheduler.shutdown()
         logger.info("[BG-Sync] Scheduler stopped")
+
+    # Close shared ODL HTTP client (class-level singleton)
+    try:
+        from app.clients.odl_restconf_client import OdlRestconfClient
+        await OdlRestconfClient.close()
+    except Exception as e:
+        logger.debug(f"[Shutdown] ODL client cleanup: {e}")
+
     await prisma_client.disconnect()
 
 app = FastAPI(
@@ -142,10 +160,9 @@ app.include_router(device_networks.router)
 app.include_router(interfaces.router)
 app.include_router(ipam.router)
 app.include_router(nbi.router)
-app.include_router(odl_probe.router)
-app.include_router(debug_env.router)
 app.include_router(device_backups.router)
 app.include_router(deployments.router)
 app.include_router(chatops.router)
 app.include_router(zabbix_webhook.router)
+app.include_router(zabbix_dashboard.router)
 app.include_router(ws_alerts.router)

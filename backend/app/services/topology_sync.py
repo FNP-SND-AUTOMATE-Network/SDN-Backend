@@ -2,7 +2,7 @@
 Service for syncing Topology from OpenDaylight to Database (Prisma)
 """
 import re
-import requests
+import httpx
 from typing import Dict, Any, List, Set, Tuple, Optional
 from app.core.config import settings
 from app.core.logging import logger
@@ -108,8 +108,11 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
     # Credentials ODL (จาก .env)
     AUTH = (settings.ODL_USERNAME, settings.ODL_PASSWORD)
     HEADERS = {'Accept': 'application/json'}
-    TIMEOUT = settings.ODL_TIMEOUT_SEC
+    TIMEOUT = httpx.Timeout(settings.ODL_TIMEOUT_SEC, connect=5.0)
     ODL_BASE = settings.ODL_BASE_URL.rstrip("/")
+
+    # Flag: ODL reachable? — ถ้า False จะ skip stale cleanup เพื่อป้องกันลบ topology ตอน ODL down
+    odl_reachable = False
 
     logger.info(f"=== Topology Sync START  (ODL={ODL_BASE}) ===")
 
@@ -119,243 +122,298 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
     raw_nodes: Set[str] = set()
     raw_links: List[Dict[str, str]] = []
 
-    # 1.1) ดึง Switch (OpenFlow) ──────────────────────────────
-    # ดึงแบบไม่มี ?content=nonconfig เพื่อให้ได้ทั้ง nodes + links ครบถ้วน
-    flow_url = f"{ODL_BASE}/rests/data/network-topology:network-topology/topology=flow:1"
-    try:
-        res_flow = requests.get(flow_url, auth=AUTH, headers=HEADERS, timeout=TIMEOUT)
-        logger.info(f"[1.1] OpenFlow GET {flow_url} → HTTP {res_flow.status_code}")
-        if res_flow.status_code == 200:
-            flow_data = res_flow.json()
-            topo_list = flow_data.get("network-topology:topology", flow_data.get("topology", []))
-            if topo_list:
-                topo_obj = topo_list[0]
+    # ── Shared async HTTP client สำหรับทุก ODL call ──
+    async with httpx.AsyncClient(auth=AUTH, headers=HEADERS, timeout=TIMEOUT) as http:
 
-                # Nodes
-                for node in topo_obj.get("node", []):
-                    nid = node["node-id"]
-                    if nid.startswith("host:"):
-                        continue
-                    raw_nodes.add(nid)
-
-                # Links (switch-to-switch)
-                for link in topo_obj.get("link", []):
-                    source_tp = link.get("source", {}).get("source-tp")
-                    dest_tp = link.get("destination", {}).get("dest-tp")
-                    link_id = link.get("link-id", f"{source_tp}-to-{dest_tp}")
-                    if source_tp and dest_tp:
-                        if source_tp.startswith("host:") or dest_tp.startswith("host:"):
-                            continue
-                        raw_links.append({
-                            "link_id": link_id,
-                            "source": source_tp,
-                            "target": dest_tp,
-                            "type": "OPENFLOW"
-                        })
-
-            logger.info(f"[1.1] OpenFlow: {len(raw_nodes)} switch nodes, {len(raw_links)} switch-to-switch links")
-        else:
-            logger.warning(f"[1.1] OpenFlow topology returned HTTP {res_flow.status_code}")
-    except Exception as e:
-        logger.error(f"[1.1] Failed to fetch OpenFlow Topology: {e}")
-
-    # 1.1.1) Dedup bidirectional OpenFlow links (A→B + B→A → keep A→B)
-    if raw_links:
-        seen_of_pairs: Set[Tuple[str, str]] = set()
-        deduped = []
-        for ln in raw_links:
-            pair = tuple(sorted([ln["source"], ln["target"]]))
-            if pair in seen_of_pairs:
-                continue
-            seen_of_pairs.add(pair)
-            deduped.append(ln)
-        if len(deduped) < len(raw_links):
-            logger.info(f"[1.1.1] Deduped OF bidirectional: {len(raw_links)} → {len(deduped)}")
-            raw_links = deduped
-
-    # 1.1.2) ดึง OpenFlow Inventory (status, ip, model ของ OF switches) ─
-    of_inventory: Dict[str, Dict[str, Any]] = {}   # node_id → {ip_address, manufacturer, hardware, software, status, ports}
-    if raw_nodes:
-        inv_url = f"{ODL_BASE}/rests/data/opendaylight-inventory:nodes?content=nonconfig"
+        # 1.1) ดึง Switch (OpenFlow) ──────────────────────────────
+        # ดึงแบบไม่มี ?content=nonconfig เพื่อให้ได้ทั้ง nodes + links ครบถ้วน
+        flow_url = f"{ODL_BASE}/rests/data/network-topology:network-topology/topology=flow:1"
         try:
-            res_inv = requests.get(inv_url, auth=AUTH, headers=HEADERS, timeout=TIMEOUT)
-            logger.info(f"[1.1.2] OF Inventory GET {inv_url} → HTTP {res_inv.status_code}")
-            if res_inv.status_code == 200:
-                inv_data = res_inv.json()
-                inv_nodes = inv_data.get("opendaylight-inventory:nodes", {}).get("node", [])
-                for inv_node in inv_nodes:
-                    nid = inv_node.get("id", "")
-                    if not nid.startswith("openflow:"):
-                        continue
+            res_flow = await http.get(flow_url)
+            logger.info(f"[1.1] OpenFlow GET {flow_url} → HTTP {res_flow.status_code}")
+            odl_reachable = True  # ถ้า request สำเร็จ (แม้ 404) แสดงว่า ODL reachable
+            if res_flow.status_code == 200:
+                flow_data = res_flow.json()
+                topo_list = flow_data.get("network-topology:topology", flow_data.get("topology", []))
+                if topo_list:
+                    topo_obj = topo_list[0]
 
-                    ip_addr = inv_node.get("flow-node-inventory:ip-address")
-                    manufacturer = inv_node.get("flow-node-inventory:manufacturer", "")
-                    hardware = inv_node.get("flow-node-inventory:hardware", "")
-                    software = inv_node.get("flow-node-inventory:software", "")
-                    serial = inv_node.get("flow-node-inventory:serial-number", "")
-                    description = inv_node.get("flow-node-inventory:description", "")
+                    # Nodes
+                    for node in topo_obj.get("node", []):
+                        nid = node["node-id"]
+                        if nid.startswith("host:"):
+                            continue
+                        raw_nodes.add(nid)
 
-                    # สร้าง device_model จาก manufacturer + hardware
-                    model_parts = [p for p in [manufacturer, hardware] if p and p != "None"]
-                    device_model = " / ".join(model_parts) if model_parts else "OpenFlow Switch"
-
-                    # สร้าง description จาก software version
-                    desc_str = f"Software: {software}" if software and software != "None" else None
-                    if description and description != "None":
-                        desc_str = f"{description} | Software: {software}" if desc_str else description
-
-                    # Node ปรากฏใน operational inventory = connected กับ controller = ONLINE
-                    # (snapshot-gathering-status คือเรื่อง stats collection ไม่ใช่ connectivity)
-                    is_online = True
-
-                    # Parse port states จาก node-connector
-                    port_states: Dict[str, str] = {}   # connector_id → "UP"/"DOWN"
-                    for nc in inv_node.get("node-connector", []):
-                        nc_id = nc.get("id", "")
-                        nc_state = nc.get("flow-node-inventory:state", {})
-                        link_down = nc_state.get("link-down", False)
-                        port_states[nc_id] = "DOWN" if link_down else "UP"
-
-                    of_inventory[nid] = {
-                        "ip_address": ip_addr,
-                        "device_model": device_model,
-                        "description": desc_str,
-                        "is_online": is_online,
-                        "port_states": port_states,
-                        "manufacturer": manufacturer,
-                        "software": software,
-                    }
-                    logger.info(f"[1.1.2] {nid}: ip={ip_addr}, model={device_model}, online={is_online}, ports={len(port_states)}")
-            else:
-                logger.warning(f"[1.1.2] OF Inventory returned HTTP {res_inv.status_code}")
-        except Exception as e:
-            logger.error(f"[1.1.2] Failed to fetch OF Inventory: {e}")
-
-    # 1.2) ดึง Router (NETCONF) LLDP ─────────────────────────
-    # เฉพาะ device ที่ user สร้างเอง (exclude dummy ที่ถูกสร้างจาก sync ก่อนหน้า)
-    try:
-        netconf_devices = await prisma.devicenetwork.find_many(
-            where={
-                "management_protocol": "NETCONF",
-                "node_id": {"not": None},
-                "NOT": [
-                    {"device_model": {"in": ["LLDP Neighbor (Auto-discovered)", "Unknown Neighbor"]}},
-                    {"serial_number": {"startsWith": "DUMMY-SN-"}},
-                    {"serial_number": {"startsWith": "LLDP-SN-"}},
-                ]
-            }
-        )
-        logger.info(f"[1.2] Found {len(netconf_devices)} NETCONF devices in DB")
-
-        for device in netconf_devices:
-            node_id = device.node_id
-            if not node_id:
-                continue
-
-            lldp_neighbors_found = 0
-            oc_success = False
-
-            # ── ลองดึง LLDP ผ่าน OpenConfig ──
-            oc_url = f"{ODL_BASE}/rests/data/network-topology:network-topology/topology=topology-netconf/node={node_id}/yang-ext:mount/openconfig-lldp:lldp/interfaces?content=nonconfig"
-            try:
-                res_oc = requests.get(oc_url, auth=AUTH, headers=HEADERS, timeout=TIMEOUT)
-                if res_oc.status_code == 200:
-                    raw_nodes.add(node_id)
-                    oc_data = res_oc.json()
-                    interfaces = oc_data.get("openconfig-lldp:interfaces", {}).get("interface", [])
-
-                    for intf in interfaces:
-                        local_port = intf.get("name")
-                        neighbors = intf.get("neighbors", {}).get("neighbor", [])
-                        for neighbor in neighbors:
-                            state = neighbor.get("state", {})
-                            remote_node = state.get("system-name")
-                            remote_port = state.get("port-id")
-
-                            if not remote_node or not remote_port:
-                                logger.debug(f"  [{node_id}] {local_port}: neighbor missing system-name or port-id, skip")
+                    # Links (switch-to-switch)
+                    for link in topo_obj.get("link", []):
+                        source_tp = link.get("source", {}).get("source-tp")
+                        dest_tp = link.get("destination", {}).get("dest-tp")
+                        link_id = link.get("link-id", f"{source_tp}-to-{dest_tp}")
+                        if source_tp and dest_tp:
+                            if source_tp.startswith("host:") or dest_tp.startswith("host:"):
                                 continue
+                            raw_links.append({
+                                "link_id": link_id,
+                                "source": source_tp,
+                                "target": dest_tp,
+                                "type": "OPENFLOW"
+                            })
 
-                            # Clean domain (CSR1000vT.lab.local → CSR1000vT)
-                            # แต่ "openflow:1" ต้องเก็บไว้เต็ม
-                            if "openflow" not in remote_node:
-                                remote_node_clean = remote_node.split('.')[0]
-                            else:
-                                remote_node_clean = remote_node
+                logger.info(f"[1.1] OpenFlow: {len(raw_nodes)} switch nodes, {len(raw_links)} switch-to-switch links")
+            else:
+                logger.warning(f"[1.1] OpenFlow topology returned HTTP {res_flow.status_code}")
+        except Exception as e:
+            logger.error(f"[1.1] Failed to fetch OpenFlow Topology: {e}")
 
-                            # Handle "Not Advertised" port
-                            remote_port_clean = remote_port
-                            if remote_port_clean == "Not Advertised":
-                                if "openflow" in remote_node:
-                                    remote_port_clean = neighbor.get("id", "Unknown")
-                                else:
-                                    logger.debug(f"  [{node_id}] {local_port}: remote port 'Not Advertised', skip")
+        # 1.1.1) Dedup bidirectional OpenFlow links (A→B + B→A → keep A→B)
+        if raw_links:
+            seen_of_pairs: Set[Tuple[str, str]] = set()
+            deduped = []
+            for ln in raw_links:
+                pair = tuple(sorted([ln["source"], ln["target"]]))
+                if pair in seen_of_pairs:
+                    continue
+                seen_of_pairs.add(pair)
+                deduped.append(ln)
+            if len(deduped) < len(raw_links):
+                logger.info(f"[1.1.1] Deduped OF bidirectional: {len(raw_links)} → {len(deduped)}")
+                raw_links = deduped
+
+        # 1.1.2) ดึง OpenFlow Inventory (status, ip, model ของ OF switches) ─
+        of_inventory: Dict[str, Dict[str, Any]] = {}   # node_id → {ip_address, manufacturer, hardware, software, status, ports}
+        if raw_nodes:
+            inv_url = f"{ODL_BASE}/rests/data/opendaylight-inventory:nodes?content=nonconfig"
+            try:
+                res_inv = await http.get(inv_url)
+                logger.info(f"[1.1.2] OF Inventory GET {inv_url} → HTTP {res_inv.status_code}")
+                if res_inv.status_code == 200:
+                    inv_data = res_inv.json()
+                    inv_nodes = inv_data.get("opendaylight-inventory:nodes", {}).get("node", [])
+                    for inv_node in inv_nodes:
+                        nid = inv_node.get("id", "")
+                        if not nid.startswith("openflow:"):
+                            continue
+
+                        ip_addr = inv_node.get("flow-node-inventory:ip-address")
+                        manufacturer = inv_node.get("flow-node-inventory:manufacturer", "")
+                        hardware = inv_node.get("flow-node-inventory:hardware", "")
+                        software = inv_node.get("flow-node-inventory:software", "")
+                        serial = inv_node.get("flow-node-inventory:serial-number", "")
+                        description = inv_node.get("flow-node-inventory:description", "")
+
+                        # สร้าง device_model จาก manufacturer + hardware
+                        model_parts = [p for p in [manufacturer, hardware] if p and p != "None"]
+                        device_model = " / ".join(model_parts) if model_parts else "OpenFlow Switch"
+
+                        # สร้าง description จาก software version
+                        desc_str = f"Software: {software}" if software and software != "None" else None
+                        if description and description != "None":
+                            desc_str = f"{description} | Software: {software}" if desc_str else description
+
+                        # Node ปรากฏใน operational inventory = connected กับ controller = ONLINE
+                        # (snapshot-gathering-status คือเรื่อง stats collection ไม่ใช่ connectivity)
+                        is_online = True
+
+                        # Parse port states จาก node-connector
+                        port_states: Dict[str, str] = {}   # connector_id → "UP"/"DOWN"
+                        for nc in inv_node.get("node-connector", []):
+                            nc_id = nc.get("id", "")
+                            nc_state = nc.get("flow-node-inventory:state", {})
+                            link_down = nc_state.get("link-down", False)
+                            port_states[nc_id] = "DOWN" if link_down else "UP"
+
+                        of_inventory[nid] = {
+                            "ip_address": ip_addr,
+                            "device_model": device_model,
+                            "description": desc_str,
+                            "is_online": is_online,
+                            "port_states": port_states,
+                            "manufacturer": manufacturer,
+                            "software": software,
+                        }
+                        logger.info(f"[1.1.2] {nid}: ip={ip_addr}, model={device_model}, online={is_online}, ports={len(port_states)}")
+                else:
+                    logger.warning(f"[1.1.2] OF Inventory returned HTTP {res_inv.status_code}")
+            except Exception as e:
+                logger.error(f"[1.1.2] Failed to fetch OF Inventory: {e}")
+
+        # 1.2) ดึง Router (NETCONF) LLDP ─────────────────────────
+        # เฉพาะ device ที่ user สร้างเอง (exclude dummy ที่ถูกสร้างจาก sync ก่อนหน้า)
+        try:
+            netconf_devices = await prisma.devicenetwork.find_many(
+                where={
+                    "management_protocol": "NETCONF",
+                    "node_id": {"not": None},
+                    "NOT": [
+                        {"device_model": {"in": ["LLDP Neighbor (Auto-discovered)", "Unknown Neighbor"]}},
+                        {"serial_number": {"startsWith": "DUMMY-SN-"}},
+                        {"serial_number": {"startsWith": "LLDP-SN-"}},
+                    ]
+                }
+            )
+            logger.info(f"[1.2] Found {len(netconf_devices)} NETCONF devices in DB")
+
+            for device in netconf_devices:
+                node_id = device.node_id
+                if not node_id:
+                    continue
+
+                lldp_neighbors_found = 0
+                oc_success = False
+
+                # ── ลองดึง LLDP ผ่าน OpenConfig ──
+                oc_url = f"{ODL_BASE}/rests/data/network-topology:network-topology/topology=topology-netconf/node={node_id}/yang-ext:mount/openconfig-lldp:lldp/interfaces?content=nonconfig"
+                try:
+                    res_oc = await http.get(oc_url)
+                    if res_oc.status_code == 200:
+                        raw_nodes.add(node_id)
+                        oc_data = res_oc.json()
+                        interfaces = oc_data.get("openconfig-lldp:interfaces", {}).get("interface", [])
+
+                        for intf in interfaces:
+                            local_port = intf.get("name")
+                            neighbors = intf.get("neighbors", {}).get("neighbor", [])
+                            for neighbor in neighbors:
+                                state = neighbor.get("state", {})
+                                remote_node = state.get("system-name")
+                                remote_port = state.get("port-id")
+
+                                if not remote_node or not remote_port:
+                                    logger.debug(f"  [{node_id}] {local_port}: neighbor missing system-name or port-id, skip")
                                     continue
 
-                            # Expand abbreviated interface names
-                            remote_port_clean = _expand_interface_name(remote_port_clean)
+                                # Clean domain (CSR1000vT.lab.local → CSR1000vT)
+                                # แต่ "openflow:1" ต้องเก็บไว้เต็ม
+                                if "openflow" not in remote_node:
+                                    remote_node_clean = remote_node.split('.')[0]
+                                else:
+                                    remote_node_clean = remote_node
 
-                            link_src = f"{node_id}:{local_port}"
-                            link_tgt = f"{remote_node_clean}:{remote_port_clean}"
-                            raw_links.append({
-                                "link_id": f"{link_src}-to-{link_tgt}",
-                                "source": link_src,
-                                "target": link_tgt,
-                                "type": "NETCONF"
-                            })
-                            lldp_neighbors_found += 1
-                            logger.info(f"  [{node_id}] LLDP: {local_port} → {remote_node_clean}:{remote_port_clean}")
+                                # Handle "Not Advertised" port
+                                remote_port_clean = remote_port
+                                if remote_port_clean == "Not Advertised":
+                                    if "openflow" in remote_node:
+                                        remote_port_clean = neighbor.get("id", "Unknown")
+                                    else:
+                                        logger.debug(f"  [{node_id}] {local_port}: remote port 'Not Advertised', skip")
+                                        continue
 
-                    oc_success = True
-                else:
-                    logger.debug(f"  [{node_id}] OpenConfig LLDP returned HTTP {res_oc.status_code}, trying IOS-XE fallback")
-            except Exception as oc_err:
-                logger.debug(f"  [{node_id}] OpenConfig LLDP exception: {oc_err}, trying IOS-XE fallback")
+                                # Expand abbreviated interface names
+                                remote_port_clean = _expand_interface_name(remote_port_clean)
 
-            # ── Fallback: Cisco IOS-XE native LLDP ──
-            if not oc_success:
-                iosxe_url = f"{ODL_BASE}/rests/data/network-topology:network-topology/topology=topology-netconf/node={node_id}/yang-ext:mount/Cisco-IOS-XE-lldp-oper:lldp-entries?content=nonconfig"
-                try:
-                    res_ios = requests.get(iosxe_url, auth=AUTH, headers=HEADERS, timeout=TIMEOUT)
-                    if res_ios.status_code == 200:
-                        raw_nodes.add(node_id)
-                        ios_data = res_ios.json()
-                        entries = ios_data.get("Cisco-IOS-XE-lldp-oper:lldp-entries", {}).get("lldp-entry", [])
-                        for entry in entries:
-                            remote_id = entry.get('device-id', '')
-                            local_intf = entry.get('local-interface')
-                            remote_intf = entry.get('connecting-interface')
+                                link_src = f"{node_id}:{local_port}"
+                                link_tgt = f"{remote_node_clean}:{remote_port_clean}"
+                                raw_links.append({
+                                    "link_id": f"{link_src}-to-{link_tgt}",
+                                    "source": link_src,
+                                    "target": link_tgt,
+                                    "type": "NETCONF"
+                                })
+                                lldp_neighbors_found += 1
+                                logger.info(f"  [{node_id}] LLDP: {local_port} → {remote_node_clean}:{remote_port_clean}")
 
-                            if remote_id and "openflow" in remote_id:
-                                pass   # keep as-is (e.g. "openflow:1")
-                            elif remote_id:
-                                remote_id = remote_id.split('.')[0]
-
-                            if remote_intf:
-                                remote_intf = _expand_interface_name(remote_intf)
-
-                            link_src = f"{node_id}:{local_intf}"
-                            link_tgt = f"{remote_id}:{remote_intf}"
-                            raw_links.append({
-                                "link_id": f"{link_src}-to-{link_tgt}",
-                                "source": link_src,
-                                "target": link_tgt,
-                                "type": "NETCONF"
-                            })
-                            lldp_neighbors_found += 1
-                            logger.info(f"  [{node_id}] LLDP(IOS-XE): {local_intf} → {remote_id}:{remote_intf}")
+                        oc_success = True
                     else:
-                        logger.warning(f"  [{node_id}] IOS-XE LLDP returned HTTP {res_ios.status_code}")
-                except Exception as ex:
-                    logger.warning(f"  [{node_id}] Failed to fetch LLDP (both OpenConfig & IOS-XE): {ex}")
+                        logger.debug(f"  [{node_id}] OpenConfig LLDP returned HTTP {res_oc.status_code}, trying IOS-XE fallback")
+                except Exception as oc_err:
+                    logger.debug(f"  [{node_id}] OpenConfig LLDP exception: {oc_err}, trying IOS-XE fallback")
 
-            if lldp_neighbors_found == 0:
-                # ยัง add เข้า raw_nodes เพื่อให้ device แสดงใน topology (แม้ไม่มี link)
-                raw_nodes.add(node_id)
-                logger.info(f"  [{node_id}] No LLDP neighbors found (isolated node)")
+                # ── Fallback: Vendor-specific Native LLDP ──
+                if not oc_success:
+                    vendor = device.vendor if hasattr(device, 'vendor') and device.vendor else "OTHER"
 
-    except Exception as e:
-        logger.error(f"[1.2] Failed to query NETCONF devices from DB: {e}")
+                    if vendor == "CISCO":
+                        iosxe_url = f"{ODL_BASE}/rests/data/network-topology:network-topology/topology=topology-netconf/node={node_id}/yang-ext:mount/Cisco-IOS-XE-lldp-oper:lldp-entries?content=nonconfig"
+                        try:
+                            res_ios = await http.get(iosxe_url)
+                            if res_ios.status_code == 200:
+                                raw_nodes.add(node_id)
+                                ios_data = res_ios.json()
+                                entries = ios_data.get("Cisco-IOS-XE-lldp-oper:lldp-entries", {}).get("lldp-entry", [])
+                                for entry in entries:
+                                    remote_id = entry.get('device-id', '')
+                                    local_intf = entry.get('local-interface')
+                                    remote_intf = entry.get('connecting-interface')
+
+                                    if remote_id and "openflow" in remote_id:
+                                        pass   # keep as-is (e.g. "openflow:1")
+                                    elif remote_id:
+                                        remote_id = remote_id.split('.')[0]
+
+                                    if remote_intf:
+                                        remote_intf = _expand_interface_name(remote_intf)
+
+                                    link_src = f"{node_id}:{local_intf}"
+                                    link_tgt = f"{remote_id}:{remote_intf}"
+                                    raw_links.append({
+                                        "link_id": f"{link_src}-to-{link_tgt}",
+                                        "source": link_src,
+                                        "target": link_tgt,
+                                        "type": "NETCONF"
+                                    })
+                                    lldp_neighbors_found += 1
+                                    logger.info(f"  [{node_id}] LLDP(IOS-XE): {local_intf} → {remote_id}:{remote_intf}")
+
+                                if lldp_neighbors_found > 0:
+                                    oc_success = True
+                            else:
+                                logger.debug(f"  [{node_id}] IOS-XE LLDP returned HTTP {res_ios.status_code}")
+                        except Exception as ex:
+                            logger.debug(f"  [{node_id}] Failed to fetch IOS-XE LLDP: {ex}")
+
+                    elif vendor == "HUAWEI":
+                        huawei_url = f"{ODL_BASE}/rests/data/network-topology:network-topology/topology=topology-netconf/node={node_id}/yang-ext:mount/huawei-lldp:lldp?content=nonconfig"
+                        try:
+                            res_hw = await http.get(huawei_url)
+                            if res_hw.status_code == 200:
+                                raw_nodes.add(node_id)
+                                hw_data = res_hw.json()
+                                interfaces = hw_data.get("huawei-lldp:lldp", {}).get("lldpInterfaces", {}).get("lldpInterface", [])
+                                for intf in interfaces:
+                                    local_intf = intf.get("ifName")
+                                    neighbors = intf.get("lldpNeighbor", [])
+                                    if not neighbors and "lldpNeighbors" in intf:
+                                        neighbors = intf.get("lldpNeighbors", {}).get("lldpNeighbor", [])
+
+                                    for neighbor in neighbors:
+                                        remote_id = neighbor.get("sysName", "")
+                                        remote_intf = neighbor.get("portId", "")
+
+                                        if remote_id and "openflow" not in remote_id:
+                                            remote_id = remote_id.split('.')[0]
+
+                                        if remote_intf:
+                                            remote_intf = _expand_interface_name(remote_intf)
+
+                                        link_src = f"{node_id}:{local_intf}"
+                                        link_tgt = f"{remote_id}:{remote_intf}"
+                                        raw_links.append({
+                                            "link_id": f"{link_src}-to-{link_tgt}",
+                                            "source": link_src,
+                                            "target": link_tgt,
+                                            "type": "NETCONF"
+                                        })
+                                        lldp_neighbors_found += 1
+                                        logger.info(f"  [{node_id}] LLDP(Huawei): {local_intf} → {remote_id}:{remote_intf}")
+
+                                if lldp_neighbors_found > 0:
+                                    oc_success = True
+                            else:
+                                logger.warning(f"  [{node_id}] Huawei LLDP returned HTTP {res_hw.status_code}")
+                        except Exception as ex:
+                            logger.warning(f"  [{node_id}] Failed to fetch Huawei LLDP: {ex}")
+
+                    else:
+                        logger.debug(f"  [{node_id}] OpenConfig LLDP failed and no specific native LLDP parser implemented for vendor '{vendor}'")
+
+                if lldp_neighbors_found == 0:
+                    # ยัง add เข้า raw_nodes เพื่อให้ device แสดงใน topology (แม้ไม่มี link)
+                    raw_nodes.add(node_id)
+                    logger.info(f"  [{node_id}] No LLDP neighbors found (isolated node)")
+
+        except Exception as e:
+            logger.error(f"[1.2] Failed to query NETCONF devices from DB: {e}")
 
     logger.info(f"[1] Raw data total: {len(raw_nodes)} nodes, {len(raw_links)} links")
     for ln in raw_links:
@@ -670,60 +728,63 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
             logger.error(f"[2.3] Failed to upsert link '{link_id}': {e}")
 
     # =========================================================
-    # 3. Cleanup stale Links
+    # 3. Cleanup stale Links (ONLY if ODL was reachable)
     # =========================================================
-    try:
-        db_links = await prisma.link.find_many()
-        stale_link_ids = [
-            db_link.id for db_link in db_links
-            if not db_link.link_id.startswith("MANUAL:") and db_link.link_id not in active_link_ids
-        ]
-        if stale_link_ids:
-            deleted_links = await prisma.link.delete_many(
-                where={"id": {"in": stale_link_ids}}
-            )
-            stats["links_deleted"] = deleted_links.count
-            logger.info(f"[3] Deleted {deleted_links.count} stale links")
-    except Exception as e:
-        logger.error(f"[3] Failed to clean up stale links: {e}")
+    if not odl_reachable:
+        logger.warning("[3] ODL unreachable — skipping stale link/device cleanup to preserve topology")
+    else:
+        try:
+            db_links = await prisma.link.find_many()
+            stale_link_ids = [
+                db_link.id for db_link in db_links
+                if not db_link.link_id.startswith("MANUAL:") and db_link.link_id not in active_link_ids
+            ]
+            if stale_link_ids:
+                deleted_links = await prisma.link.delete_many(
+                    where={"id": {"in": stale_link_ids}}
+                )
+                stats["links_deleted"] = deleted_links.count
+                logger.info(f"[3] Deleted {deleted_links.count} stale links")
+        except Exception as e:
+            logger.error(f"[3] Failed to clean up stale links: {e}")
 
-    # =========================================================
-    # 4. Cleanup stale Dummy Devices (auto-discovered ที่ไม่มี link ใช้แล้ว)
-    # =========================================================
-    try:
-        dummy_devices = await prisma.devicenetwork.find_many(
-            where={
-                "OR": [
-                    {"device_model": "LLDP Neighbor (Auto-discovered)"},
-                    {"device_model": "Unknown Neighbor"},
-                    {"serial_number": {"startsWith": "DUMMY-SN-"}},
-                    {"serial_number": {"startsWith": "LLDP-SN-"}},
-                ]
-            },
-            include={"interfaces": {"include": {"links_source": True, "links_target": True}}}
-        )
-        stale_dummy_ids = []
-        for dd in dummy_devices:
-            has_links = False
-            for intf in (dd.interfaces or []):
-                if (intf.links_source and len(intf.links_source) > 0) or \
-                   (intf.links_target and len(intf.links_target) > 0):
-                    has_links = True
-                    break
-            if not has_links:
-                stale_dummy_ids.append(dd.id)
-                logger.info(f"[4] Removing stale dummy device: {dd.node_id} (model={dd.device_model})")
-
-        if stale_dummy_ids:
-            # ลบ interfaces ของ dummy devices ก่อน (cascade อาจไม่ครอบคลุม)
-            await prisma.interface.delete_many(where={"device_id": {"in": stale_dummy_ids}})
-            deleted_dummies = await prisma.devicenetwork.delete_many(
-                where={"id": {"in": stale_dummy_ids}}
+        # =========================================================
+        # 4. Cleanup stale Dummy Devices (auto-discovered ที่ไม่มี link ใช้แล้ว)
+        # =========================================================
+        try:
+            dummy_devices = await prisma.devicenetwork.find_many(
+                where={
+                    "OR": [
+                        {"device_model": "LLDP Neighbor (Auto-discovered)"},
+                        {"device_model": "Unknown Neighbor"},
+                        {"serial_number": {"startsWith": "DUMMY-SN-"}},
+                        {"serial_number": {"startsWith": "LLDP-SN-"}},
+                    ]
+                },
+                include={"interfaces": {"include": {"links_source": True, "links_target": True}}}
             )
-            stats["dummy_devices_cleaned"] = deleted_dummies.count
-            logger.info(f"[4] Cleaned up {deleted_dummies.count} stale dummy devices")
-    except Exception as e:
-        logger.error(f"[4] Failed to clean up dummy devices: {e}")
+            stale_dummy_ids = []
+            for dd in dummy_devices:
+                has_links = False
+                for intf in (dd.interfaces or []):
+                    if (intf.links_source and len(intf.links_source) > 0) or \
+                       (intf.links_target and len(intf.links_target) > 0):
+                        has_links = True
+                        break
+                if not has_links:
+                    stale_dummy_ids.append(dd.id)
+                    logger.info(f"[4] Removing stale dummy device: {dd.node_id} (model={dd.device_model})")
+
+            if stale_dummy_ids:
+                # ลบ interfaces ของ dummy devices ก่อน (cascade อาจไม่ครอบคลุม)
+                await prisma.interface.delete_many(where={"device_id": {"in": stale_dummy_ids}})
+                deleted_dummies = await prisma.devicenetwork.delete_many(
+                    where={"id": {"in": stale_dummy_ids}}
+                )
+                stats["dummy_devices_cleaned"] = deleted_dummies.count
+                logger.info(f"[4] Cleaned up {deleted_dummies.count} stale dummy devices")
+        except Exception as e:
+            logger.error(f"[4] Failed to clean up dummy devices: {e}")
 
     logger.info(f"=== Topology Sync DONE  stats={stats} ===")
     return stats

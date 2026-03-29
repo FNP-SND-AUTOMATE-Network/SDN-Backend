@@ -38,6 +38,7 @@ class CiscoRoutingDriver(BaseDriver):
         # OSPF
         Intents.ROUTING.OSPF_ENABLE,
         Intents.ROUTING.OSPF_DISABLE,
+        Intents.ROUTING.OSPF_ADD_NETWORK,
         Intents.ROUTING.OSPF_ADD_NETWORK_INTERFACE,
         Intents.ROUTING.OSPF_REMOVE_NETWORK_INTERFACE,
         Intents.ROUTING.OSPF_SET_ROUTER_ID,
@@ -80,6 +81,9 @@ class CiscoRoutingDriver(BaseDriver):
         
         if intent == Intents.ROUTING.OSPF_DISABLE:
             return self._build_ospf_disable(mount, params)
+        
+        if intent == Intents.ROUTING.OSPF_ADD_NETWORK:
+            return self._build_ospf_add_network(mount, params)
         
         if intent == Intents.ROUTING.OSPF_ADD_NETWORK_INTERFACE:
             return self._build_ospf_add_network_interface(mount, params)
@@ -257,8 +261,67 @@ class CiscoRoutingDriver(BaseDriver):
         )
 
     # ===== OSPF Methods =====
-    # Path: /Cisco-IOS-XE-native:native/router
-    # Payload: { "Cisco-IOS-XE-native:router": { "ospf": [...] } }
+    # Path: /Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf
+    # YANG model: Cisco-IOS-XE-ospf:router-ospf / ospf / process-id[]
+    
+    def _build_ospf_add_network(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """
+        Add OSPF network statement (router-level)
+        
+        Equivalent CLI:
+            router ospf {process_id}
+              network {network} {wildcard} area {area}
+        
+        YANG path:
+            .../router/Cisco-IOS-XE-ospf:router-ospf
+        
+        Uses PATCH to merge into existing config without overwriting
+        other networks or OSPF settings.
+        """
+        process_id = params.get("process_id")
+        network = params.get("network")
+        wildcard = params.get("wildcard_mask") or params.get("wildcard")
+        area = params.get("area")
+        
+        if process_id is None:
+            raise DriverBuildError("params require process_id")
+        if not network:
+            raise DriverBuildError("params require network (e.g. '192.168.1.0')")
+        if not wildcard:
+            raise DriverBuildError("params require wildcard_mask (e.g. '0.0.0.255')")
+        if area is None:
+            raise DriverBuildError("params require area (e.g. 0)")
+        
+        path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf"
+        
+        payload = {
+            "Cisco-IOS-XE-ospf:router-ospf": {
+                "ospf": {
+                    "process-id": [
+                        {
+                            "id": int(process_id),
+                            "network": [
+                                {
+                                    "ip": network,
+                                    "wildcard": wildcard,
+                                    "area": int(area)
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
+
+        return RequestSpec(
+            method="PATCH",
+            datastore="config",
+            path=path,
+            payload=payload,
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
+            intent=Intents.ROUTING.OSPF_ADD_NETWORK,
+            driver=self.name
+        )
     
     def _build_ospf_enable(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
         """Enable OSPF process using Cisco-IOS-XE-ospf:router-ospf"""

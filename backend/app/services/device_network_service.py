@@ -1,4 +1,6 @@
 from typing import Optional, List, Dict, Any
+import ipaddress
+from app.services.phpipam_service import PhpipamService
 from app.models.device_network import (
     DeviceNetworkCreate,
     DeviceNetworkUpdate,
@@ -16,6 +18,43 @@ class DeviceNetworkService:
 
     def __init__(self, prisma_client):
         self.prisma = prisma_client
+        self.phpipam_service = PhpipamService()
+
+    async def _sync_ip_to_phpipam(self, ip_address: str, hostname: str, mac_address: Optional[str] = None) -> Optional[str]:
+        #เช็คว่า IP นี้อยู่ใน phpIPAM หรือยัง ถ้ายังหา Subnet ที่ตรงแล้วไปจอง (Step 2)
+        if not ip_address or not self.phpipam_service.enabled:
+            return None
+            
+        try:
+            # 1. ค้นหาใน phpIPAM ว่ามี IP นี้ถูกจองไว้แล้วหรือยัง
+            existing_ip = await self.phpipam_service.search_ip(ip_address)
+            if existing_ip and existing_ip.get("id"):
+                return str(existing_ip.get("id"))
+                
+            # 2. ถ้ายังไม่เคยจอง ให้หาวง Subnet ที่ครอบคลุม IP นี้แล้วจองอัตโนมัติ
+            target_ip = ipaddress.ip_address(ip_address)
+            subnets = await self.phpipam_service.get_subnets()
+            
+            for subnet in subnets:
+                try:
+                    network = ipaddress.ip_network(f"{subnet['subnet']}/{subnet['mask']}")
+                    if target_ip in network:
+                        # จอง IP ในวงนี้
+                        new_ip = await self.phpipam_service.create_ip_address(
+                            subnet_id=str(subnet["id"]),
+                            ip_address=ip_address,
+                            hostname=hostname,
+                            mac_address=mac_address,
+                            description=f"[Auto-Discovery] Management IP for {hostname}"
+                        )
+                        if new_ip and new_ip.get("id"):
+                            return str(new_ip.get("id"))
+                except ValueError:
+                    continue
+        except Exception as e:
+            print(f"Error auto-syncing IP {ip_address} to phpIPAM: {e}")
+            
+        return None
 
     async def _validate_foreign_keys(self, data: Dict[str, Any]) -> None:
         #ตรวจสอบ foreign keys ว่ามีอยู่จริงในระบบ
@@ -79,6 +118,17 @@ class DeviceNetworkService:
                 if existing_node:
                     raise ValueError(f"node_id '{device_data.node_id}' มีอยู่ในระบบแล้ว")
 
+            # จัดการนำ Management IP ไปผูกกับ phpIPAM อัตโนมัติ (Step 2)
+            netconf_host = device_data.netconf_host or device_data.ip_address
+            resolved_phpipam_id = device_data.phpipam_address_id
+            
+            if netconf_host and not resolved_phpipam_id:
+                resolved_phpipam_id = await self._sync_ip_to_phpipam(
+                    ip_address=netconf_host,
+                    hostname=device_data.device_name,
+                    mac_address=device_data.mac_address
+                )
+
             #สร้าง Device — only include required fields, add optional fields conditionally
             create_data = {
                     "serial_number": device_data.serial_number,
@@ -107,7 +157,7 @@ class DeviceNetworkService:
                 "ip_address": device_data.ip_address,
                 "mac_address": device_data.mac_address,
                 "description": device_data.description,
-                "phpipam_address_id": device_data.phpipam_address_id,
+                "phpipam_address_id": resolved_phpipam_id,
                 "policy_id": device_data.policy_id,
                 "os_id": device_data.os_id,
                 "backup_id": device_data.backup_id,
@@ -440,6 +490,15 @@ class DeviceNetworkService:
             # NETCONF Connection Fields
             if update_data.netconf_host is not None:
                 update_dict["netconf_host"] = update_data.netconf_host
+                # ถ้าเปลี่ยน IP Management ใหม่ ให้ผูก phpIPAM ใหม่ด้วย
+                if update_data.netconf_host != existing_device.netconf_host:
+                    new_phpipam_id = await self._sync_ip_to_phpipam(
+                        ip_address=update_data.netconf_host,
+                        hostname=update_dict.get("device_name", existing_device.device_name),
+                        mac_address=update_dict.get("mac_address", existing_device.mac_address)
+                    )
+                    if new_phpipam_id:
+                        update_dict["phpipam_address_id"] = new_phpipam_id
 
             if update_data.netconf_port is not None:
                 update_dict["netconf_port"] = update_data.netconf_port

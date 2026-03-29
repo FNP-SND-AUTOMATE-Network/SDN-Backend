@@ -425,16 +425,6 @@ class ZabbixNotificationService:
                         f"[ZabbixDB] Device {device.device_name} has been restarted "
                         f"(event_id={event.event_id}). ODL will re-sync connection status."
                     )
-                    try:
-                        await ws_manager.broadcast({
-                            "type": "device_reboot",
-                            "device_name": device.device_name,
-                            "device_id": device.id,
-                            "source": "zabbix",
-                            "event_id": event.event_id,
-                        })
-                    except Exception:
-                        pass
 
             if updated:
                 self._db_updates += 1
@@ -612,22 +602,6 @@ class ZabbixNotificationService:
             )
             changed = True
 
-        # Always broadcast to WebSocket even if DB didn't change (Frontend might need it to show toasts)
-        try:
-            await ws_manager.broadcast({
-                "type": "interface_status_change",
-                "device_name": device.device_name,
-                "device_id": device.id,
-                "interface_name": interface.name,
-                "interface_id": interface.id,
-                "old_status": old_status,
-                "new_status": new_status,
-                "source": "zabbix",
-                "event_id": event.event_id,
-            })
-        except Exception:
-            pass
-
         return changed
 
     async def _handle_reachability_event(
@@ -648,24 +622,10 @@ class ZabbixNotificationService:
                 data={"status": new_status},
             )
             logger.info(
-                f"[ZabbixDB] Device {device.device_name}: "
-                f"{old_status} → {new_status} (ICMP reachability)"
+                f"[ZabbixDB] Device reachability {device.device_name}: "
+                f"{old_status} → {new_status}"
             )
             changed = True
-
-        # Always broadcast to WebSocket even if DB didn't change (Frontend needs it)
-        try:
-            await ws_manager.broadcast({
-                "type": "device_status_change",
-                "device_name": device.device_name,
-                "device_id": device.id,
-                "old_status": old_status,
-                "new_status": new_status,
-                "source": "zabbix",
-                "event_id": event.event_id,
-            })
-        except Exception:
-            pass
 
         return changed
 

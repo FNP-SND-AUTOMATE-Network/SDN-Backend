@@ -131,6 +131,26 @@ class NormalizedZabbixEvent:
     def is_resolved(self) -> bool:
         return self.status in ("RESOLVED", "OK")
 
+    @property
+    def frontend_message(self) -> str:
+        """Construct an easy-to-read message for frontend toasts/notifications."""
+        iface = self.tags.get("interface", "").strip()
+        desc = self.tags.get("description", "").strip()
+        
+        if iface:
+            iface_display = f"{iface}({desc})" if desc else iface
+            if self.item_value:
+                msg = f"{self.item_value} - {iface_display}"
+            else:
+                msg = f"{self.trigger_name} - (Port: {iface_display})"
+        elif self.item_value and ("Down" in self.item_value or "Up" in self.item_value):
+            msg = self.item_value
+        else:
+            # Fallback for non-interface alerts (e.g., CPU, ICMP Ping, System Name)
+            msg = self.trigger_name
+            
+        return msg.strip()
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "event_id": self.event_id,
@@ -142,6 +162,7 @@ class NormalizedZabbixEvent:
             "trigger_name": self.trigger_name,
             "item_name": self.item_name,
             "item_value": self.item_value,
+            "frontend_message": self.frontend_message,
             "event_time": self.event_time,
             "tags": self.tags,
             "description": self.description,
@@ -277,8 +298,8 @@ def normalize_zabbix_event(payload: Dict[str, Any]) -> NormalizedZabbixEvent:
         or "PROBLEM"
     ).upper()
 
-    # Map "OK" to "RESOLVED" for consistency
-    if status == "OK":
+    # Map "OK" and "0" to "RESOLVED" for consistency
+    if status in ("OK", "0"):
         status = "RESOLVED"
 
     # Severity: 0-5

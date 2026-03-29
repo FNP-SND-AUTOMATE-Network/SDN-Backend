@@ -103,19 +103,15 @@ class OdlMountService:
                     "netconf-node-topology:port": getattr(device, 'netconf_port', 830) or 830,
                     "netconf-node-topology:username": username,
                     "netconf-node-topology:password": password,
-                    # Stability parameters for ODL Potassium
-                    # NOTE: Real Cisco ASR hardware requires much longer timeouts
-                    # because ODL must download + compile a large set of YANG modules
-                    # before reporting 'connected'. Typical time: 30–120 seconds.
                     "netconf-node-topology:tcp-only": False,
                     "netconf-node-topology:keepalive-delay": 120,
-                    # Increased from 20 000 → 60 000 ms to accommodate ASR YANG download
                     "netconf-node-topology:connection-timeout-millis": 60000,
-                    # Increased from 180 000 → 300 000 ms for large config responses
                     "netconf-node-topology:default-request-timeout-millis": 300000,
                     "netconf-node-topology:max-connection-attempts": 3,
-                    # Between-attempt delay (ms) — avoids immediate retry storm
-                    "netconf-node-topology:between-attempts-timeout-millis": 5000,
+                    "netconf-node-topology:between-attempts-timeout-millis": 5000,          
+                    "netconf-node-topology:sleep-factor": 1.5,
+                    "netconf-node-topology:reconnect-on-changed-schema": True,
+                    "netconf-node-topology:schemaless": False,
                 }
             ]
         }

@@ -385,54 +385,26 @@ async def force_remount_device(
     Use this when a device node is **stuck** in ODL (e.g. it survived `unmount`
     and cannot be mounted again).  This endpoint:
 
-    1. `DELETE` the node from ODL **config** datastore
+    1. `DELETE` the node from ODL **config** datastore (handles 404 gracefully)
     2. Waits 10 seconds for ODL to fully tear down the NETCONF session
     3. Verifies the node is gone from **operational** datastore
     4. Re-mounts the device using credentials from the database
     5. Polls until `connected` (respects `max_wait_seconds`)
 
     ### When to use
-    - Keepalive RPCs are flooding the log with “session is disconnected”
+    - Keepalive RPCs are flooding the log with "session is disconnected"
     - `GET /status` returns `connection_status: none` or `unable-to-connect`
       even though you already called `unmount` + `mount`
     - The node is visible in ODL operational DS but not in config DS
 
-    ### Difference from regular mount
-    Regular `POST /mount` skips the DELETE step if the node looks clean in
-    config DS.  `force-remount` **always** deletes first, regardless of the
-    current state, making it safe to call on any stuck node.
+    ### Concurrency safety
+    Uses per-device locking — concurrent force-remount calls on the same
+    device will be serialized automatically.
     """
-    import asyncio
-
     try:
         user_id = current_user["id"]
-        logger.info(f"[force-remount] Starting force-remount for {node_id}")
 
-        # Step 1: Hard-delete from ODL config (ignore 404 if not there)
-        try:
-            await odl_mount_service.unmount_device(node_id)
-            logger.info(f"[force-remount] Unmounted {node_id} successfully")
-        except Exception as unmount_err:
-            logger.warning(
-                f"[force-remount] Unmount step failed for {node_id} "
-                f"(may already be clean): {unmount_err}"
-            )
-
-        # Step 2: Give ODL time to fully release the NETCONF session
-        CLEANUP_WAIT = 10
-        logger.info(f"[force-remount] Waiting {CLEANUP_WAIT}s for ODL session teardown")
-        await asyncio.sleep(CLEANUP_WAIT)
-
-        # Step 3: Verify node is gone from ODL
-        residual = await odl_mount_service.get_connection_status(node_id)
-        if residual.get("mounted"):
-            logger.warning(
-                f"[force-remount] Node {node_id} still visible in ODL after "
-                f"{CLEANUP_WAIT}s — proceeding anyway"
-            )
-
-        # Step 4 + 5: Mount (and wait)
-        result = await odl_mount_service.mount_and_wait(
+        result = await odl_mount_service.force_remount(
             node_id=node_id,
             user_id=user_id,
             max_wait_seconds=request.max_wait_seconds,
@@ -476,3 +448,4 @@ async def force_remount_device(
                 "suggestion": "Check ODL logs for NETCONF session errors",
             },
         )
+

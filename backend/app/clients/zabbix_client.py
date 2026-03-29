@@ -221,6 +221,34 @@ class ZabbixClient:
         items_v3 = await self.get_items(host_id=host_id, host_ids=host_ids, item_type=20)
         return items_v2 + items_v3
 
+    async def get_items_by_tag(
+        self,
+        host_ids: List[str],
+        tag: str,
+        value: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch items filtered by Zabbix tag.
+
+        ใช้สำหรับดึง items ตาม tag "component" เช่น cpu, memory, network
+        ซึ่ง Zabbix Template จะติด tag ไว้ให้อัตโนมัติ
+
+        Args:
+            host_ids: List of host IDs to query
+            tag:      Tag name (e.g. "component")
+            value:    Tag value (e.g. "cpu", "memory", "network")
+        """
+        params: Dict[str, Any] = {
+            "output": ["itemid", "name", "lastvalue", "units", "key_", "hostid"],
+            "hostids": host_ids,
+            "tags": [
+                {"tag": tag, "value": value}
+            ],
+            "filter": {"status": "0"},  # Only enabled items
+            "sortfield": "name",
+        }
+        return await self._call("item.get", params)
+
     # ── History ──────────────────────────────────────────────────
 
     async def get_history(

@@ -9,6 +9,7 @@ Flow:
 
 import asyncio
 import time
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 from app.clients.zabbix_client import zabbix_client, ZabbixAPIError
 from app.core.logging import logger
@@ -283,6 +284,18 @@ class ZabbixMonitoringService:
 
     # ── Traffic Data (Interface SNMP) ────────────────────────────
 
+    @staticmethod
+    def _format_bps(bps: float) -> Dict[str, Any]:
+        """แปลงค่า bps ดิบให้อ่านง่าย พร้อม auto-select unit"""
+        if bps >= 1_000_000_000:
+            return {"value": round(bps / 1_000_000_000, 2), "unit": "Gbps"}
+        elif bps >= 1_000_000:
+            return {"value": round(bps / 1_000_000, 2), "unit": "Mbps"}
+        elif bps >= 1_000:
+            return {"value": round(bps / 1_000, 2), "unit": "Kbps"}
+        else:
+            return {"value": round(bps, 2), "unit": "bps"}
+
     async def get_host_traffic(
         self,
         host_id: str,
@@ -290,10 +303,12 @@ class ZabbixMonitoringService:
         interface_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        ดึงข้อมูล traffic ของ interfaces (ifInOctets, ifOutOctets, ifSpeed, etc.)
-        สำหรับแสดงกราฟ Traffic บน Dashboard
+        ดึงข้อมูล traffic ของ interfaces สำหรับแสดงกราฟ Traffic บน Dashboard
 
-        Returns time-series data พร้อมค่า in/out bytes
+        Response format:
+        - clock: Unix timestamp (วินาที) + datetime (ISO 8601 อ่านง่าย)
+        - value_bps: ค่าดิบเป็น bits per second
+        - value_formatted: ค่าที่แปลงหน่วยแล้ว (เช่น "2.85 Kbps")
         """
         cache_key = f"traffic:{host_id}:{period_hours}:{interface_name or ''}"
         cached = self._cache_get(cache_key)
@@ -328,7 +343,7 @@ class ZabbixMonitoringService:
             result = {
                 "host_id": host_id,
                 "interfaces": [],
-                "message": "No traffic items found for this host",
+                "message": "ไม่พบข้อมูล traffic สำหรับ host นี้ — อาจยังไม่มี SNMP interface ถูก monitor",
             }
             self._cache_set(cache_key, result, ttl_seconds=15)
             return result
@@ -362,22 +377,64 @@ class ZabbixMonitoringService:
             iid = h.get("itemid", "")
             if iid not in history_by_item:
                 history_by_item[iid] = []
+
+            raw_val = h.get("value", "0")
+            try:
+                bps = float(raw_val) if raw_val else 0.0
+            except ValueError:
+                bps = 0.0
+
+            clock = int(h.get("clock", 0))
+            formatted = self._format_bps(bps)
+
+            # แปลง Unix timestamp → datetime ที่มนุษย์อ่านได้ (Asia/Bangkok = UTC+7)
+            dt = datetime.fromtimestamp(clock, tz=timezone(timedelta(hours=7)))
+
             history_by_item[iid].append({
-                "clock": int(h.get("clock", 0)),
-                "value": h.get("value", "0"),
+                "clock": clock,
+                "datetime": dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "value_bps": bps,
+                "display": f"{formatted['value']} {formatted['unit']}",
             })
 
-        # Build interface traffic data
+        # Build interface traffic data with summary
         interfaces_data = []
         for item in traffic_items:
             iid = item["itemid"]
+            history = history_by_item.get(iid, [])
+
+            # Parse lastvalue
+            try:
+                last_bps = float(item.get("lastvalue", "0"))
+            except ValueError:
+                last_bps = 0.0
+            last_formatted = self._format_bps(last_bps)
+
+            # Compute summary stats from history
+            bps_values = [h["value_bps"] for h in history if h["value_bps"] > 0]
+            summary = None
+            if bps_values:
+                avg_bps = sum(bps_values) / len(bps_values)
+                max_bps = max(bps_values)
+                min_bps = min(bps_values)
+                summary = {
+                    "avg": self._format_bps(avg_bps),
+                    "max": self._format_bps(max_bps),
+                    "min": self._format_bps(min_bps),
+                    "data_points": len(history),
+                }
+
             interfaces_data.append({
                 "itemid": iid,
                 "name": item.get("name", ""),
                 "key": item.get("key_", ""),
                 "units": item.get("units", ""),
-                "lastvalue": item.get("lastvalue", ""),
-                "history": history_by_item.get(iid, []),
+                "lastvalue": {
+                    "raw_bps": last_bps,
+                    "display": f"{last_formatted['value']} {last_formatted['unit']}",
+                },
+                "summary": summary,
+                "history": history,
             })
 
         result = {
@@ -386,6 +443,17 @@ class ZabbixMonitoringService:
             "time_from": time_from,
             "time_till": int(time.time()),
             "interfaces": interfaces_data,
+            "_meta": {
+                "description": "ข้อมูล traffic ของแต่ละ interface",
+                "history_fields": {
+                    "clock": "Unix timestamp (วินาที)",
+                    "datetime": "วันที่-เวลา ที่อ่านง่าย (เขตเวลา Bangkok UTC+7)",
+                    "value_bps": "ค่าดิบเป็น bits per second (bps) สำหรับคำนวณ",
+                    "display": "ค่าที่แปลงหน่วยแล้วพร้อมแสดง เช่น '2.42 Kbps'",
+                },
+                "lastvalue": "ค่าล่าสุดที่ Zabbix อ่านได้ (raw_bps + display)",
+                "summary": "สถิติสรุป: ค่าเฉลี่ย (avg), สูงสุด (max), ต่ำสุด (min)",
+            },
         }
         self._cache_set(cache_key, result, ttl_seconds=15)
         return result
@@ -409,9 +477,20 @@ class ZabbixMonitoringService:
 
         # Enrich with trigger/host info
         enriched = []
+        bkk_tz = timezone(timedelta(hours=7))
         for p in problems:
             sev = str(p.get("severity", "0"))
             meta = SEVERITY_MAP.get(sev, SEVERITY_MAP["0"])
+
+            # แปลง clock → datetime ที่มนุษย์อ่านได้
+            clock_raw = p.get("clock", "")
+            try:
+                clock_int = int(clock_raw) if clock_raw else 0
+                dt = datetime.fromtimestamp(clock_int, tz=bkk_tz)
+                dt_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, OSError):
+                dt_str = ""
+
             enriched.append({
                 "eventid": p.get("eventid"),
                 "objectid": p.get("objectid"),
@@ -420,7 +499,8 @@ class ZabbixMonitoringService:
                 "severity_label": meta["label"],
                 "severity_color": meta["color"],
                 "severity_emoji": meta["emoji"],
-                "clock": p.get("clock", ""),
+                "clock": clock_raw,
+                "datetime": dt_str,
                 "acknowledged": p.get("acknowledged") == "1",
                 "tags": p.get("tags", []),
             })
@@ -503,6 +583,7 @@ class ZabbixMonitoringService:
     async def get_top_metrics(self, limit: int = 5) -> Dict[str, Any]:
         """
         วิเคราะห์และดึงค่า Top N (Bandwidth, CPU, Memory, Uptime)
+        ใช้ Zabbix Tag-based filtering (component: cpu / memory / network)
         """
         cache_key = f"top_metrics:{limit}"
         cached = self._cache_get(cache_key)
@@ -516,113 +597,180 @@ class ZabbixMonitoringService:
         host_map = {h["hostid"]: h["hostname"] for h in active_hosts}
 
         if not host_ids:
-            return {"top_cpu": [], "top_memory": [], "top_bandwidth": [], "top_uptime": []}
+            return {"top_cpu": [], "top_memory": [], "top_bandwidth": []}
 
-        # 2. Fetch all SNMP items for these hosts
-        # Type 20 = Zabbix 6.0+, Type 4 = older
-        items_v2 = await zabbix_client.get_items(host_ids=host_ids, item_type=4, limit=0)
-        items_v3 = await zabbix_client.get_items(host_ids=host_ids, item_type=20, limit=0)
-        all_items = items_v2 + items_v3
+        # 2. Fetch items by tag (parallel) — ใช้ tag "component" ที่ Zabbix Template กำหนดไว้
+        cpu_items, memory_items, network_items = await asyncio.gather(
+            zabbix_client.get_items_by_tag(host_ids, tag="component", value="cpu"),
+            zabbix_client.get_items_by_tag(host_ids, tag="component", value="memory"),
+            zabbix_client.get_items_by_tag(host_ids, tag="component", value="network"),
+        )
 
+        logger.info(
+            f"[ZabbixMonitor] Tag-based items — "
+            f"CPU: {len(cpu_items)}, Memory: {len(memory_items)}, Network: {len(network_items)}"
+        )
+
+        # ── 3a. Process CPU items ────────────────────────────────
         top_cpu = []
-        top_memory = []
-        top_traffic = []
-        top_uptime = []
-
-        for item in all_items:
+        for item in cpu_items:
             hostid = item.get("hostid")
             if not hostid:
                 continue
-            
             hostname = host_map.get(str(hostid), f"Host {hostid}")
-            key = item.get("key_", "").lower()
-            name = item.get("name", "").lower()
             lastvalue = item.get("lastvalue", "0")
-            
             try:
                 val = float(lastvalue) if lastvalue else 0.0
             except ValueError:
                 val = 0.0
+            if val <= 0:
+                continue
+            # Accept items that look like percentage utilization
+            units = item.get("units", "")
+            if "%" in units or "utilization" in item.get("name", "").lower():
+                top_cpu.append({
+                    "host": hostname,
+                    "name": item.get("name"),
+                    "value": round(val, 2),
+                    "unit": "%",
+                })
 
+        # ── 3b. Process Memory items ─────────────────────────────
+        # Memory tag returns many items (Free, Used, Total, Utilization, etc.)
+        # กรองเอาเฉพาะ Utilization หรือ Used (percentage)
+        top_memory = []
+        for item in memory_items:
+            hostid = item.get("hostid")
+            if not hostid:
+                continue
+            hostname = host_map.get(str(hostid), f"Host {hostid}")
+            name_lower = item.get("name", "").lower()
+            units = item.get("units", "")
+
+            # กรอง: เอาเฉพาะ Memory utilization / Memory used percentage
+            is_utilization = any(kw in name_lower for kw in [
+                "utilization", "memory used", "pused",
+                "used percentage", "usage percentage",
+            ])
+            if not is_utilization and "%" not in units:
+                continue
+
+            lastvalue = item.get("lastvalue", "0")
+            try:
+                val = float(lastvalue) if lastvalue else 0.0
+            except ValueError:
+                val = 0.0
             if val <= 0:
                 continue
 
-            # CPU filter (looks for 'cpu' or 'processor' and expects percentage)
-            if any(k in key or k in name for k in ["cpu", "processor", "load"]) and "%" in item.get("units", "%"):
-                # Avoid dupes per host, or just collect all? Let's collect all and we can deduplicate later if needed.
-                # Usually we want the *highest* CPU core or average.
-                top_cpu.append({"host": hostname, "name": item.get("name"), "value": round(val, 2), "unit": "%"})
-                    
-            # Memory filter
-            elif any(k in key or k in name for k in ["memory utilization", "mem util", "pused"]):
-                unit = item.get("units", "%")
-                top_memory.append({"host": hostname, "name": item.get("name"), "value": round(val, 2), "unit": unit})
+            top_memory.append({
+                "host": hostname,
+                "name": item.get("name"),
+                "value": round(val, 2),
+                "unit": units if units else "%",
+            })
 
-            # Traffic filter (convert bits or octets)
-            elif any(k in key for k in ["ifinoctets", "ifoutoctets", "net.if.in", "net.if.out"]):
-                if "octets" in key or "octets" in name:
-                    # Octets = bytes -> bps
-                    mbps = (val * 8) / 1_000_000
-                else:
-                    # Often bits directly if it's zabbix agent, but we are querying SNMP which is octets.
-                    # ifHCInOctets, ifInOctets. Assume octets (bytes) -> bps.
-                    mbps = (val * 8) / 1_000_000
+        # ── 3c. Process Network (Bandwidth) items ────────────────
+        # Network tag returns ทุก Interface ทั้ง In/Out — เรา sort หา Top Bandwidth
+        # กรองเฉพาะ "Bits received" / "Bits sent" (ชื่อ item) หรือ key "net.if.*"
+        #
+        # ⚠ ค่าที่ Zabbix คืนมาเป็น bps (bits per second) อยู่แล้ว
+        #   → หาร 1,000,000 = Mbps  |  หาร 1,000,000,000 = Gbps
+        #   ไม่ต้องคูณ 8 (ไม่ใช่ octets/bytes)
+        top_traffic = []
+        for item in network_items:
+            hostid = item.get("hostid")
+            if not hostid:
+                continue
+            hostname = host_map.get(str(hostid), f"Host {hostid}")
+            key = item.get("key_", "").lower()
+            name_lower = item.get("name", "").lower()
 
-                if mbps > 0.01:  # Only significant traffic
-                    direction = "Inbound" if "in" in key.lower() else "Outbound"
-                    # clean up interface name
-                    interface_name = item.get("name").replace("Bits received", "").replace("Bits sent", "").replace("Interface", "").strip()
-                    top_traffic.append({
-                        "host": hostname, 
-                        "interface": interface_name, 
-                        "direction": direction,
-                        "value": round(mbps, 2), 
-                        "unit": "Mbps"
-                    })
+            # กรองเฉพาะ traffic items:
+            #   วิธี 1 — key ขึ้นต้นด้วย net.if.  (แม่นยำที่สุด)
+            #   วิธี 2 — ชื่อ item มีคำว่า "bits received" / "bits sent"
+            is_traffic = (
+                key.startswith("net.if.in") or key.startswith("net.if.out")
+                or "bits received" in name_lower
+                or "bits sent" in name_lower
+            )
+            if not is_traffic:
+                continue
 
-            # Uptime filter
-            elif any(k in key or k in name for k in ["sysuptime", "uptime"]):
-                if "sysuptime" in key or "sysuptime" in name.lower():
-                    # Check if units is timeticks
-                    if item.get("units") == "uptime":
-                        # Zabbix uptime value is natively in seconds actually, or timeticks.
-                        # Usually sysUpTime is in hundredths of a second (Timeticks)
-                        days = round(val / 8640000, 1)
-                    else:
-                        days = round(val / 8640000, 1)
-                else:
-                    days = round(val / 86400, 1) # assuming seconds
-                
-                # Deduplicate uptime (hosts might have multiple, only keep one)
-                if not any(u["host"] == hostname for u in top_uptime):
-                    top_uptime.append({"host": hostname, "name": item.get("name"), "value": days, "unit": "Days"})
+            lastvalue = item.get("lastvalue", "0")
+            try:
+                val = float(lastvalue) if lastvalue else 0.0
+            except ValueError:
+                val = 0.0
+            if val <= 0:
+                continue
 
-        # Group bandwidth by interface (IN + OUT)?? For simplicity, Top Traffic can just be top ports regardless of direction, or max of in/out.
-        # Let's just sort and take top limit.
-        top_traffic = sorted(top_traffic, key=lambda x: x["value"], reverse=True)[:limit]
-        
-        # Deduplicate CPU & Memory (take highest per host)
+            # ค่าจาก Zabbix เป็น bps อยู่แล้ว → แปลงเป็น Mbps
+            mbps = val / 1_000_000
+
+            if mbps < 0.01:  # Skip negligible traffic
+                continue
+
+            # Auto-select readable unit
+            if mbps >= 1000:
+                display_value = round(mbps / 1000, 2)
+                display_unit = "Gbps"
+            else:
+                display_value = round(mbps, 2)
+                display_unit = "Mbps"
+
+            # Determine direction
+            direction = "Inbound"
+            if "net.if.out" in key or "bits sent" in name_lower or "out" in key:
+                direction = "Outbound"
+
+            # Extract interface name (e.g. "Ethernet1/0/1: Bits received" → "Ethernet1/0/1")
+            raw_name = item.get("name", "")
+            interface_name = (
+                raw_name
+                .replace("Bits received", "")
+                .replace("Bits sent", "")
+                .replace("Interface", "")
+                .strip(": ")
+            )
+
+            top_traffic.append({
+                "host": hostname,
+                "interface": interface_name,
+                "direction": direction,
+                "value_bps": round(val, 0),       # ค่าดิบ bps เก็บไว้ใช้ sort
+                "value": display_value,
+                "unit": display_unit,
+            })
+
+        # ── 4. Sort & deduplicate ────────────────────────────────
+        # Sort by raw bps for accurate ranking, then strip internal field
+        top_traffic = sorted(top_traffic, key=lambda x: x["value_bps"], reverse=True)[:limit]
+        for t in top_traffic:
+            del t["value_bps"]  # ไม่ต้องส่ง bps ดิบไป Frontend
+
+        # Deduplicate CPU (take highest per host)
         top_cpu_dedup = []
         for c in sorted(top_cpu, key=lambda x: x["value"], reverse=True):
             if not any(x["host"] == c["host"] for x in top_cpu_dedup):
                 top_cpu_dedup.append(c)
-                if len(top_cpu_dedup) >= limit: break
+                if len(top_cpu_dedup) >= limit:
+                    break
 
+        # Deduplicate Memory (take highest per host)
         top_mem_dedup = []
         for m in sorted(top_memory, key=lambda x: x["value"], reverse=True):
             if not any(x["host"] == m["host"] for x in top_mem_dedup):
                 top_mem_dedup.append(m)
-                if len(top_mem_dedup) >= limit: break
-
-        top_uptime = sorted(top_uptime, key=lambda x: x["value"])[:limit] # Lowest uptime first (recently rebooted)
+                if len(top_mem_dedup) >= limit:
+                    break
 
         result = {
             "top_cpu": top_cpu_dedup,
             "top_memory": top_mem_dedup,
             "top_bandwidth": top_traffic,
-            "top_uptime": top_uptime,
         }
-        
+
         self._cache_set(cache_key, result, ttl_seconds=30)
         return result
 

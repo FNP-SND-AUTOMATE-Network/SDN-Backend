@@ -114,6 +114,14 @@ async def lifespan(app: FastAPI):
     if scheduler:
         scheduler.shutdown()
         logger.info("[BG-Sync] Scheduler stopped")
+
+    # Close shared ODL HTTP client (class-level singleton)
+    try:
+        from app.clients.odl_restconf_client import OdlRestconfClient
+        await OdlRestconfClient.close()
+    except Exception as e:
+        logger.debug(f"[Shutdown] ODL client cleanup: {e}")
+
     await prisma_client.disconnect()
 
 app = FastAPI(

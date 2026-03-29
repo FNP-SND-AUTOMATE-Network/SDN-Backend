@@ -83,11 +83,11 @@ async def get_dashboard_top_metrics(
 ):
     """
     ดึงข้อมูล Top N แบบเรียลไทม์ (ใช้งานหนาแน่นที่สุด) สำหรับหน้า Dashboard
+    ใช้ Zabbix Tag-based filtering (component: cpu / memory / network)
     ประกอบด้วย:
-    - top_bandwidth (Interface traffic In/Out)
-    - top_cpu (Device CPU utilization)
-    - top_memory (Device RAM utilization)
-    - top_uptime (Recently rebooted devices)
+    - top_bandwidth (Interface traffic In/Out — tag: component=network)
+    - top_cpu (Device CPU utilization — tag: component=cpu)
+    - top_memory (Device RAM utilization — tag: component=memory)
     """
     try:
         return await zabbix_monitoring_service.get_top_metrics(limit=limit)

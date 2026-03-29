@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 import asyncio
 from app.clients.odl_restconf_client import OdlRestconfClient
+from app.core.errors import OdlRequestError
 from app.schemas.request_spec import RequestSpec
 from app.core.logging import logger
 from app.database import get_prisma_client
@@ -48,7 +49,15 @@ class OdlMountService:
     
     def __init__(self):
         self.odl_client = OdlRestconfClient()
+        # Per-device lock to prevent concurrent mount/unmount on the same device
+        self._device_locks: Dict[str, asyncio.Lock] = {}
     
+    def _get_device_lock(self, node_id: str) -> asyncio.Lock:
+        """Get or create a per-device lock to serialize mount/unmount ops."""
+        if node_id not in self._device_locks:
+            self._device_locks[node_id] = asyncio.Lock()
+        return self._device_locks[node_id]
+
     async def _find_device(self, node_id: str):
         """
         ค้นหา device จาก node_id (หรือ fallback ไป device_name)
@@ -110,6 +119,28 @@ class OdlMountService:
                 }
             ]
         }
+
+    async def _delete_node_from_odl(self, node_id: str) -> bool:
+        """
+        DELETE node จาก ODL config datastore.
+        Returns True ถ้าสำเร็จ (รวมถึง 404 ที่แปลว่าลบไปแล้ว)
+        Raises exception เฉพาะ error ที่ไม่ใช่ 404
+        """
+        node_path = f"{self.TOPOLOGY_PATH}/node={node_id}"
+        spec = RequestSpec(
+            method="DELETE",
+            path=node_path,
+            datastore="config",
+            headers={"Accept": "application/yang-data+json"},
+        )
+        try:
+            await self.odl_client.send(spec)
+            return True
+        except OdlRequestError as e:
+            if e.status_code == 404:
+                logger.info(f"Node {node_id} already absent from ODL config (404) — treating as success")
+                return True
+            raise
     
     async def mount_device(self, node_id: str, user_id: str) -> Dict[str, Any]:
         """
@@ -120,9 +151,7 @@ class OdlMountService:
             user_id: ID ของ User ที่ทำการ mount
         
         Returns:
-            {
-                ...
-            }
+            Dict with success, message, node_id, connection_status, device_id
         """
         from app.services.device_credentials_service import DeviceCredentialsService
         
@@ -174,6 +203,7 @@ class OdlMountService:
                         "success": True,
                         "message": f"Device {device.node_id} is already mounted and connected",
                         "node_id": device.node_id,
+                        "device_id": device.id,
                         "connection_status": connection_status,
                         "already_mounted": True
                     }
@@ -181,27 +211,9 @@ class OdlMountService:
                     # Node exists but NOT connected (connecting / unable-to-connect)
                     # → Unmount stale node first, then remount with fresh credentials
                     logger.info(f"Device {device.node_id} has stale mount (status: {connection_status}), unmounting before remount...")
-                    try:
-                        stale_path = f"{self.TOPOLOGY_PATH}/node={device.node_id}"
-                        stale_spec = RequestSpec(
-                            method="DELETE",
-                            path=stale_path,
-                            datastore="config",
-                            headers={"Accept": "application/yang-data+json"}
-                        )
-                        await self.odl_client.send(stale_spec)
-                        # Increased from 1 → 5 seconds: ODL needs time to tear down
-                        # the NETCONF session and release the node from operational DS
-                        await asyncio.sleep(5)
-                        # Verify the stale node is actually gone before proceeding
-                        verify_status = await self.get_connection_status(device.node_id)
-                        if verify_status.get("mounted"):
-                            logger.warning(
-                                f"Stale node {device.node_id} still visible in ODL after DELETE. "
-                                "Proceeding with remount anyway — ODL may clean up asynchronously."
-                            )
-                    except Exception as cleanup_err:
-                        logger.warning(f"Failed to cleanup stale mount: {cleanup_err}")
+                    await self._delete_node_from_odl(device.node_id)
+                    # Give ODL time to tear down the NETCONF session
+                    await asyncio.sleep(5)
             
             # 4. Build mount payload
             payload = self._build_mount_payload(device, credentials.deviceUsername, plain_pw)
@@ -221,9 +233,11 @@ class OdlMountService:
             )
             
             logger.info(f"Mounting device {device.node_id} to ODL...")
-            response = await self.odl_client.send(spec)
+            await self.odl_client.send(spec)
             
-            # 6. Update database (ใช้ device.id เพราะต้องเป็น UUID เสมอ)
+            # 6. Update database — PUT สำเร็จ = mount entry created
+            # Connection status จะเป็น "CONNECTING" ซึ่งเป็นเรื่องปกติ
+            # (ODL ต้องใช้เวลา 30-120 วินาทีในการ download YANG modules)
             await prisma.devicenetwork.update(
                 where={"id": device.id},
                 data={
@@ -233,37 +247,38 @@ class OdlMountService:
                 }
             )
             
-            # 7. Wait and check connection status
-            await asyncio.sleep(2)  # รอให้ ODL connect
+            # 7. Quick check — ไม่ block นาน, ใช้ wait-ready endpoint แทน
+            await asyncio.sleep(3)
             status = await self.get_connection_status(device.node_id)
+            connection_status = status.get("connection_status", "connecting")
             
-            # 8. Update final status
-            connection_status = status.get("connection_status", "unknown")
-            device_status = "ONLINE" if connection_status == "connected" else "OFFLINE"
-            db_status = map_odl_status_to_enum(connection_status)
+            # 8. Update final status (if already resolved)
+            if connection_status == "connected":
+                await prisma.devicenetwork.update(
+                    where={"id": device.id},
+                    data={
+                        "odl_connection_status": "CONNECTED",
+                        "status": "ONLINE",
+                        "last_synced_at": datetime.utcnow()
+                    }
+                )
             
-            await prisma.devicenetwork.update(
-                where={"id": device.id},
-                data={
-                    "odl_connection_status": db_status,
-                    "status": device_status,
-                    "last_synced_at": datetime.utcnow()
-                }
-            )
-            
-            is_connected = connection_status == "connected"
-            
+            # mount_device returns success=True if PUT succeeded,
+            # regardless of whether ODL has finished connecting yet.
+            # Use wait-ready or mount_and_wait for full connection guarantee.
             return {
-                "success": is_connected,
+                "success": True,
                 "message": (
                     f"Device {device.node_id} mounted and connected"
-                    if is_connected
-                    else f"Device {device.node_id} mount request sent but status is '{connection_status}'"
+                    if connection_status == "connected"
+                    else f"Device {device.node_id} mount request sent (status: {connection_status}). "
+                         "Use GET /wait-ready to poll until fully connected."
                 ),
                 "node_id": device.node_id,
+                "device_id": device.id,
                 "connection_status": connection_status,
-                "device_status": device_status,
-                "ready_for_intent": is_connected,
+                "device_status": "ONLINE" if connection_status == "connected" else "CONNECTING",
+                "ready_for_intent": connection_status == "connected",
             }
             
         except Exception as e:
@@ -280,7 +295,7 @@ class OdlMountService:
                             "status": "OFFLINE"
                         }
                     )
-                except:
+                except Exception:
                     pass
             
             raise
@@ -311,20 +326,33 @@ class OdlMountService:
             if not device.node_id:
                 raise ValueError("node_id is required for unmounting")
             
-            # 2. Send unmount request to ODL (DELETE from config datastore)
-            node_path = f"{self.TOPOLOGY_PATH}/node={device.node_id}"
+            # 2. Check if actually mounted before sending DELETE
+            odl_status = await self.get_connection_status(device.node_id)
             
-            spec = RequestSpec(
-                method="DELETE",
-                path=node_path,
-                datastore="config",
-                headers={"Accept": "application/yang-data+json"}
-            )
+            if not odl_status.get("mounted"):
+                # Node not in ODL — just sync DB and return success
+                logger.info(f"Device {device.node_id} is not mounted in ODL — syncing DB only")
+                await prisma.devicenetwork.update(
+                    where={"id": device.id},
+                    data={
+                        "odl_mounted": False,
+                        "odl_connection_status": "UNABLE_TO_CONNECT",
+                        "status": "OFFLINE",
+                        "last_synced_at": datetime.utcnow()
+                    }
+                )
+                return {
+                    "success": True,
+                    "message": f"Device {device.node_id} was already unmounted (DB synced)",
+                    "node_id": device.node_id,
+                }
             
+            # 3. Send unmount request to ODL (DELETE from config datastore)
+            # _delete_node_from_odl handles 404 gracefully
             logger.info(f"Unmounting device {device.node_id} from ODL...")
-            await self.odl_client.send(spec)
+            await self._delete_node_from_odl(device.node_id)
             
-            # 3. Verify ODL actually removed the node from operational datastore
+            # 4. Verify ODL actually removed the node from operational datastore
             # ODL may take a few seconds to tear down the NETCONF session
             await asyncio.sleep(3)
             verify_status = await self.get_connection_status(device.node_id)
@@ -337,7 +365,7 @@ class OdlMountService:
             else:
                 logger.info(f"Node {device.node_id} confirmed removed from ODL operational DS.")
             
-            # 4. Update database (ใช้ device.id เพราะต้องเป็น UUID เสมอ)
+            # 5. Update database
             await prisma.devicenetwork.update(
                 where={"id": device.id},
                 data={
@@ -402,6 +430,11 @@ class OdlMountService:
                 "port": node.get("netconf-node-topology:port")
             }
             
+        except OdlRequestError as e:
+            if e.status_code == 404:
+                return {"mounted": False, "connection_status": "not-mounted"}
+            logger.debug(f"Node {node_id} status check error: {e}")
+            return {"mounted": False, "connection_status": "not-mounted"}
         except Exception as e:
             logger.debug(f"Node {node_id} not found in ODL: {e}")
             return {"mounted": False, "connection_status": "not-mounted"}
@@ -438,7 +471,7 @@ class OdlMountService:
             is_mounted = status.get("mounted", False)
             ready_for_intent = is_connected and is_mounted
             
-            # 4. Update database (ใช้ device.id เพราะต้องเป็น UUID เสมอ)
+            # 4. Update database
             device_status = "ONLINE" if is_connected else "OFFLINE"
             db_status = map_odl_status_to_enum(status.get("connection_status", "unknown"))
             
@@ -553,6 +586,7 @@ class OdlMountService:
     ) -> Dict[str, Any]:
         """
         Mount device และรอจนกว่าจะ connected (หรือ timeout)
+        ใช้ per-device lock เพื่อป้องกัน concurrent mount/unmount
         
         Args:
             node_id: ODL node-id (เช่น "CSR1")
@@ -563,14 +597,36 @@ class OdlMountService:
         Returns:
             Mount result พร้อม final connection status
         """
-        # 1. Mount
+        lock = self._get_device_lock(node_id)
+        async with lock:
+            return await self._mount_and_wait_impl(
+                node_id, user_id, max_wait_seconds, check_interval
+            )
+
+    async def _mount_and_wait_impl(
+        self,
+        node_id: str,
+        user_id: str,
+        max_wait_seconds: int,
+        check_interval: int,
+    ) -> Dict[str, Any]:
+        """Internal implementation of mount_and_wait (runs under device lock)."""
+        prisma = get_prisma_client()
+
+        # 1. Mount — mount_device returns device_id so we don't need to query again
         mount_result = await self.mount_device(node_id, user_id)
         
         if not mount_result.get("success"):
             return mount_result
         
-        # 2. Get device for DB updates
-        device = await self._find_device(node_id)
+        # Already connected during mount? Return immediately
+        if mount_result.get("connection_status") == "connected":
+            mount_result["ready_for_intent"] = True
+            mount_result["wait_time_seconds"] = 0
+            return mount_result
+        
+        # 2. Use device_id from mount_result (avoid duplicate DB query)
+        device_id = mount_result.get("device_id")
         
         # 3. Wait for connection
         elapsed = 0
@@ -578,12 +634,10 @@ class OdlMountService:
             status = await self.get_connection_status(node_id)
             connection_status = status.get("connection_status")
 
-            
             if connection_status == "connected":
                 # Update DB and return success
-                prisma = get_prisma_client()
                 await prisma.devicenetwork.update(
-                    where={"id": device.id},
+                    where={"id": device_id},
                     data={
                         "odl_connection_status": "CONNECTED",
                         "status": "ONLINE",
@@ -595,6 +649,7 @@ class OdlMountService:
                     "success": True,
                     "message": f"Device {node_id} mounted and connected",
                     "node_id": node_id,
+                    "device_id": device_id,
                     "connection_status": "connected",
                     "device_status": "ONLINE",
                     "ready_for_intent": True,
@@ -602,9 +657,8 @@ class OdlMountService:
                 }
             
             elif connection_status == "unable-to-connect":
-                prisma = get_prisma_client()
                 await prisma.devicenetwork.update(
-                    where={"id": device.id},
+                    where={"id": device_id},
                     data={
                         "odl_mounted": False,
                         "odl_connection_status": "UNABLE_TO_CONNECT",
@@ -617,6 +671,7 @@ class OdlMountService:
                     "success": False,
                     "message": f"Device {node_id} unable to connect",
                     "node_id": node_id,
+                    "device_id": device_id,
                     "connection_status": "unable-to-connect",
                     "device_status": "OFFLINE",
                     "ready_for_intent": False
@@ -629,12 +684,13 @@ class OdlMountService:
         # Timeout
         final_status = await self.get_connection_status(node_id)
         
-        prisma = get_prisma_client()
         await prisma.devicenetwork.update(
-            where={"id": device.id},
+            where={"id": device_id},
             data={
-                "odl_mounted": False,
-                "odl_connection_status": map_odl_status_to_enum(final_status.get("connection_status", "unknown")),
+                "odl_mounted": True,
+                "odl_connection_status": map_odl_status_to_enum(
+                    final_status.get("connection_status", "unknown")
+                ),
                 "status": "OFFLINE",
                 "last_synced_at": datetime.utcnow()
             }
@@ -644,7 +700,60 @@ class OdlMountService:
             "success": False,
             "message": f"Timeout waiting for connection ({max_wait_seconds}s)",
             "node_id": node_id,
+            "device_id": device_id,
             "connection_status": final_status.get("connection_status", "unknown"),
             "device_status": "OFFLINE",
             "ready_for_intent": False
         }
+
+    async def force_remount(
+        self,
+        node_id: str,
+        user_id: str,
+        max_wait_seconds: int = 120,
+        cleanup_wait: int = 10,
+    ) -> Dict[str, Any]:
+        """
+        Force-remount a stuck device.
+        ใช้ per-device lock + ย้าย logic จาก API layer เข้ามาใน service layer
+        เพื่อให้จัดการ state ได้ดีขึ้น
+        """
+        lock = self._get_device_lock(node_id)
+        async with lock:
+            logger.info(f"[force-remount] Starting force-remount for {node_id}")
+
+            # Step 1: Hard-delete from ODL config (handles 404 gracefully)
+            try:
+                await self._delete_node_from_odl(node_id)
+                logger.info(f"[force-remount] Deleted {node_id} from ODL config")
+            except Exception as e:
+                logger.warning(f"[force-remount] Delete step failed for {node_id}: {e}")
+
+            # Step 2: Update DB to reflect unmounted state
+            device = await self._find_device(node_id)
+            if device:
+                prisma = get_prisma_client()
+                await prisma.devicenetwork.update(
+                    where={"id": device.id},
+                    data={
+                        "odl_mounted": False,
+                        "odl_connection_status": "UNABLE_TO_CONNECT",
+                        "status": "OFFLINE",
+                    }
+                )
+
+            # Step 3: Wait for ODL session teardown
+            logger.info(f"[force-remount] Waiting {cleanup_wait}s for ODL session teardown")
+            await asyncio.sleep(cleanup_wait)
+
+            # Step 4: Verify node is gone
+            residual = await self.get_connection_status(node_id)
+            if residual.get("mounted"):
+                logger.warning(
+                    f"[force-remount] Node {node_id} still visible after {cleanup_wait}s — proceeding"
+                )
+
+            # Step 5: Mount and wait (inside same lock)
+            return await self._mount_and_wait_impl(
+                node_id, user_id, max_wait_seconds, check_interval=5
+            )

@@ -19,27 +19,6 @@ intent_service = IntentService()
 
 @router.post("/intents", response_model=IntentResponse)
 async def handle_intent(req: IntentRequest):
-    """
-    Execute an Intent-based network operation
-    
-    **Error Codes:**
-    - `INTENT_NOT_FOUND`: Intent ไม่มีในระบบ
-    - `DEVICE_NOT_FOUND`: ไม่พบ device
-    - `DEVICE_NOT_CONNECTED`: Device ยังไม่ connected
-    - `INVALID_PARAMS`: Parameters ไม่ถูกต้อง
-    - `ODL_REQUEST_FAILED`: ODL request failed
-    
-    **Example Request:**
-    ```json
-    {
-        "intent": "show.interface",
-        "node_id": "CSR1000vT",
-        "params": {
-            "interface": "GigabitEthernet1"
-        }
-    }
-    ```
-    """
     try:
         # Validate intent exists
         intent = IntentRegistry.get(req.intent)
@@ -108,11 +87,6 @@ async def handle_intent(req: IntentRequest):
 
 @router.get("/intents")
 async def list_supported_intents():
-    """
-    Get all supported intents grouped by OS
-
-    **Always returns 200**
-    """
     try:
         intents_by_os = DriverFactory.get_intents_by_os()
         total = sum(v.get("total", 0) for v in intents_by_os.values())
@@ -136,12 +110,6 @@ async def list_supported_intents():
 
 @router.get("/intents/{intent_name}")
 async def get_intent_info(intent_name: str):
-    """
-    Get detailed information about a specific intent
-    
-    **Error Codes:**
-    - `INTENT_NOT_FOUND`: Intent ไม่มีในระบบ
-    """
     intent = IntentRegistry.get(intent_name)
     if not intent:
         raise HTTPException(
@@ -180,52 +148,6 @@ async def get_intent_info(intent_name: str):
     ),
 )
 async def handle_bulk_intent(req: IntentBulkRequest):
-    """
-    Bulk Intent Execution (Draft & Push)
-
-    **Use Case:** Frontend collects multiple configuration drafts
-    (e.g., set hostname + set interface IP + add static route) and
-    submits them in a single request.
-
-    **Example Request:**
-    ```json
-    {
-        "intents": [
-            {
-                "intent": "system.set_hostname",
-                "node_id": "CSR1000vT",
-                "params": { "hostname": "CORE-RTR-01" }
-            },
-            {
-                "intent": "interface.set_ipv4",
-                "node_id": "CSR1000vT",
-                "params": { "interface": "GigabitEthernet2", "ip": "10.0.0.1", "mask": "255.255.255.0" }
-            },
-            {
-                "intent": "routing.static_route.add",
-                "node_id": "CSR1000vT",
-                "params": { "prefix": "192.168.1.0", "mask": "255.255.255.0", "next_hop": "10.0.0.2" }
-            }
-        ]
-    }
-    ```
-
-    **Example Response (partial failure at index 1):**
-    ```json
-    {
-        "success": false,
-        "total": 3,
-        "succeeded": 1,
-        "failed": 1,
-        "cancelled": 1,
-        "results": [
-            { "index": 0, "status": "SUCCESS", "intent": "system.set_hostname", ... },
-            { "index": 1, "status": "FAILED",  "intent": "interface.set_ipv4", "error": "..." },
-            { "index": 2, "status": "CANCELLED", "intent": "routing.static_route.add", "error": "Cancelled due to previous failure" }
-        ]
-    }
-    ```
-    """
     try:
         result = await intent_service.handle_bulk(req)
 

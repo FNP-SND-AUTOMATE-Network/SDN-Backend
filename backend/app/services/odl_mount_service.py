@@ -385,7 +385,10 @@ class OdlMountService:
     
     async def get_connection_status(self, node_id: str) -> Dict[str, Any]:
         """
-        ดึง connection status ของ node จาก ODL
+        ดึง connection status ของ node จาก ODL (operational datastore เท่านั้น)
+        
+        ใช้ ?content=nonconfig เพื่อ filter เฉพาะ operational data
+        ซึ่งมี netconf-node-topology:connection-status ที่บอก status จริง
         
         Args:
             node_id: ODL node-id
@@ -399,12 +402,14 @@ class OdlMountService:
             }
         """
         try:
-            node_path = f"{self.TOPOLOGY_PATH}/node={node_id}"
+            # ?content=nonconfig → ดึงเฉพาะ operational data (ไม่เอา config ปนมา)
+            # ทำให้ได้ connection-status ที่แม่นยำจาก ODL
+            node_path = f"{self.TOPOLOGY_PATH}/node={node_id}?content=nonconfig"
             
             spec = RequestSpec(
                 method="GET",
                 path=node_path,
-                datastore="operational",  # ใช้ operational เพื่อดู actual status
+                datastore="config",  # RFC-8040: /rests/data/ (query param จัดการ filter เอง)
                 headers={"Accept": "application/yang-data+json"}
             )
             
@@ -417,14 +422,16 @@ class OdlMountService:
             
             node = node_list[0] if isinstance(node_list, list) else node_list
             
+            connection_status = node.get(
+                "netconf-node-topology:connection-status",
+                "unknown"
+            )
+            
             return {
                 "mounted": True,
-                "connection_status": node.get(
-                    "netconf-node-topology:connection-status",
-                    "unknown"
-                ),
+                "connection_status": connection_status,
                 "host": node.get("netconf-node-topology:host"),
-                "port": node.get("netconf-node-topology:port")
+                "port": node.get("netconf-node-topology:port"),
             }
             
         except OdlRequestError as e:

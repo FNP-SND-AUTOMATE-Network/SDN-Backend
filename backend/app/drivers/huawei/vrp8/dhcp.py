@@ -34,22 +34,22 @@ class HuaweiDhcpDriver(BaseDriver):
         mount = odl_mount_base(device.node_id)
 
         if intent == Intents.DHCP.CREATE_POOL:
-            return self._build_dhcp_create_pool(mount, params)
+            return self._build_dhcp_create_pool(mount, params, is_update=False)
         
         if intent == Intents.DHCP.DELETE_POOL:
             return self._build_dhcp_delete_pool(mount, params)
         
         if intent == Intents.DHCP.UPDATE_POOL:
-            return self._build_dhcp_update_pool(mount, params)
+            return self._build_dhcp_create_pool(mount, params, is_update=True)
         
         if intent == Intents.SHOW.DHCP_POOLS:
             return self._build_show_dhcp_pools(mount)
 
         raise UnsupportedIntent(intent, os_type=device.os_type)
 
-    def _build_dhcp_create_pool(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+    def _build_dhcp_create_pool(self, mount: str, params: Dict[str, Any], is_update: bool = False) -> RequestSpec:
         """
-        Create DHCP pool using huawei-ip-pool module.
+        Create or Update DHCP pool using huawei-ip-pool module.
         
         VRP8 YANG Path: /huawei-ip-pool:ip-pool/global-pools/global-pool={poolName}
         
@@ -70,28 +70,39 @@ class HuaweiDhcpDriver(BaseDriver):
         dns_servers = params.get("dns_servers", [])
         lease_days = params.get("lease_days", 1)
         
-        if not pool_name or not gateway or not mask:
-            raise DriverBuildError("params require pool_name, gateway, mask")
-        
-        if not start_ip or not end_ip:
-            raise DriverBuildError("params require start_ip, end_ip")
+        if not pool_name:
+            raise DriverBuildError("params require pool_name")
+            
+        if not is_update:
+            if not gateway or not mask:
+                raise DriverBuildError("params require pool_name, gateway, mask")
+            if not start_ip or not end_ip:
+                raise DriverBuildError("params require start_ip, end_ip")
         
         encoded_pool = urllib.parse.quote(pool_name, safe='')
         path = f"{mount}/huawei-ip-pool:ip-pool/global-pools/global-pool={encoded_pool}"
         
         # Build pool configuration
-        pool_config = {
-            "pool-name": pool_name,
-            "gateway": {
+        pool_config: Dict[str, Any] = {
+            "pool-name": pool_name
+        }
+        
+        if gateway and mask:
+            pool_config["gateway"] = {
                 "ip-address": gateway,
                 "mask": mask
-            },
-            "section": [{
+            }
+        elif (gateway and not mask) or (mask and not gateway):
+            raise DriverBuildError("Both gateway and mask must be provided together")
+            
+        if start_ip and end_ip:
+            pool_config["section"] = [{
                 "section-id": 0,
                 "start-ip-address": start_ip,
                 "end-ip-address": end_ip
             }]
-        }
+        elif (start_ip and not end_ip) or (end_ip and not start_ip):
+            raise DriverBuildError("Both start_ip and end_ip must be provided together")
         
         # Add DNS servers if provided
         if dns_servers:
@@ -142,10 +153,6 @@ class HuaweiDhcpDriver(BaseDriver):
             intent=Intents.DHCP.DELETE_POOL,
             driver=self.name
         )
-    
-    def _build_dhcp_update_pool(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
-        """Update DHCP pool (same as create with PATCH)"""
-        return self._build_dhcp_create_pool(mount, params)
     
     def _build_show_dhcp_pools(self, mount: str) -> RequestSpec:
         """Get all DHCP pools"""

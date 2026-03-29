@@ -598,21 +598,21 @@ class ZabbixNotificationService:
             )
             return False
 
-        # Skip no-op (avoid unnecessary DB writes)
-        if interface.status == new_status:
-            return False
-
         old_status = interface.status
-        await prisma.interface.update(
-            where={"id": interface.id},
-            data={"status": new_status},
-        )
-        logger.info(
-            f"[ZabbixDB] Interface {device.device_name}/{interface.name}: "
-            f"{old_status} → {new_status} (zabbix name: {iface_name})"
-        )
+        changed = False
 
-        # Broadcast to WebSocket for real-time Frontend update
+        if old_status != new_status:
+            await prisma.interface.update(
+                where={"id": interface.id},
+                data={"status": new_status},
+            )
+            logger.info(
+                f"[ZabbixDB] Interface {device.device_name}/{interface.name}: "
+                f"{old_status} → {new_status} (zabbix name: {iface_name})"
+            )
+            changed = True
+
+        # Always broadcast to WebSocket even if DB didn't change (Frontend might need it to show toasts)
         try:
             await ws_manager.broadcast({
                 "type": "interface_status_change",
@@ -628,7 +628,7 @@ class ZabbixNotificationService:
         except Exception:
             pass
 
-        return True
+        return changed
 
     async def _handle_reachability_event(
         self, prisma, device, event: NormalizedZabbixEvent
@@ -639,20 +639,21 @@ class ZabbixNotificationService:
         """
         new_status = "ONLINE" if event.is_resolved else "OFFLINE"
 
-        if device.status == new_status:
-            return False
-
         old_status = device.status
-        await prisma.devicenetwork.update(
-            where={"id": device.id},
-            data={"status": new_status},
-        )
-        logger.info(
-            f"[ZabbixDB] Device {device.device_name}: "
-            f"{old_status} → {new_status} (ICMP reachability)"
-        )
+        changed = False
+        
+        if old_status != new_status:
+            await prisma.devicenetwork.update(
+                where={"id": device.id},
+                data={"status": new_status},
+            )
+            logger.info(
+                f"[ZabbixDB] Device {device.device_name}: "
+                f"{old_status} → {new_status} (ICMP reachability)"
+            )
+            changed = True
 
-        # Broadcast to WebSocket
+        # Always broadcast to WebSocket even if DB didn't change (Frontend needs it)
         try:
             await ws_manager.broadcast({
                 "type": "device_status_change",
@@ -666,7 +667,7 @@ class ZabbixNotificationService:
         except Exception:
             pass
 
-        return True
+        return changed
 
     # ────────────────────────────────────────────────────────────────
     # History & Stats

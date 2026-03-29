@@ -46,7 +46,7 @@ class CiscoDhcpDriver(BaseDriver):
         mount = odl_mount_base(device.node_id)
 
         if intent == Intents.DHCP.CREATE_POOL:
-            return self._build_dhcp_create_pool(mount, params)
+            return self._build_dhcp_create_pool(mount, params, is_update=False)
 
         if intent == Intents.DHCP.DELETE_POOL:
             return self._build_dhcp_delete_pool(mount, params)
@@ -55,7 +55,7 @@ class CiscoDhcpDriver(BaseDriver):
             return self._build_dhcp_delete_all(mount)
 
         if intent == Intents.DHCP.UPDATE_POOL:
-            return self._build_dhcp_create_pool(mount, params)
+            return self._build_dhcp_create_pool(mount, params, is_update=True)
 
         if intent == Intents.DHCP.ADD_EXCLUDED_ADDRESS:
             return self._build_dhcp_add_excluded_address(mount, params)
@@ -69,9 +69,9 @@ class CiscoDhcpDriver(BaseDriver):
         raise UnsupportedIntent(intent, os_type=device.os_type)
 
     # ─── CREATE / UPDATE POOL ────────────────────────────────────────
-    def _build_dhcp_create_pool(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+    def _build_dhcp_create_pool(self, mount: str, params: Dict[str, Any], is_update: bool = False) -> RequestSpec:
         """
-        Create DHCP pool via PATCH on .../ip/dhcp
+        Create or Update DHCP pool via PATCH on .../ip/dhcp
 
         Params:
             pool_name       (required): Pool ID เช่น "HinKong_BayView_ZoneA"
@@ -121,24 +121,34 @@ class CiscoDhcpDriver(BaseDriver):
             except Exception:
                 pass
 
-        if not pool_name or not network or not mask or not default_router:
-            raise DriverBuildError(
-                "params require pool_name, network, mask, default_router (or unified gateway/start_ip/end_ip)"
-            )
+        if not pool_name:
+            raise DriverBuildError("params require pool_name")
+
+        if not is_update:
+            if not network or not mask or not default_router:
+                raise DriverBuildError(
+                    "params require pool_name, network, mask, default_router (or unified gateway/start_ip/end_ip)"
+                )
 
         # ── Build pool entry ──
         pool_entry: Dict[str, Any] = {
             "id": pool_name,
-            "network": {
+        }
+        
+        if network and mask:
+            pool_entry["network"] = {
                 "primary-network": {
                     "number": network,
                     "mask": mask,
                 }
-            },
-            "default-router": {
+            }
+        elif (network and not mask) or (mask and not network):
+            raise DriverBuildError("Both network and mask must be provided together")
+
+        if default_router:
+            pool_entry["default-router"] = {
                 "default-router-list": [default_router]
-            },
-        }
+            }
 
         # DNS servers (optional)
         if dns_servers:

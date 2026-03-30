@@ -26,8 +26,6 @@ async def get_backups(
     page_size: int = Query(20, ge=1, le=100, description="Number of items per page"),
     status: Optional[str] = Query(None, description="Filter by status"),
     search: Optional[str] = Query(None, description="Search by backup_name, description"),
-    policy_id: Optional[str] = Query(None, description="Filter by Policy ID"),
-    os_id: Optional[str] = Query(None, description="Filter by OS ID"),
     auto_backup: Optional[bool] = Query(None, description="Filter by auto_backup"),
     include_usage: bool = Query(False, description="Include usage count"),
     current_user: Dict[str, Any] = Depends(get_current_user),
@@ -39,8 +37,6 @@ async def get_backups(
             page_size=page_size,
             status=status,
             search=search,
-            policy_id=policy_id,
-            os_id=os_id,
             auto_backup=auto_backup,
             include_usage=include_usage
         )
@@ -94,7 +90,7 @@ async def create_backup(
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have permission to create a backup"
+                detail="You do not have permission to manage backup profiles."
             )
 
         backup = await backup_svc.create_backup(backup_data)
@@ -102,11 +98,11 @@ async def create_backup(
         if not backup:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Error in create_backup"
+                detail="Failed to create the backup profile due to an internal error."
             )
 
         return BackupCreateResponse(
-            message="Backup created successfully",
+            message="Backup profile created and scheduled successfully.",
             backup=backup
         )
 
@@ -120,7 +116,7 @@ async def create_backup(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error in create_backup: {str(e)}"
+            detail=f"An unexpected error occurred while processing the backup creation: {str(e)}"
         )
 
 @router.put("/{backup_id}", response_model=BackupUpdateResponse)
@@ -134,7 +130,7 @@ async def update_backup(
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have permission to update a backup"
+                detail="You do not have permission to update a backup profile."
             )
 
         backup = await backup_svc.update_backup(backup_id, update_data)
@@ -142,11 +138,11 @@ async def update_backup(
         if not backup:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Error in update_backup"
+                detail="Failed to update the backup profile due to an internal error."
             )
 
         return BackupUpdateResponse(
-            message="Backup updated successfully",
+            message="Backup profile updated and schedule refreshed successfully.",
             backup=backup
         )
 
@@ -160,7 +156,7 @@ async def update_backup(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error in update_backup: {str(e)}"
+            detail=f"An unexpected error occurred while updating the backup profile: {str(e)}"
         )
 
 @router.delete("/{backup_id}", response_model=BackupDeleteResponse)
@@ -175,13 +171,13 @@ async def delete_backup(
             if current_user["role"] != "OWNER":
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You do not have permission to delete a backup"
+                    detail="You do not have permission to force delete a backup profile."
                 )
         else:
             if current_user["role"] not in ["ADMIN", "OWNER"]:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You do not have permission to delete a backup"
+                    detail="You do not have permission to delete a backup profile."
                 )
 
         success = await backup_svc.delete_backup(backup_id, force=force)
@@ -189,11 +185,11 @@ async def delete_backup(
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Error in delete_backup"
+                detail="Failed to delete the backup profile due to an internal error."
             )
 
         return BackupDeleteResponse(
-            message="Backup deleted successfully"
+            message="Backup profile and associated schedule deleted successfully."
         )
 
     except ValueError as e:

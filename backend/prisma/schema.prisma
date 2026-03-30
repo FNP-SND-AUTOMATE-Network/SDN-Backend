@@ -367,7 +367,6 @@ model OperatingSystem {
   description String?
 
   deviceNetworks DeviceNetwork[]
-  backups        Backup[]
   files          OSFile[]
 
   // Many-to-Many relation with Tags
@@ -476,7 +475,6 @@ model Policy {
   parent_policy  Policy?         @relation("PolicyHierarchy", fields: [parent_policy_id], references: [id], onDelete: SetNull)
   child_policies Policy[]        @relation("PolicyHierarchy")
   deviceNetworks DeviceNetwork[]
-  backups        Backup[]
 
   createdBy     String? @db.Uuid
   createdByUser User?   @relation(fields: [createdBy], references: [id], onDelete: SetNull)
@@ -493,22 +491,25 @@ enum PolicyType {
   OTHER
 }
 
+enum ScheduleType {
+  DAILY
+  WEEKLY
+  CUSTOM_CRON
+  NONE
+}
+
 // ========= Backup =========
 model Backup {
   id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   backup_name String       @unique
   description String?
-  policy_id   String?      @db.Uuid
   status      BackupStatus @default(ONLINE)
   auto_backup Boolean      @default(false)
 
+  schedule_type   ScheduleType @default(NONE)
   cron_expression String? // e.g. "0 0 * * *" (run every midnight)
   retention_days  Int     @default(30) // How many days to keep backup records
 
-  os_id           String?          @db.Uuid
-  operatingSystem OperatingSystem? @relation(fields: [os_id], references: [id], onDelete: SetNull)
-
-  policy         Policy?              @relation(fields: [policy_id], references: [id], onDelete: SetNull)
   deviceNetworks DeviceNetwork[]
   records        DeviceBackupRecord[]
 

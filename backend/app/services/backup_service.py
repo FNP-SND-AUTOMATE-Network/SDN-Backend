@@ -3,8 +3,7 @@ from app.models.backup import (
     BackupCreate,
     BackupUpdate,
     BackupResponse,
-    RelatedPolicyInfoBackup,
-    RelatedOSInfoBackup
+    RelatedDeviceBackup
 )
 
 class BackupService:
@@ -23,67 +22,54 @@ class BackupService:
             if existing_backup:
                 raise ValueError(f"ชื่อ Backup '{backup_data.backup_name}' มีอยู่ในระบบแล้ว")
 
-            # ตรวจสอบ foreign keys
-            if backup_data.policy_id:
-                policy = await self.prisma.policy.find_unique(where={"id": backup_data.policy_id})
-                if not policy:
-                    raise ValueError(f"ไม่พบ Policy ID: {backup_data.policy_id}")
-
-            if backup_data.os_id:
-                os = await self.prisma.operatingsystem.find_unique(where={"id": backup_data.os_id})
-                if not os:
-                    raise ValueError(f"ไม่พบ Operating System ID: {backup_data.os_id}")
-
             # สร้าง Backup
             backup = await self.prisma.backup.create(
                 data={
                     "backup_name": backup_data.backup_name,
                     "description": backup_data.description,
-                    "policy_id": backup_data.policy_id,
-                    "os_id": backup_data.os_id,
                     "status": backup_data.status.value,
-                    "auto_backup": backup_data.auto_backup
+                    "auto_backup": backup_data.auto_backup,
+                    "schedule_type": backup_data.schedule_type.value,
+                    "cron_expression": backup_data.cron_expression,
+                    "retention_days": backup_data.retention_days
                 },
                 include={
-                    "policy": True,
-                    "operatingSystem": True
+                    "deviceNetworks": True
                 }
             )
 
-            policy_info = None
-            if backup.policy:
-                policy_info = RelatedPolicyInfoBackup(
-                    id=backup.policy.id,
-                    policy_name=backup.policy.policy_name
-                )
+            devices_list = []
+            if hasattr(backup, 'deviceNetworks') and backup.deviceNetworks:
+                for d in backup.deviceNetworks:
+                    devices_list.append(RelatedDeviceBackup(id=d.id, device_name=d.device_name))
 
-            os_info = None
-            if backup.operatingSystem:
-                os_info = RelatedOSInfoBackup(
-                    id=backup.operatingSystem.id,
-                    os_type=backup.operatingSystem.os_type
-                )
+            from app.core.scheduler import scheduler_manager
+            if backup.auto_backup and str(backup.schedule_type) != 'NONE' and backup.cron_expression:
+                try:
+                    scheduler_manager.add_or_update_backup_job(backup.id, backup.cron_expression)
+                except Exception as e:
+                    print(f"Scheduler error for new backup {backup.id}: {e}")
 
             return BackupResponse(
                 id=backup.id,
                 backup_name=backup.backup_name,
                 description=backup.description,
-                policy_id=backup.policy_id,
-                os_id=backup.os_id,
                 status=backup.status,
                 auto_backup=backup.auto_backup,
+                schedule_type=backup.schedule_type,
+                cron_expression=backup.cron_expression,
+                retention_days=backup.retention_days,
                 created_at=backup.createdAt,
                 updated_at=backup.updatedAt,
-                policy=policy_info,
-                operating_system=os_info,
+                devices=devices_list,
                 device_count=0
             )
 
         except Exception as e:
             print(f"Error creating backup: {e}")
             if "มีอยู่ในระบบแล้ว" in str(e) or "ไม่พบ" in str(e):
-                raise e
-            return None
+                raise ValueError(str(e))
+            raise e
 
     async def get_backups(
         self,
@@ -91,8 +77,6 @@ class BackupService:
         page_size: int = 20,
         status: Optional[str] = None,
         search: Optional[str] = None,
-        policy_id: Optional[str] = None,
-        os_id: Optional[str] = None,
         auto_backup: Optional[bool] = None,
         include_usage: bool = False
     ) -> tuple[List[BackupResponse], int]:
@@ -102,12 +86,6 @@ class BackupService:
             
             if status:
                 where_conditions["status"] = status
-            
-            if policy_id:
-                where_conditions["policy_id"] = policy_id
-            
-            if os_id:
-                where_conditions["os_id"] = os_id
             
             if auto_backup is not None:
                 where_conditions["auto_backup"] = auto_backup
@@ -122,11 +100,8 @@ class BackupService:
             skip = (page - 1) * page_size
             
             include_options: Dict[str, Any] = {
-                "policy": True,
-                "operatingSystem": True
+                "deviceNetworks": True
             }
-            if include_usage:
-                include_options["deviceNetworks"] = True
 
             backups = await self.prisma.backup.find_many(
                 where=where_conditions,
@@ -138,19 +113,10 @@ class BackupService:
 
             backup_responses = []
             for backup in backups:
-                policy_info = None
-                if backup.policy:
-                    policy_info = RelatedPolicyInfoBackup(
-                        id=backup.policy.id,
-                        policy_name=backup.policy.policy_name
-                    )
-
-                os_info = None
-                if backup.operatingSystem:
-                    os_info = RelatedOSInfoBackup(
-                        id=backup.operatingSystem.id,
-                        os_type=backup.operatingSystem.os_type
-                    )
+                devices_list = []
+                if hasattr(backup, 'deviceNetworks') and backup.deviceNetworks:
+                    for d in backup.deviceNetworks:
+                        devices_list.append(RelatedDeviceBackup(id=d.id, device_name=d.device_name))
 
                 device_count = len(backup.deviceNetworks) if hasattr(backup, 'deviceNetworks') and backup.deviceNetworks else 0
                 
@@ -158,14 +124,14 @@ class BackupService:
                     id=backup.id,
                     backup_name=backup.backup_name,
                     description=backup.description,
-                    policy_id=backup.policy_id,
-                    os_id=backup.os_id,
                     status=backup.status,
                     auto_backup=backup.auto_backup,
+                    schedule_type=backup.schedule_type,
+                    cron_expression=backup.cron_expression,
+                    retention_days=backup.retention_days,
                     created_at=backup.createdAt,
                     updated_at=backup.updatedAt,
-                    policy=policy_info,
-                    operating_system=os_info,
+                    devices=devices_list,
                     device_count=device_count
                 ))
 
@@ -179,11 +145,8 @@ class BackupService:
         #ดึงข้อมูล Backup ตาม ID
         try:
             include_options: Dict[str, Any] = {
-                "policy": True,
-                "operatingSystem": True
+                "deviceNetworks": True
             }
-            if include_usage:
-                include_options["deviceNetworks"] = True
 
             backup = await self.prisma.backup.find_unique(
                 where={"id": backup_id},
@@ -193,19 +156,10 @@ class BackupService:
             if not backup:
                 return None
 
-            policy_info = None
-            if backup.policy:
-                policy_info = RelatedPolicyInfoBackup(
-                    id=backup.policy.id,
-                    policy_name=backup.policy.policy_name
-                )
-
-            os_info = None
-            if backup.operatingSystem:
-                os_info = RelatedOSInfoBackup(
-                    id=backup.operatingSystem.id,
-                    os_type=backup.operatingSystem.os_type
-                )
+            devices_list = []
+            if hasattr(backup, 'deviceNetworks') and backup.deviceNetworks:
+                for d in backup.deviceNetworks:
+                    devices_list.append(RelatedDeviceBackup(id=d.id, device_name=d.device_name))
 
             device_count = len(backup.deviceNetworks) if hasattr(backup, 'deviceNetworks') and backup.deviceNetworks else 0
 
@@ -213,14 +167,14 @@ class BackupService:
                 id=backup.id,
                 backup_name=backup.backup_name,
                 description=backup.description,
-                policy_id=backup.policy_id,
-                os_id=backup.os_id,
                 status=backup.status,
                 auto_backup=backup.auto_backup,
+                schedule_type=backup.schedule_type,
+                cron_expression=backup.cron_expression,
+                retention_days=backup.retention_days,
                 created_at=backup.createdAt,
                 updated_at=backup.updatedAt,
-                policy=policy_info,
-                operating_system=os_info,
+                devices=devices_list,
                 device_count=device_count
             )
 
@@ -250,75 +204,70 @@ class BackupService:
             if update_data.description is not None:
                 update_dict["description"] = update_data.description
             
-            if update_data.policy_id is not None:
-                if update_data.policy_id:
-                    policy = await self.prisma.policy.find_unique(where={"id": update_data.policy_id})
-                    if not policy:
-                        raise ValueError(f"ไม่พบ Policy ID: {update_data.policy_id}")
-                update_dict["policy_id"] = update_data.policy_id
-            
-            if update_data.os_id is not None:
-                if update_data.os_id:
-                    os = await self.prisma.operatingsystem.find_unique(where={"id": update_data.os_id})
-                    if not os:
-                        raise ValueError(f"ไม่พบ Operating System ID: {update_data.os_id}")
-                update_dict["os_id"] = update_data.os_id
-            
             if update_data.status is not None:
                 update_dict["status"] = update_data.status.value
             
             if update_data.auto_backup is not None:
                 update_dict["auto_backup"] = update_data.auto_backup
 
+            if update_data.schedule_type is not None:
+                update_dict["schedule_type"] = update_data.schedule_type.value
+
+            if update_data.cron_expression is not None:
+                update_dict["cron_expression"] = update_data.cron_expression
+
+            if update_data.retention_days is not None:
+                update_dict["retention_days"] = update_data.retention_days
+
             if not update_dict:
-                raise ValueError("ไม่มีข้อมูลที่จะอัปเดต")
+                raise ValueError("No data to update")
 
             updated_backup = await self.prisma.backup.update(
                 where={"id": backup_id},
                 data=update_dict,
                 include={
-                    "policy": True,
-                    "operatingSystem": True,
                     "deviceNetworks": True
                 }
             )
 
-            policy_info = None
-            if updated_backup.policy:
-                policy_info = RelatedPolicyInfoBackup(
-                    id=updated_backup.policy.id,
-                    policy_name=updated_backup.policy.policy_name
-                )
-
-            os_info = None
-            if updated_backup.operatingSystem:
-                os_info = RelatedOSInfoBackup(
-                    id=updated_backup.operatingSystem.id,
-                    os_type=updated_backup.operatingSystem.os_type
-                )
+            devices_list = []
+            if hasattr(updated_backup, 'deviceNetworks') and updated_backup.deviceNetworks:
+                for d in updated_backup.deviceNetworks:
+                    devices_list.append(RelatedDeviceBackup(id=d.id, device_name=d.device_name))
 
             device_count = len(updated_backup.deviceNetworks) if updated_backup.deviceNetworks else 0
+
+            device_count = len(updated_backup.deviceNetworks) if updated_backup.deviceNetworks else 0
+            
+            from app.core.scheduler import scheduler_manager
+            if updated_backup.auto_backup and str(updated_backup.schedule_type) != 'NONE' and updated_backup.cron_expression:
+                try:
+                    scheduler_manager.add_or_update_backup_job(updated_backup.id, updated_backup.cron_expression)
+                except Exception as e:
+                    print(f"Scheduler error for updated backup {updated_backup.id}: {e}")
+            else:
+                scheduler_manager.remove_backup_job(updated_backup.id)
 
             return BackupResponse(
                 id=updated_backup.id,
                 backup_name=updated_backup.backup_name,
                 description=updated_backup.description,
-                policy_id=updated_backup.policy_id,
-                os_id=updated_backup.os_id,
                 status=updated_backup.status,
                 auto_backup=updated_backup.auto_backup,
+                schedule_type=updated_backup.schedule_type,
+                cron_expression=updated_backup.cron_expression,
+                retention_days=updated_backup.retention_days,
                 created_at=updated_backup.createdAt,
                 updated_at=updated_backup.updatedAt,
-                policy=policy_info,
-                operating_system=os_info,
+                devices=devices_list,
                 device_count=device_count
             )
 
         except Exception as e:
             print(f"Error updating backup: {e}")
-            if "ไม่พบ" in str(e) or "มีอยู่ในระบบแล้ว" in str(e) or "ไม่มีข้อมูลที่จะอัปเดต" in str(e):
-                raise e
-            return None
+            if "ไม่พบ" in str(e) or "มีอยู่ในระบบแล้ว" in str(e) or "No data to update" in str(e):
+                raise ValueError(str(e))
+            raise e
 
     async def delete_backup(self, backup_id: str, force: bool = False) -> bool:
         #ลบ Backup
@@ -339,11 +288,15 @@ class BackupService:
                 )
 
             await self.prisma.backup.delete(where={"id": backup_id})
+            
+            from app.core.scheduler import scheduler_manager
+            scheduler_manager.remove_backup_job(backup_id)
+            
             return True
 
         except Exception as e:
             print(f"Error deleting backup: {e}")
             if "ไม่พบ Backup" in str(e) or "ไม่สามารถลบ Backup นี้ได้" in str(e):
-                raise e
-            return False
+                raise ValueError(str(e))
+            raise e
 

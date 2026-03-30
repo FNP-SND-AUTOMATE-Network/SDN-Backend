@@ -9,53 +9,55 @@ class BackupStatus(str, Enum):
     MAINTENANCE = "MAINTENANCE"
     OTHER = "OTHER"
 
+class ScheduleType(str, Enum):
+    DAILY = "DAILY"
+    WEEKLY = "WEEKLY"
+    CUSTOM_CRON = "CUSTOM_CRON"
+    NONE = "NONE"
+
 class BackupBase(BaseModel):
-    backup_name: str = Field(..., description="ชื่อ Backup (ต้องไม่ซ้ำ)", min_length=1, max_length=200)
-    description: Optional[str] = Field(None, description="คำอธิบาย Backup", max_length=1000)
-    policy_id: Optional[str] = Field(None, description="Policy ID ที่เชื่อมโยง")
-    os_id: Optional[str] = Field(None, description="Operating System ID ที่เชื่อมโยง")
-    status: BackupStatus = Field(default=BackupStatus.ONLINE, description="สถานะของ Backup")
-    auto_backup: bool = Field(default=False, description="เปิดใช้งาน Auto Backup")
+    backup_name: str = Field(..., description="Backup Profile Name (Must be unique)", min_length=1, max_length=200)
+    description: Optional[str] = Field(None, description="Backup Profile Description", max_length=1000)
+    status: BackupStatus = Field(default=BackupStatus.ONLINE, description="Profile Status")
+    auto_backup: bool = Field(default=False, description="Enable Auto Backup")
+    schedule_type: ScheduleType = Field(default=ScheduleType.NONE, description="Schedule Type")
+    cron_expression: Optional[str] = Field(None, description="Cron expression for scheduling")
+    retention_days: int = Field(default=30, description="Keep backups for this many days")
 
 class BackupCreate(BackupBase):
     pass
 
 class BackupUpdate(BaseModel):
-    backup_name: Optional[str] = Field(None, description="ชื่อ Backup (ต้องไม่ซ้ำ)", min_length=1, max_length=200)
-    description: Optional[str] = Field(None, description="คำอธิบาย Backup", max_length=1000)
-    policy_id: Optional[str] = Field(None, description="Policy ID ที่เชื่อมโยง")
-    os_id: Optional[str] = Field(None, description="Operating System ID ที่เชื่อมโยง")
-    status: Optional[BackupStatus] = Field(None, description="สถานะของ Backup")
-    auto_backup: Optional[bool] = Field(None, description="เปิดใช้งาน Auto Backup")
+    backup_name: Optional[str] = Field(None, description="Backup Profile Name (Must be unique)", min_length=1, max_length=200)
+    description: Optional[str] = Field(None, description="Backup Profile Description", max_length=1000)
+    status: Optional[BackupStatus] = Field(None, description="Profile Status")
+    auto_backup: Optional[bool] = Field(None, description="Enable Auto Backup")
+    schedule_type: Optional[ScheduleType] = Field(None, description="Schedule Type")
+    cron_expression: Optional[str] = Field(None, description="Cron expression for scheduling")
+    retention_days: Optional[int] = Field(None, description="Keep backups for this many days")
 
-class RelatedPolicyInfoBackup(BaseModel):
+class RelatedDeviceBackup(BaseModel):
     id: str
-    policy_name: str
-
-class RelatedOSInfoBackup(BaseModel):
-    id: str
-    os_type: str
+    device_name: str
 
 class BackupResponse(BackupBase):
-    id: str = Field(..., description="ID ของ Backup")
+    id: str = Field(..., description="Backup ID")
     created_at: datetime
     updated_at: datetime
     
-    # Related Info
-    policy: Optional[RelatedPolicyInfoBackup] = None
-    operating_system: Optional[RelatedOSInfoBackup] = None
+    # Related Target Devices
+    devices: list[RelatedDeviceBackup] = Field(default_factory=list, description="Devices using this backup profile")
     
-    # นับจำนวนการใช้งาน
-    device_count: Optional[int] = Field(0, description="จำนวน Device ที่ใช้ Backup นี้")
+    device_count: Optional[int] = Field(0, description="Number of devices using this backup")
 
     class Config:
         from_attributes = True
 
 class BackupListResponse(BaseModel):
-    total: int = Field(..., description="จำนวนทั้งหมด")
-    page: int = Field(..., description="หน้าปัจจุบัน")
-    page_size: int = Field(..., description="ขนาดหน้า")
-    backups: list[BackupResponse] = Field(..., description="รายการ Backup")
+    total: int = Field(..., description="Total profiles")
+    page: int = Field(..., description="Current page")
+    page_size: int = Field(..., description="Page size")
+    backups: list[BackupResponse] = Field(..., description="List of backups")
 
 class BackupCreateResponse(BaseModel):
     message: str

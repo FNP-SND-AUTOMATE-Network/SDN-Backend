@@ -60,6 +60,29 @@ async def lifespan(app: FastAPI):
     await prisma_client.connect()
     set_prisma_client(prisma_client)
 
+    # ── Scheduled Backups ──
+    from app.core.scheduler import scheduler_manager
+    scheduler_manager.start()
+    try:
+        profiles = await prisma_client.backup.find_many(
+            where={
+                "auto_backup": True,
+                "schedule_type": {"not": "NONE"},
+                "cron_expression": {"not": None}
+            }
+        )
+        for profile in profiles:
+            if profile.cron_expression:
+                try:
+                    scheduler_manager.add_or_update_backup_job(
+                        backup_id=profile.id,
+                        cron_expression=profile.cron_expression
+                    )
+                except Exception as e:
+                    logger.error(f"[Scheduler] Failed to register backup job {profile.id} at startup: {e}")
+    except Exception as e:
+        logger.error(f"[Scheduler] Failed to load backup profiles at startup: {e}")
+
     # ── ChatOps: Initialize event-driven pipeline ──
     if app_settings.CHATOPS_ENABLED:
         from app.services.chatops_service import chatops_service  # noqa: F811
@@ -114,6 +137,12 @@ async def lifespan(app: FastAPI):
     if scheduler:
         scheduler.shutdown()
         logger.info("[BG-Sync] Scheduler stopped")
+        
+    try:
+        from app.core.scheduler import scheduler_manager
+        scheduler_manager.shutdown()
+    except Exception as e:
+        logger.error(f"[Shutdown] Backup scheduler cleanup: {e}")
 
     # Close shared ODL HTTP client (class-level singleton)
     try:

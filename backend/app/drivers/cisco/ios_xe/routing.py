@@ -322,11 +322,7 @@ class CiscoRoutingDriver(BaseDriver):
         else:
             payload = {
                 "Cisco-IOS-XE-native:router": {
-                    "Cisco-IOS-XE-ospf:router-ospf": {
-                        "ospf": {
-                            "process-id": [ospf_entry]
-                        }
-                    }
+                    "Cisco-IOS-XE-ospf:ospf": [ospf_entry]
                 }
             }
 
@@ -365,11 +361,7 @@ class CiscoRoutingDriver(BaseDriver):
         else:
             payload = {
                 "Cisco-IOS-XE-native:router": {
-                    "Cisco-IOS-XE-ospf:router-ospf": {
-                        "ospf": {
-                            "process-id": [ospf_entry]
-                        }
-                    }
+                    "Cisco-IOS-XE-ospf:ospf": [ospf_entry]
                 }
             }
 
@@ -396,7 +388,8 @@ class CiscoRoutingDriver(BaseDriver):
         if device_version.startswith("16."):
             path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:ospf={process_id}"
         else:
-            path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf/ospf/process-id={process_id}"
+            # 17.x Also uses the same path as 16.x because 'router-ospf' maps to 'ospf-old'
+            path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:ospf={process_id}"
 
         return RequestSpec(
             method="DELETE",
@@ -511,11 +504,7 @@ class CiscoRoutingDriver(BaseDriver):
         else:
             payload = {
                 "Cisco-IOS-XE-native:router": {
-                    "Cisco-IOS-XE-ospf:router-ospf": {
-                        "ospf": {
-                            "process-id": [ospf_entry]
-                        }
-                    }
+                    "Cisco-IOS-XE-ospf:ospf": [ospf_entry]
                 }
             }
 
@@ -562,11 +551,7 @@ class CiscoRoutingDriver(BaseDriver):
             }
             payload = {
                 "Cisco-IOS-XE-native:router": {
-                    "Cisco-IOS-XE-ospf:router-ospf": {
-                        "ospf": {
-                            "process-id": [ospf_entry]
-                        }
-                    }
+                    "Cisco-IOS-XE-ospf:ospf": [ospf_entry]
                 }
             }
 
@@ -595,7 +580,7 @@ class CiscoRoutingDriver(BaseDriver):
         if device_version.startswith("16."):
             path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:ospf={process_id}/passive-interface/interface={encoded_interface}"
         else:
-            path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf/ospf/process-id={process_id}/passive-interface/interface={encoded_interface}"
+            path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:ospf={process_id}/passive-interface/interface={encoded_interface}"
 
         return RequestSpec(
             method="DELETE",

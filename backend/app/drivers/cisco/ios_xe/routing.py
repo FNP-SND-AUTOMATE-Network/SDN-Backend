@@ -294,22 +294,41 @@ class CiscoRoutingDriver(BaseDriver):
         
         path = f"{mount}/Cisco-IOS-XE-native:native/router"
         
-        payload = {
-            "Cisco-IOS-XE-native:router": {
-                "Cisco-IOS-XE-ospf:ospf": [
-                    {
-                        "id": int(process_id),
-                        "network": [
-                            {
-                                "ip": network,
-                                "mask": wildcard,
-                                "area": int(area)
-                            }
-                        ]
-                    }
-                ]
-            }
+        # Check Version & If-Else mapping
+        device_version = params.get("device_version", "16.")
+        
+        network_entry = {
+            "ip": network,
+            "area": int(area)
         }
+        
+        if device_version.startswith("16."):
+            network_entry["mask"] = wildcard
+        else:
+            # For 17.x or later
+            network_entry["wildcard"] = wildcard
+        
+        ospf_entry = {
+            "id": int(process_id),
+            "network": [network_entry]
+        }
+        
+        if device_version.startswith("16."):
+            payload = {
+                "Cisco-IOS-XE-native:router": {
+                    "Cisco-IOS-XE-ospf:ospf": [ospf_entry]
+                }
+            }
+        else:
+            payload = {
+                "Cisco-IOS-XE-native:router": {
+                    "Cisco-IOS-XE-ospf:router-ospf": {
+                        "ospf": {
+                            "process-id": [ospf_entry]
+                        }
+                    }
+                }
+            }
 
         return RequestSpec(
             method="PATCH",
@@ -331,15 +350,28 @@ class CiscoRoutingDriver(BaseDriver):
         
         path = f"{mount}/Cisco-IOS-XE-native:native/router"
         
+        device_version = params.get("device_version", "16.")
+        
         ospf_entry = {"id": int(process_id)}
         if router_id:
             ospf_entry["router-id"] = router_id
 
-        payload = {
-            "Cisco-IOS-XE-native:router": {
-                "Cisco-IOS-XE-ospf:ospf": [ospf_entry]
+        if device_version.startswith("16."):
+            payload = {
+                "Cisco-IOS-XE-native:router": {
+                    "Cisco-IOS-XE-ospf:ospf": [ospf_entry]
+                }
             }
-        }
+        else:
+            payload = {
+                "Cisco-IOS-XE-native:router": {
+                    "Cisco-IOS-XE-ospf:router-ospf": {
+                        "ospf": {
+                            "process-id": [ospf_entry]
+                        }
+                    }
+                }
+            }
 
         return RequestSpec(
             method="PATCH",
@@ -358,8 +390,13 @@ class CiscoRoutingDriver(BaseDriver):
         if not process_id:
             raise DriverBuildError("params require process_id")
         
+        device_version = params.get("device_version", "16.")
+        
         # DELETE specific OSPF process
-        path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:ospf={process_id}"
+        if device_version.startswith("16."):
+            path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:ospf={process_id}"
+        else:
+            path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf/ospf/process-id={process_id}"
 
         return RequestSpec(
             method="DELETE",
@@ -459,16 +496,28 @@ class CiscoRoutingDriver(BaseDriver):
         
         path = f"{mount}/Cisco-IOS-XE-native:native/router"
         
-        payload = {
-            "Cisco-IOS-XE-native:router": {
-                "Cisco-IOS-XE-ospf:ospf": [
-                    {
-                        "id": int(process_id),
-                        "router-id": router_id
-                    }
-                ]
-            }
+        device_version = params.get("device_version", "16.")
+        ospf_entry = {
+            "id": int(process_id),
+            "router-id": router_id
         }
+        
+        if device_version.startswith("16."):
+            payload = {
+                "Cisco-IOS-XE-native:router": {
+                    "Cisco-IOS-XE-ospf:ospf": [ospf_entry]
+                }
+            }
+        else:
+            payload = {
+                "Cisco-IOS-XE-native:router": {
+                    "Cisco-IOS-XE-ospf:router-ospf": {
+                        "ospf": {
+                            "process-id": [ospf_entry]
+                        }
+                    }
+                }
+            }
 
         return RequestSpec(
             method="PATCH",
@@ -490,18 +539,36 @@ class CiscoRoutingDriver(BaseDriver):
         
         path = f"{mount}/Cisco-IOS-XE-native:native/router"
         
-        payload = {
-            "Cisco-IOS-XE-native:router": {
-                "Cisco-IOS-XE-ospf:ospf": [
-                    {
-                        "id": int(process_id),
-                        "passive-interface": {
-                            "interface": [interface]
+        device_version = params.get("device_version", "16.")
+        
+        if device_version.startswith("16."):
+            ospf_entry = {
+                "id": int(process_id),
+                "passive-interface": {
+                    "interface": [interface]
+                }
+            }
+            payload = {
+                "Cisco-IOS-XE-native:router": {
+                    "Cisco-IOS-XE-ospf:ospf": [ospf_entry]
+                }
+            }
+        else:
+            ospf_entry = {
+                "id": int(process_id),
+                "passive-interface": {
+                    "interface": [{"name": interface}]
+                }
+            }
+            payload = {
+                "Cisco-IOS-XE-native:router": {
+                    "Cisco-IOS-XE-ospf:router-ospf": {
+                        "ospf": {
+                            "process-id": [ospf_entry]
                         }
                     }
-                ]
+                }
             }
-        }
 
         return RequestSpec(
             method="PATCH",
@@ -521,7 +588,14 @@ class CiscoRoutingDriver(BaseDriver):
         if not process_id or not interface:
             raise DriverBuildError("params require process_id, interface")
         
-        path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:ospf={process_id}/passive-interface/interface={interface}"
+        import urllib.parse
+        device_version = params.get("device_version", "16.")
+        encoded_interface = urllib.parse.quote(interface, safe='')
+        
+        if device_version.startswith("16."):
+            path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:ospf={process_id}/passive-interface/interface={encoded_interface}"
+        else:
+            path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf/ospf/process-id={process_id}/passive-interface/interface={encoded_interface}"
 
         return RequestSpec(
             method="DELETE",

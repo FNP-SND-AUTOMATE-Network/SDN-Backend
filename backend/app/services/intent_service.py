@@ -279,6 +279,11 @@ class IntentService:
         if req.intent == Intents.INTERFACE.SET_IPV4 and is_huawei:
             await self._pre_check_huawei_set_ipv4(req.node_id, device, req.params)
         
+        # ── Cisco-specific pre-flight checks ──
+        is_cisco = driver_name and "CISCO" in driver_name.upper()
+        if req.intent.startswith("routing.ospf") and is_cisco:
+            await self._pre_check_cisco_version(req.node_id, req.params)
+        
         # Build RESTCONF request spec
         spec = driver.build(device, req.intent, req.params)
         logger.debug(f"RequestSpec: {spec.method} {spec.path}")
@@ -455,6 +460,34 @@ class IntentService:
         except Exception as diag_err:
             logger.warning(f"[Diagnosis] Failed for {node_id}: {diag_err}")
             return None
+
+    async def _pre_check_cisco_version(
+        self, node_id: str, params: Dict[str, Any]
+    ) -> None:
+        """Fetch Cisco IOS-XE version and inject it into params"""
+        from app.builders.odl_paths import odl_mount_base
+        from app.schemas.request_spec import RequestSpec
+        
+        mount = odl_mount_base(node_id)
+        get_spec = RequestSpec(
+            method="GET",
+            datastore="operational",
+            path=f"{mount}/Cisco-IOS-XE-native:native/version",
+            payload=None,
+            headers={"Accept": "application/yang-data+json"},
+            intent="pre_check.get_version",
+            driver="cisco",
+        )
+        try:
+            logger.info(f"[PreCheck] Fetching OS version for Cisco device {node_id}")
+            resp = await self.client.send(get_spec)
+            version_str = resp.get("Cisco-IOS-XE-native:version", {}).get("version", "16.9")
+        except Exception as e:
+            logger.warning(f"[PreCheck] Failed to fetch Cisco version for {node_id}, defaulting to 16.9: {e}")
+            version_str = "16.9"
+            
+        logger.info(f"[PreCheck] Cisco device {node_id} version detected as: {version_str}")
+        params["device_version"] = version_str
 
     async def _pre_check_huawei_set_ipv4(
         self, node_id: str, device, params: Dict[str, Any]

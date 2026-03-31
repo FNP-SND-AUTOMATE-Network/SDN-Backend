@@ -331,18 +331,16 @@ class CiscoRoutingDriver(BaseDriver):
         if not process_id:
             raise DriverBuildError("params require process_id")
         
-        path = f"{mount}/Cisco-IOS-XE-native:native/router"
+        path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf"
         
         ospf_entry = {"id": int(process_id)}
         if router_id:
             ospf_entry["router-id"] = router_id
 
         payload = {
-            "Cisco-IOS-XE-native:router": {
-                "Cisco-IOS-XE-ospf:router-ospf": {
-                    "ospf": {
-                        "process-id": [ospf_entry]
-                    }
+            "Cisco-IOS-XE-ospf:router-ospf": {
+                "ospf": {
+                    "process-id": [ospf_entry]
                 }
             }
         }
@@ -463,17 +461,15 @@ class CiscoRoutingDriver(BaseDriver):
         if not process_id or not router_id:
             raise DriverBuildError("params require process_id, router_id")
         
-        path = f"{mount}/Cisco-IOS-XE-native:native/router"
+        path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf"
         
         payload = {
-            "Cisco-IOS-XE-native:router": {
-                "Cisco-IOS-XE-ospf:router-ospf": {
-                    "ospf": {
-                        "process-id": [{
-                            "id": int(process_id),
-                            "router-id": router_id
-                        }]
-                    }
+            "Cisco-IOS-XE-ospf:router-ospf": {
+                "ospf": {
+                    "process-id": [{
+                        "id": int(process_id),
+                        "router-id": router_id
+                    }]
                 }
             }
         }
@@ -496,19 +492,17 @@ class CiscoRoutingDriver(BaseDriver):
         if not process_id or not interface:
             raise DriverBuildError("params require process_id, interface")
         
-        path = f"{mount}/Cisco-IOS-XE-native:native/router"
+        path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf"
         
         payload = {
-            "Cisco-IOS-XE-native:router": {
-                "Cisco-IOS-XE-ospf:router-ospf": {
-                    "ospf": {
-                        "process-id": [{
-                            "id": int(process_id),
-                            "passive-interface": {
-                                "interface": [interface]
-                            }
-                        }]
-                    }
+            "Cisco-IOS-XE-ospf:router-ospf": {
+                "ospf": {
+                    "process-id": [{
+                        "id": int(process_id),
+                        "passive-interface": {
+                            "interface": [interface]
+                        }
+                    }]
                 }
             }
         }

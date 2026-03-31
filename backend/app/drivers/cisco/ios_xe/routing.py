@@ -57,7 +57,7 @@ class CiscoRoutingDriver(BaseDriver):
         โดยดึงการตั้งค่า (IP, Auth, Timeout) จากไฟล์ .env
         """
         # 1. ดึงค่าจาก Environment Variables (พร้อมกำหนดค่า Default เผื่อหาไฟล์ .env ไม่เจอ)
-        odl_base_url = os.getenv("ODL_BASE_URL", "http://192.168.1.37:8181").rstrip('/')
+        odl_base_url = os.getenv("ODL_BASE_URL", "http://192.168.1.100:8181").rstrip('/')
         odl_user = os.getenv("ODL_USERNAME", "admin")
         odl_pass = os.getenv("ODL_PASSWORD", "admin")
         odl_timeout = int(os.getenv("ODL_TIMEOUT_SEC", 10))

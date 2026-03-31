@@ -2,6 +2,7 @@
 Cisco Routing Driver
 รองรับ Routing operations สำหรับ Cisco IOS-XE devices
 """
+import os
 import requests
 from requests.auth import HTTPBasicAuth
 from typing import Any, Dict
@@ -53,31 +54,50 @@ class CiscoRoutingDriver(BaseDriver):
     def _fetch_device_version(self, mount: str) -> str:
         """
         ยิง GET ไปที่ OpenDaylight เพื่อเช็ค OS Version ของอุปกรณ์แบบ Real-time
+        โดยดึงการตั้งค่า (IP, Auth, Timeout) จากไฟล์ .env
         """
-        url = f"{mount}/Cisco-IOS-XE-native:native/version"
+        # 1. ดึงค่าจาก Environment Variables (พร้อมกำหนดค่า Default เผื่อหาไฟล์ .env ไม่เจอ)
+        odl_base_url = os.getenv("ODL_BASE_URL", "http://192.168.1.37:8181").rstrip('/')
+        odl_user = os.getenv("ODL_USERNAME", "admin")
+        odl_pass = os.getenv("ODL_PASSWORD", "admin")
+        odl_timeout = int(os.getenv("ODL_TIMEOUT_SEC", 10))
+        
+        # 2. จัดรูปแบบ URL ให้สมบูรณ์
+        if not mount.startswith("http"):
+            # ป้องกันกรณี mount ไม่มี / นำหน้า
+            mount_path = mount if mount.startswith("/") else f"/{mount}"
+            url = f"{odl_base_url}{mount_path}/Cisco-IOS-XE-native:native/version"
+        else:
+            url = f"{mount}/Cisco-IOS-XE-native:native/version"
+            
         headers = {"Accept": "application/yang-data+json"}
         
         try:
-            # ยิง Request ไปเช็ค (อย่าลืมปรับ Auth ให้ตรงกับของระบบคุณ)
+            print(f"\n[DEBUG-OSPF] ยิงเช็คเวอร์ชันไปที่: {url}")
+            
+            # 3. ใช้ค่าที่ดึงมาจาก .env ทั้งหมดในการยิง Request
             response = requests.get(
                 url, 
                 headers=headers, 
-                auth=HTTPBasicAuth('admin', 'admin'), # แนะนำให้ดึงจาก Config ในอนาคต
-                timeout=5 # ตั้ง Timeout เผื่ออุปกรณ์ดาวน์ จะได้ไม่ค้าง
+                auth=HTTPBasicAuth(odl_user, odl_pass),
+                timeout=odl_timeout 
             )
             
             if response.status_code == 200:
                 data = response.json()
-                # ดึงค่า version ออกมา เช่น "16.9" หรือ "17.06.02"
                 version = data.get("Cisco-IOS-XE-native:version")
                 if version:
+                    print(f"[DEBUG-OSPF] ✔️ ดึงเวอร์ชันสำเร็จ! อุปกรณ์นี้คือเวอร์ชัน: {version}\n")
                     return str(version)
-                    
-        except Exception as e:
-            # โยน Log error ไปที่ระบบจัดการ Log ของคุณ
-            print(f"[Warning] Failed to fetch device version: {e}")
+            else:
+                print(f"[DEBUG-OSPF] ❌ ยิงเช็คเวอร์ชันไม่ผ่าน Status: {response.status_code}, Body: {response.text}\n")
+                
+        except requests.exceptions.RequestException as e:
+            # ดักจับ Error จากฝั่ง Network (เช่น Timeout, Connection Refused)
+            print(f"\n[DEBUG-OSPF] 💥 เกิดข้อผิดพลาดด้านเครือข่ายตอนดึงเวอร์ชัน: {e}\n")
             
-        # ถ้าหาไม่ได้ ยิงไม่เข้า หรือ Error ให้ Fallback ไปใช้ Default 
+        # 4. หากมีปัญหาใดๆ จะ Fallback กลับไปที่โครงสร้างของเวอร์ชัน 16 (เพื่อให้ระบบพยายามทำงานต่อ)
+        print("[DEBUG-OSPF] ⚠️ ไม่สามารถดึงเวอร์ชันได้ ระบบจะใช้ Default (v16)")
         return "16."
 
     def build(self, device: DeviceProfile, intent: str, params: Dict[str, Any]) -> RequestSpec:

@@ -117,7 +117,6 @@ class PolicyService:
             }
             if include_usage:
                 include_options["deviceNetworks"] = True
-                include_options["backups"] = True
                 include_options["child_policies"] = True
 
             policies = await self.prisma.policy.find_many(
@@ -147,7 +146,6 @@ class PolicyService:
                     )
 
                 device_count = len(policy.deviceNetworks) if hasattr(policy, 'deviceNetworks') and policy.deviceNetworks else 0
-                backup_count = len(policy.backups) if hasattr(policy, 'backups') and policy.backups else 0
                 child_count = len(policy.child_policies) if hasattr(policy, 'child_policies') and policy.child_policies else 0
                 
                 policy_responses.append(PolicyResponse(
@@ -161,9 +159,9 @@ class PolicyService:
                     created_by_user=created_by_user,
                     parent_policy=parent_policy,
                     device_count=device_count,
-                    backup_count=backup_count,
+                    backup_count=0,
                     child_count=child_count,
-                    total_usage=device_count + backup_count + child_count
+                    total_usage=device_count + child_count
                 ))
 
             return policy_responses, total
@@ -181,7 +179,6 @@ class PolicyService:
             }
             if include_usage:
                 include_options["deviceNetworks"] = True
-                include_options["backups"] = True
                 include_options["child_policies"] = True
 
             policy = await self.prisma.policy.find_unique(
@@ -209,7 +206,6 @@ class PolicyService:
                 )
 
             device_count = len(policy.deviceNetworks) if hasattr(policy, 'deviceNetworks') and policy.deviceNetworks else 0
-            backup_count = len(policy.backups) if hasattr(policy, 'backups') and policy.backups else 0
             child_count = len(policy.child_policies) if hasattr(policy, 'child_policies') and policy.child_policies else 0
 
             return PolicyResponse(
@@ -223,9 +219,9 @@ class PolicyService:
                 created_by_user=created_by_user,
                 parent_policy=parent_policy,
                 device_count=device_count,
-                backup_count=backup_count,
+                backup_count=0,
                 child_count=child_count,
-                total_usage=device_count + backup_count + child_count
+                total_usage=device_count + child_count
             )
 
         except Exception as e:
@@ -281,7 +277,6 @@ class PolicyService:
                     "createdByUser": True,
                     "parent_policy": True,
                     "deviceNetworks": True,
-                    "backups": True,
                     "child_policies": True
                 }
             )
@@ -303,7 +298,6 @@ class PolicyService:
                 )
 
             device_count = len(updated_policy.deviceNetworks) if updated_policy.deviceNetworks else 0
-            backup_count = len(updated_policy.backups) if updated_policy.backups else 0
             child_count = len(updated_policy.child_policies) if updated_policy.child_policies else 0
 
             return PolicyResponse(
@@ -317,9 +311,9 @@ class PolicyService:
                 created_by_user=created_by_user,
                 parent_policy=parent_policy,
                 device_count=device_count,
-                backup_count=backup_count,
+                backup_count=0,
                 child_count=child_count,
-                total_usage=device_count + backup_count + child_count
+                total_usage=device_count + child_count
             )
 
         except Exception as e:
@@ -335,7 +329,6 @@ class PolicyService:
                 where={"id": policy_id},
                 include={
                     "deviceNetworks": True,
-                    "backups": True,
                     "child_policies": True
                 }
             )
@@ -344,16 +337,13 @@ class PolicyService:
                 raise ValueError("ไม่พบ Policy ที่ต้องการลบ")
 
             device_count = len(existing_policy.deviceNetworks) if existing_policy.deviceNetworks else 0
-            backup_count = len(existing_policy.backups) if existing_policy.backups else 0
             child_count = len(existing_policy.child_policies) if existing_policy.child_policies else 0
-            total_usage = device_count + backup_count + child_count
+            total_usage = device_count + child_count
 
             if not force and total_usage > 0:
                 usage_details = []
                 if device_count > 0:
                     usage_details.append(f"{device_count} Device")
-                if backup_count > 0:
-                    usage_details.append(f"{backup_count} Backup")
                 if child_count > 0:
                     usage_details.append(f"{child_count} Child Policy")
                 

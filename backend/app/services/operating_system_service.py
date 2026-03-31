@@ -96,7 +96,6 @@ class OperatingSystemService:
             include_options: Dict[str, Any] = {"tags": True}
             if include_usage:
                 include_options["deviceNetworks"] = True
-                include_options["backups"] = True
 
             operating_systems = await self.prisma.operatingsystem.find_many(
                 where=where_conditions,
@@ -121,7 +120,6 @@ class OperatingSystemService:
                         ))
 
                 device_count = len(os.deviceNetworks) if hasattr(os, 'deviceNetworks') and os.deviceNetworks else 0
-                backup_count = len(os.backups) if hasattr(os, 'backups') and os.backups else 0
                 
                 os_responses.append(OperatingSystemResponse(
                     id=os.id,
@@ -131,8 +129,8 @@ class OperatingSystemService:
                     updated_at=os.updatedAt,
                     tags=tags_info,
                     device_count=device_count,
-                    backup_count=backup_count,
-                    total_usage=device_count + backup_count
+                    backup_count=0,
+                    total_usage=device_count
                 ))
 
             return os_responses, total
@@ -147,7 +145,6 @@ class OperatingSystemService:
             include_options: Dict[str, Any] = {"tags": True}
             if include_usage:
                 include_options["deviceNetworks"] = True
-                include_options["backups"] = True
 
             os = await self.prisma.operatingsystem.find_unique(
                 where={"id": os_id},
@@ -169,7 +166,6 @@ class OperatingSystemService:
                     ))
 
             device_count = len(os.deviceNetworks) if hasattr(os, 'deviceNetworks') and os.deviceNetworks else 0
-            backup_count = len(os.backups) if hasattr(os, 'backups') and os.backups else 0
 
             return OperatingSystemResponse(
                 id=os.id,
@@ -179,8 +175,8 @@ class OperatingSystemService:
                 updated_at=os.updatedAt,
                 tags=tags_info,
                 device_count=device_count,
-                backup_count=backup_count,
-                total_usage=device_count + backup_count
+                backup_count=0,
+                total_usage=device_count
             )
 
         except Exception as e:
@@ -203,15 +199,6 @@ class OperatingSystemService:
                             "status": True,
                             "ip_address": True
                         }
-                    },
-                    "backups": {
-                        "select": {
-                            "id": True,
-                            "backup_name": True,
-                            "status": True,
-                            "auto_backup": True,
-                            "description": True
-                        }
                     }
                 }
             )
@@ -221,14 +208,13 @@ class OperatingSystemService:
 
             #แปลง Prisma objects เป็น dict
             device_networks = [dict(d) for d in os.deviceNetworks] if os.deviceNetworks else []
-            backups = [dict(b) for b in os.backups] if os.backups else []
 
             return OperatingSystemUsageResponse(
                 id=os.id,
                 os_type=os.os_type,
                 device_networks=device_networks,
-                backups=backups,
-                total_usage=len(device_networks) + len(backups)
+                backups=[],
+                total_usage=len(device_networks)
             )
 
         except Exception as e:
@@ -276,8 +262,7 @@ class OperatingSystemService:
                 data=update_dict,
                 include={
                     "tags": True,
-                    "deviceNetworks": True,
-                    "backups": True
+                    "deviceNetworks": True
                 }
             )
 
@@ -293,7 +278,6 @@ class OperatingSystemService:
                     ))
 
             device_count = len(updated_os.deviceNetworks) if updated_os.deviceNetworks else 0
-            backup_count = len(updated_os.backups) if updated_os.backups else 0
 
             return OperatingSystemResponse(
                 id=updated_os.id,
@@ -303,8 +287,8 @@ class OperatingSystemService:
                 updated_at=updated_os.updatedAt,
                 tags=tags_info,
                 device_count=device_count,
-                backup_count=backup_count,
-                total_usage=device_count + backup_count
+                backup_count=0,
+                total_usage=device_count
             )
 
         except Exception as e:
@@ -320,8 +304,7 @@ class OperatingSystemService:
             existing_os = await self.prisma.operatingsystem.find_unique(
                 where={"id": os_id},
                 include={
-                    "deviceNetworks": True,
-                    "backups": True
+                    "deviceNetworks": True
                 }
             )
 
@@ -330,16 +313,13 @@ class OperatingSystemService:
 
             # นับการใช้งาน
             device_count = len(existing_os.deviceNetworks) if existing_os.deviceNetworks else 0
-            backup_count = len(existing_os.backups) if existing_os.backups else 0
-            total_usage = device_count + backup_count
+            total_usage = device_count
 
             # ตรวจสอบว่ามีการใช้งานหรือไม่
             if not force and total_usage > 0:
                 usage_details = []
                 if device_count > 0:
                     usage_details.append(f"{device_count} Device")
-                if backup_count > 0:
-                    usage_details.append(f"{backup_count} Backup")
                 
                 raise ValueError(
                     f"ไม่สามารถลบ OS นี้ได้ เนื่องจากกำลังถูกใช้งานโดย: {', '.join(usage_details)}"
@@ -382,8 +362,7 @@ class OperatingSystemService:
                 },
                 include={
                     "tags": True,
-                    "deviceNetworks": True,
-                    "backups": True
+                    "deviceNetworks": True
                 }
             )
 
@@ -399,7 +378,6 @@ class OperatingSystemService:
                     ))
 
             device_count = len(updated_os.deviceNetworks) if updated_os.deviceNetworks else 0
-            backup_count = len(updated_os.backups) if updated_os.backups else 0
 
             return OperatingSystemResponse(
                 id=updated_os.id,
@@ -409,8 +387,8 @@ class OperatingSystemService:
                 updated_at=updated_os.updatedAt,
                 tags=tags_info,
                 device_count=device_count,
-                backup_count=backup_count,
-                total_usage=device_count + backup_count
+                backup_count=0,
+                total_usage=device_count
             )
 
         except Exception as e:
@@ -437,8 +415,7 @@ class OperatingSystemService:
                 },
                 include={
                     "tags": True,
-                    "deviceNetworks": True,
-                    "backups": True
+                    "deviceNetworks": True
                 }
             )
 
@@ -454,7 +431,6 @@ class OperatingSystemService:
                     ))
 
             device_count = len(updated_os.deviceNetworks) if updated_os.deviceNetworks else 0
-            backup_count = len(updated_os.backups) if updated_os.backups else 0
 
             return OperatingSystemResponse(
                 id=updated_os.id,
@@ -464,8 +440,8 @@ class OperatingSystemService:
                 updated_at=updated_os.updatedAt,
                 tags=tags_info,
                 device_count=device_count,
-                backup_count=backup_count,
-                total_usage=device_count + backup_count
+                backup_count=0,
+                total_usage=device_count
             )
 
         except Exception as e:

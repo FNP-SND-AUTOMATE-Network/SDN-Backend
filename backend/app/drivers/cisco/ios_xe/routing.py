@@ -2,6 +2,8 @@
 Cisco Routing Driver
 รองรับ Routing operations สำหรับ Cisco IOS-XE devices
 """
+import requests
+from requests.auth import HTTPBasicAuth
 from typing import Any, Dict
 from app.drivers.base import BaseDriver
 from app.schemas.device_profile import DeviceProfile
@@ -47,6 +49,36 @@ class CiscoRoutingDriver(BaseDriver):
         Intents.SHOW.OSPF_NEIGHBORS,
         Intents.SHOW.OSPF_DATABASE,
     }
+
+    def _fetch_device_version(self, mount: str) -> str:
+        """
+        ยิง GET ไปที่ OpenDaylight เพื่อเช็ค OS Version ของอุปกรณ์แบบ Real-time
+        """
+        url = f"{mount}/Cisco-IOS-XE-native:native/version"
+        headers = {"Accept": "application/yang-data+json"}
+        
+        try:
+            # ยิง Request ไปเช็ค (อย่าลืมปรับ Auth ให้ตรงกับของระบบคุณ)
+            response = requests.get(
+                url, 
+                headers=headers, 
+                auth=HTTPBasicAuth('admin', 'admin'), # แนะนำให้ดึงจาก Config ในอนาคต
+                timeout=5 # ตั้ง Timeout เผื่ออุปกรณ์ดาวน์ จะได้ไม่ค้าง
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                # ดึงค่า version ออกมา เช่น "16.9" หรือ "17.06.02"
+                version = data.get("Cisco-IOS-XE-native:version")
+                if version:
+                    return str(version)
+                    
+        except Exception as e:
+            # โยน Log error ไปที่ระบบจัดการ Log ของคุณ
+            print(f"[Warning] Failed to fetch device version: {e}")
+            
+        # ถ้าหาไม่ได้ ยิงไม่เข้า หรือ Error ให้ Fallback ไปใช้ Default 
+        return "16."
 
     def build(self, device: DeviceProfile, intent: str, params: Dict[str, Any]) -> RequestSpec:
         mount = odl_mount_base(device.node_id)
@@ -272,7 +304,7 @@ class CiscoRoutingDriver(BaseDriver):
             raise DriverBuildError("params require process_id, network, wildcard_mask, area")
         
         path = f"{mount}/Cisco-IOS-XE-native:native/router"
-        device_version = params.get("device_version", "16.")
+        device_version = self._fetch_device_version(mount)
         
         if device_version.startswith("16."):
             # V16: ใช้ ospf ตรงๆ และใช้ mask
@@ -325,7 +357,7 @@ class CiscoRoutingDriver(BaseDriver):
             raise DriverBuildError("params require process_id")
         
         path = f"{mount}/Cisco-IOS-XE-native:native/router"
-        device_version = params.get("device_version", "16.")
+        device_version = self._fetch_device_version(mount)
         
         if device_version.startswith("16."):
             ospf_entry = {"id": int(process_id)}
@@ -363,7 +395,7 @@ class CiscoRoutingDriver(BaseDriver):
         if not process_id:
             raise DriverBuildError("params require process_id")
         
-        device_version = params.get("device_version", "16.")
+        device_version = self._fetch_device_version(mount)
         
         if device_version.startswith("16."):
             path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:ospf={process_id}"
@@ -389,7 +421,7 @@ class CiscoRoutingDriver(BaseDriver):
             raise DriverBuildError("params require process_id, router_id")
         
         path = f"{mount}/Cisco-IOS-XE-native:native/router"
-        device_version = params.get("device_version", "16.")
+        device_version = self._fetch_device_version(mount)
         
         if device_version.startswith("16."):
             payload = {
@@ -426,7 +458,7 @@ class CiscoRoutingDriver(BaseDriver):
             raise DriverBuildError("params require process_id, interface")
         
         path = f"{mount}/Cisco-IOS-XE-native:native/router"
-        device_version = params.get("device_version", "16.")
+        device_version = self._fetch_device_version(mount)
         
         if device_version.startswith("16."):
             payload = {
@@ -470,7 +502,7 @@ class CiscoRoutingDriver(BaseDriver):
         
         import urllib.parse
         encoded_interface = urllib.parse.quote(interface, safe='')
-        device_version = params.get("device_version", "16.")
+        device_version = self._fetch_device_version(mount)
         
         if device_version.startswith("16."):
             path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:ospf={process_id}/passive-interface/interface={encoded_interface}"
@@ -514,6 +546,91 @@ class CiscoRoutingDriver(BaseDriver):
             intent=Intents.SHOW.OSPF_DATABASE,
             driver=self.name
         )
+    def _build_ospf_add_network_interface(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """Add OSPF to interface (ip ospf {process_id} area {area_id})"""
+        process_id = params.get("process_id")
+        interface = params.get("interface")
+        area = params.get("area")
+        
+        if process_id is None or interface is None or area is None:
+            raise DriverBuildError("params require process_id, interface, area")
+        
+        iface_type, iface_num = self._parse_interface_name(interface)
+        encoded_num = self._encode_interface_number(iface_num)
+        
+        path = f"{mount}/Cisco-IOS-XE-native:native/interface/{iface_type}={encoded_num}"
+        device_version = self._fetch_device_version(mount)
+        
+        # สำหรับ Interface OSPF คอนฟิก อาจจะต้องแยกระหว่าง 16 กับ 17 เช่นกัน
+        if device_version.startswith("16."):
+            payload = {
+                f"Cisco-IOS-XE-native:{iface_type}": [{
+                    "name": iface_num,
+                    "ip": {
+                        "Cisco-IOS-XE-ospf:router-ospf": { # สำหรับบาง revision ใน 16.x อาจจะใช้แบบนี้
+                            "ospf": {
+                                "process-id": [{
+                                    "id": int(process_id),
+                                    "area": [{"area-id": int(area)}]
+                                }]
+                            }
+                        }
+                    }
+                }]
+            }
+        else:
+            payload = {
+                f"Cisco-IOS-XE-native:{iface_type}": [{
+                    "name": iface_num,
+                    "ip": {
+                        "router-ospf": {
+                            "ospf": {
+                                "process-id": [{
+                                    "id": int(process_id),
+                                    "area": [{"area-id": int(area)}]
+                                }]
+                            }
+                        }
+                    }
+                }]
+            }
+
+        return RequestSpec(
+            method="PATCH",
+            datastore="config",
+            path=path,
+            payload=payload,
+            headers={"Content-Type": "application/yang-data+json", "Accept": "application/yang-data+json"},
+            intent=Intents.ROUTING.OSPF_ADD_NETWORK_INTERFACE,
+            driver=self.name
+        )
+    
+    def _build_ospf_remove_network_interface(self, mount: str, params: Dict[str, Any]) -> RequestSpec:
+        """Remove OSPF from interface"""
+        process_id = params.get("process_id")
+        interface = params.get("interface")
+        
+        if not all([process_id, interface]):
+            raise DriverBuildError("params require process_id, interface")
+        
+        iface_type, iface_num = self._parse_interface_name(interface)
+        encoded_num = self._encode_interface_number(iface_num)
+        
+        # ในการ Delete ระดับ Interface มักจะใช้ Path ลบข้อมูล ip ospf ทิ้งไปเลย
+        path = (
+            f"{mount}/Cisco-IOS-XE-native:native/interface/{iface_type}={encoded_num}"
+            f"/ip/Cisco-IOS-XE-ospf:router-ospf/ospf/process-id={process_id}"
+        )
+
+        return RequestSpec(
+            method="DELETE",
+            datastore="config",
+            path=path,
+            payload=None,
+            headers={"Accept": "application/yang-data+json"},
+            intent=Intents.ROUTING.OSPF_REMOVE_NETWORK_INTERFACE,
+            driver=self.name
+        )
 
 
 # ===== Utility Functions =====
@@ -529,3 +646,4 @@ def _wildcard_to_netmask(wildcard: str) -> str:
     """Convert wildcard mask to subnet mask (e.g. 0.0.0.255 -> 255.255.255.0)"""
     octets = wildcard.split(".")
     return ".".join(str(255 - int(o)) for o in octets)
+

@@ -292,24 +292,22 @@ class CiscoRoutingDriver(BaseDriver):
         if area is None:
             raise DriverBuildError("params require area (e.g. 0)")
         
-        path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf"
+        path = f"{mount}/Cisco-IOS-XE-native:native/router"
         
         payload = {
-            "Cisco-IOS-XE-ospf:router-ospf": {
-                "ospf": {
-                    "process-id": [
-                        {
-                            "id": int(process_id),
-                            "network": [
-                                {
-                                    "ip": network,
-                                    "wildcard": wildcard,
-                                    "area": int(area)
-                                }
-                            ]
-                        }
-                    ]
-                }
+            "Cisco-IOS-XE-native:router": {
+                "Cisco-IOS-XE-ospf:ospf": [
+                    {
+                        "id": int(process_id),
+                        "network": [
+                            {
+                                "ip": network,
+                                "mask": wildcard,
+                                "area": int(area)
+                            }
+                        ]
+                    }
+                ]
             }
         }
 
@@ -331,17 +329,15 @@ class CiscoRoutingDriver(BaseDriver):
         if not process_id:
             raise DriverBuildError("params require process_id")
         
-        path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf"
+        path = f"{mount}/Cisco-IOS-XE-native:native/router"
         
         ospf_entry = {"id": int(process_id)}
         if router_id:
             ospf_entry["router-id"] = router_id
 
         payload = {
-            "Cisco-IOS-XE-ospf:router-ospf": {
-                "ospf": {
-                    "process-id": [ospf_entry]
-                }
+            "Cisco-IOS-XE-native:router": {
+                "Cisco-IOS-XE-ospf:ospf": [ospf_entry]
             }
         }
 
@@ -363,7 +359,7 @@ class CiscoRoutingDriver(BaseDriver):
             raise DriverBuildError("params require process_id")
         
         # DELETE specific OSPF process
-        path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf/ospf/process-id={process_id}"
+        path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:ospf={process_id}"
 
         return RequestSpec(
             method="DELETE",
@@ -461,16 +457,16 @@ class CiscoRoutingDriver(BaseDriver):
         if not process_id or not router_id:
             raise DriverBuildError("params require process_id, router_id")
         
-        path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf"
+        path = f"{mount}/Cisco-IOS-XE-native:native/router"
         
         payload = {
-            "Cisco-IOS-XE-ospf:router-ospf": {
-                "ospf": {
-                    "process-id": [{
+            "Cisco-IOS-XE-native:router": {
+                "Cisco-IOS-XE-ospf:ospf": [
+                    {
                         "id": int(process_id),
                         "router-id": router_id
-                    }]
-                }
+                    }
+                ]
             }
         }
 
@@ -492,18 +488,18 @@ class CiscoRoutingDriver(BaseDriver):
         if not process_id or not interface:
             raise DriverBuildError("params require process_id, interface")
         
-        path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf"
+        path = f"{mount}/Cisco-IOS-XE-native:native/router"
         
         payload = {
-            "Cisco-IOS-XE-ospf:router-ospf": {
-                "ospf": {
-                    "process-id": [{
+            "Cisco-IOS-XE-native:router": {
+                "Cisco-IOS-XE-ospf:ospf": [
+                    {
                         "id": int(process_id),
                         "passive-interface": {
                             "interface": [interface]
                         }
-                    }]
-                }
+                    }
+                ]
             }
         }
 
@@ -525,7 +521,7 @@ class CiscoRoutingDriver(BaseDriver):
         if not process_id or not interface:
             raise DriverBuildError("params require process_id, interface")
         
-        path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf/ospf/process-id={process_id}/passive-interface/interface={interface}"
+        path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:ospf={process_id}/passive-interface/interface={interface}"
 
         return RequestSpec(
             method="DELETE",

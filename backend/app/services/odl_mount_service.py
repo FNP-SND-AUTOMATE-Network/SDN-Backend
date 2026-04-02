@@ -12,6 +12,7 @@ Flow:
 from typing import Dict, Any, Optional
 from datetime import datetime
 import asyncio
+import json
 from app.clients.odl_restconf_client import OdlRestconfClient
 from app.core.errors import OdlRequestError
 from app.schemas.request_spec import RequestSpec
@@ -120,8 +121,8 @@ class OdlMountService:
     async def _delete_node_from_odl(self, node_id: str) -> bool:
         """
         DELETE node จาก ODL config datastore.
-        Returns True ถ้าสำเร็จ (รวมถึง 404 ที่แปลว่าลบไปแล้ว)
-        Raises exception เฉพาะ error ที่ไม่ใช่ 404
+        Returns True ถ้าสำเร็จ (รวมถึงกรณีที่ node ถูกลบไปแล้ว)
+        Raises exception เฉพาะ error ที่ไม่ใช่ "already absent".
         """
         node_path = f"{self.TOPOLOGY_PATH}/node={node_id}"
         spec = RequestSpec(
@@ -137,6 +138,43 @@ class OdlMountService:
             if e.status_code == 404:
                 logger.info(f"Node {node_id} already absent from ODL config (404) — treating as success")
                 return True
+
+            # ODL may return 409/data-missing when config node is already absent
+            # while operational state is still stale for a short time.
+            if e.status_code == 409:
+                details = getattr(e, "detail", {}) or {}
+                body_text = ""
+                if isinstance(details, dict):
+                    nested = details.get("details", {})
+                    if isinstance(nested, dict):
+                        body_text = str(nested.get("body", ""))
+
+                missing_patterns = (
+                    "data-missing",
+                    "Data does not exist",
+                    "does not exist in the OpenDaylight controller",
+                )
+
+                if any(pat in body_text for pat in missing_patterns):
+                    logger.info(
+                        f"Node {node_id} already absent from ODL config (409 data-missing) — treating as success"
+                    )
+                    return True
+
+                # Some ODL builds may nest error-tag in JSON objects; parse defensively.
+                try:
+                    parsed = json.loads(body_text) if body_text else {}
+                    errors = (((parsed or {}).get("errors") or {}).get("error") or [])
+                    if isinstance(errors, list) and any(
+                        isinstance(err, dict) and str(err.get("error-tag", "")).lower() == "data-missing"
+                        for err in errors
+                    ):
+                        logger.info(
+                            f"Node {node_id} already absent from ODL config (409 error-tag=data-missing) — treating as success"
+                        )
+                        return True
+                except Exception:
+                    pass
             raise
     
     async def mount_device(self, node_id: str, user_id: str) -> Dict[str, Any]:
@@ -243,39 +281,17 @@ class OdlMountService:
                     "last_synced_at": datetime.utcnow()
                 }
             )
-            
-            # 7. Quick check — ไม่ block นาน, ใช้ wait-ready endpoint แทน
-            await asyncio.sleep(3)
-            status = await self.get_connection_status(device.node_id)
-            connection_status = status.get("connection_status", "connecting")
-            
-            # 8. Update final status (if already resolved)
-            if connection_status == "connected":
-                await prisma.devicenetwork.update(
-                    where={"id": device.id},
-                    data={
-                        "odl_connection_status": "CONNECTED",
-                        "status": "ONLINE",
-                        "last_synced_at": datetime.utcnow()
-                    }
-                )
-            
-            # mount_device returns success=True if PUT succeeded,
-            # regardless of whether ODL has finished connecting yet.
-            # Use wait-ready or mount_and_wait for full connection guarantee.
+
+            # Return immediately after mount request is accepted.
+            # ODL will continue connection + YANG loading asynchronously.
             return {
                 "success": True,
-                "message": (
-                    f"Device {device.node_id} mounted and connected"
-                    if connection_status == "connected"
-                    else f"Device {device.node_id} mount request sent (status: {connection_status}). "
-                         "Use GET /wait-ready to poll until fully connected."
-                ),
+                "message": f"Device {device.node_id} mount request accepted. Mounting in progress...",
                 "node_id": device.node_id,
                 "device_id": device.id,
-                "connection_status": connection_status,
-                "device_status": "ONLINE" if connection_status == "connected" else "CONNECTING",
-                "ready_for_intent": connection_status == "connected",
+                "connection_status": "connecting",
+                "device_status": "CONNECTING",
+                "ready_for_intent": False,
             }
             
         except Exception as e:
@@ -426,10 +442,12 @@ class OdlMountService:
                 "netconf-node-topology:connection-status",
                 "unknown"
             )
+            connected_message = node.get("netconf-node-topology:connected-message")
             
             return {
                 "mounted": True,
                 "connection_status": connection_status,
+                "connected_message": connected_message,
                 "host": node.get("netconf-node-topology:host"),
                 "port": node.get("netconf-node-topology:port"),
             }
@@ -496,6 +514,7 @@ class OdlMountService:
                 "device_name": device.device_name,
                 "mounted": is_mounted,
                 "connection_status": status.get("connection_status", "unknown"),
+                "connected_message": status.get("connected_message"),
                 "device_status": device_status,
                 "ready_for_intent": ready_for_intent,
                 "message": "Ready to use Intent API" if ready_for_intent else "Device not connected yet"
@@ -557,6 +576,7 @@ class OdlMountService:
                 return {
                     "ready": False,
                     "connection_status": conn,
+                    "connected_message": status.get("connected_message"),
                     "waited_seconds": elapsed,
                     "message": (
                         f"ODL reported 'unable-to-connect' for {node_id}. "
@@ -573,6 +593,7 @@ class OdlMountService:
         return {
             "ready": False,
             "connection_status": final.get("connection_status", "unknown"),
+            "connected_message": final.get("connected_message"),
             "waited_seconds": elapsed,
             "message": (
                 f"Timeout ({max_wait_seconds}s) waiting for {node_id} to become connected. "

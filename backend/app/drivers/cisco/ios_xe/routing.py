@@ -2,9 +2,6 @@
 Cisco Routing Driver
 รองรับ Routing operations สำหรับ Cisco IOS-XE devices
 """
-import os
-import requests
-from requests.auth import HTTPBasicAuth
 from typing import Any, Dict
 from app.drivers.base import BaseDriver
 from app.schemas.device_profile import DeviceProfile
@@ -31,6 +28,36 @@ class CiscoRoutingDriver(BaseDriver):
         """RFC-8040: / in list key must be encoded as %2F"""
         return number.replace("/", "%2F")
 
+    @staticmethod
+    def _is_legacy_ospf_schema(version: str) -> bool:
+        """
+        Decide which OSPF schema shape to use.
+        Legacy schema is used for older IOS-XE (typically < 16.9).
+        """
+        v = (version or "").strip()
+        try:
+            parts = v.split(".")
+            major = int(parts[0])
+            minor = int(parts[1]) if len(parts) > 1 else 0
+            if major < 16:
+                return True
+            if major > 16:
+                return False
+            return minor < 9
+        except Exception:
+            # Fallback to previous behavior if version format is unexpected.
+            return v.startswith("16.")
+
+    def _resolve_device_version(self, mount: str, params: Dict[str, Any]) -> str:
+        """Use pre-check version provided by IntentService only."""
+        version = str(params.get("device_version") or "").strip()
+        if version:
+            return version
+        raise DriverBuildError(
+            "device_version is required for Cisco OSPF intents. "
+            "Ensure pre-check version step ran before building request."
+        )
+
     SUPPORTED_INTENTS = {
         Intents.ROUTING.STATIC_ADD,
         Intents.ROUTING.STATIC_DELETE,
@@ -50,55 +77,6 @@ class CiscoRoutingDriver(BaseDriver):
         Intents.SHOW.OSPF_NEIGHBORS,
         Intents.SHOW.OSPF_DATABASE,
     }
-
-    def _fetch_device_version(self, mount: str) -> str:
-        """
-        ยิง GET ไปที่ OpenDaylight เพื่อเช็ค OS Version ของอุปกรณ์แบบ Real-time
-        โดยดึงการตั้งค่า (IP, Auth, Timeout) จากไฟล์ .env
-        """
-        # 1. ดึงค่าจาก Environment Variables (พร้อมกำหนดค่า Default เผื่อหาไฟล์ .env ไม่เจอ)
-        odl_base_url = os.getenv("ODL_BASE_URL", "http://192.168.1.100:8181").rstrip('/')
-        odl_user = os.getenv("ODL_USERNAME", "admin")
-        odl_pass = os.getenv("ODL_PASSWORD", "admin")
-        odl_timeout = int(os.getenv("ODL_TIMEOUT_SEC", 10))
-        
-        # 2. จัดรูปแบบ URL ให้สมบูรณ์
-        if not mount.startswith("http"):
-            # ป้องกันกรณี mount ไม่มี / นำหน้า
-            mount_path = mount if mount.startswith("/") else f"/{mount}"
-            url = f"{odl_base_url}{mount_path}/Cisco-IOS-XE-native:native/version"
-        else:
-            url = f"{mount}/Cisco-IOS-XE-native:native/version"
-            
-        headers = {"Accept": "application/yang-data+json"}
-        
-        try:
-            print(f"\n[DEBUG-OSPF] ยิงเช็คเวอร์ชันไปที่: {url}")
-            
-            # 3. ใช้ค่าที่ดึงมาจาก .env ทั้งหมดในการยิง Request
-            response = requests.get(
-                url, 
-                headers=headers, 
-                auth=HTTPBasicAuth(odl_user, odl_pass),
-                timeout=odl_timeout 
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                version = data.get("Cisco-IOS-XE-native:version")
-                if version:
-                    print(f"[DEBUG-OSPF] ✔️ ดึงเวอร์ชันสำเร็จ! อุปกรณ์นี้คือเวอร์ชัน: {version}\n")
-                    return str(version)
-            else:
-                print(f"[DEBUG-OSPF] ❌ ยิงเช็คเวอร์ชันไม่ผ่าน Status: {response.status_code}, Body: {response.text}\n")
-                
-        except requests.exceptions.RequestException as e:
-            # ดักจับ Error จากฝั่ง Network (เช่น Timeout, Connection Refused)
-            print(f"\n[DEBUG-OSPF] 💥 เกิดข้อผิดพลาดด้านเครือข่ายตอนดึงเวอร์ชัน: {e}\n")
-            
-        # 4. หากมีปัญหาใดๆ จะ Fallback กลับไปที่โครงสร้างของเวอร์ชัน 16 (เพื่อให้ระบบพยายามทำงานต่อ)
-        print("[DEBUG-OSPF] ⚠️ ไม่สามารถดึงเวอร์ชันได้ ระบบจะใช้ Default (v16)")
-        return "16."
 
     def build(self, device: DeviceProfile, intent: str, params: Dict[str, Any]) -> RequestSpec:
         mount = odl_mount_base(device.node_id)
@@ -324,17 +302,18 @@ class CiscoRoutingDriver(BaseDriver):
             raise DriverBuildError("params require process_id, network, wildcard_mask, area")
         
         path = f"{mount}/Cisco-IOS-XE-native:native/router"
-        device_version = self._fetch_device_version(mount)
+        device_version = self._resolve_device_version(mount, params)
         
-        if device_version.startswith("16."):
+        if self._is_legacy_ospf_schema(device_version):
             # V16: ใช้ ospf ตรงๆ และใช้ mask
+            netmask = _wildcard_to_netmask(wildcard)
             payload = {
                 "Cisco-IOS-XE-native:router": {
                     "Cisco-IOS-XE-ospf:ospf": [{
                         "id": int(process_id),
                         "network": [{
                             "ip": network,
-                            "mask": wildcard,
+                            "mask": netmask,
                             "area": int(area)
                         }]
                     }]
@@ -377,9 +356,9 @@ class CiscoRoutingDriver(BaseDriver):
             raise DriverBuildError("params require process_id")
         
         path = f"{mount}/Cisco-IOS-XE-native:native/router"
-        device_version = self._fetch_device_version(mount)
+        device_version = self._resolve_device_version(mount, params)
         
-        if device_version.startswith("16."):
+        if self._is_legacy_ospf_schema(device_version):
             ospf_entry = {"id": int(process_id)}
             if router_id: ospf_entry["router-id"] = router_id
             payload = {
@@ -415,9 +394,9 @@ class CiscoRoutingDriver(BaseDriver):
         if not process_id:
             raise DriverBuildError("params require process_id")
         
-        device_version = self._fetch_device_version(mount)
+        device_version = self._resolve_device_version(mount, params)
         
-        if device_version.startswith("16."):
+        if self._is_legacy_ospf_schema(device_version):
             path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:ospf={process_id}"
         else:
             # V17 ต้องเจาะลึกไปที่ process-id ตาม Path ใหม่
@@ -441,9 +420,9 @@ class CiscoRoutingDriver(BaseDriver):
             raise DriverBuildError("params require process_id, router_id")
         
         path = f"{mount}/Cisco-IOS-XE-native:native/router"
-        device_version = self._fetch_device_version(mount)
+        device_version = self._resolve_device_version(mount, params)
         
-        if device_version.startswith("16."):
+        if self._is_legacy_ospf_schema(device_version):
             payload = {
                 "Cisco-IOS-XE-native:router": {
                     "Cisco-IOS-XE-ospf:ospf": [{"id": int(process_id), "router-id": router_id}]
@@ -478,9 +457,9 @@ class CiscoRoutingDriver(BaseDriver):
             raise DriverBuildError("params require process_id, interface")
         
         path = f"{mount}/Cisco-IOS-XE-native:native/router"
-        device_version = self._fetch_device_version(mount)
+        device_version = self._resolve_device_version(mount, params)
         
-        if device_version.startswith("16."):
+        if self._is_legacy_ospf_schema(device_version):
             payload = {
                 "Cisco-IOS-XE-native:router": {
                     "Cisco-IOS-XE-ospf:ospf": [{
@@ -522,9 +501,9 @@ class CiscoRoutingDriver(BaseDriver):
         
         import urllib.parse
         encoded_interface = urllib.parse.quote(interface, safe='')
-        device_version = self._fetch_device_version(mount)
+        device_version = self._resolve_device_version(mount, params)
         
-        if device_version.startswith("16."):
+        if self._is_legacy_ospf_schema(device_version):
             path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:ospf={process_id}/passive-interface/interface={encoded_interface}"
         else:
             path = f"{mount}/Cisco-IOS-XE-native:native/router/Cisco-IOS-XE-ospf:router-ospf/ospf/process-id={process_id}/passive-interface/interface={encoded_interface}"
@@ -579,22 +558,18 @@ class CiscoRoutingDriver(BaseDriver):
         encoded_num = self._encode_interface_number(iface_num)
         
         path = f"{mount}/Cisco-IOS-XE-native:native/interface/{iface_type}={encoded_num}"
-        device_version = self._fetch_device_version(mount)
+        device_version = self._resolve_device_version(mount, params)
         
         # สำหรับ Interface OSPF คอนฟิก อาจจะต้องแยกระหว่าง 16 กับ 17 เช่นกัน
-        if device_version.startswith("16."):
+        if self._is_legacy_ospf_schema(device_version):
             payload = {
                 f"Cisco-IOS-XE-native:{iface_type}": [{
                     "name": iface_num,
                     "ip": {
-                        "Cisco-IOS-XE-ospf:router-ospf": { # สำหรับบาง revision ใน 16.x อาจจะใช้แบบนี้
-                            "ospf": {
-                                "process-id": [{
-                                    "id": int(process_id),
-                                    "area": [{"area-id": int(area)}]
-                                }]
-                            }
-                        }
+                        "Cisco-IOS-XE-ospf:ospf": [{
+                            "id": int(process_id),
+                            "area": [{"area-id": int(area)}]
+                        }]
                     }
                 }]
             }
@@ -635,12 +610,20 @@ class CiscoRoutingDriver(BaseDriver):
         
         iface_type, iface_num = self._parse_interface_name(interface)
         encoded_num = self._encode_interface_number(iface_num)
+
+        device_version = self._resolve_device_version(mount, params)
         
         # ในการ Delete ระดับ Interface มักจะใช้ Path ลบข้อมูล ip ospf ทิ้งไปเลย
-        path = (
-            f"{mount}/Cisco-IOS-XE-native:native/interface/{iface_type}={encoded_num}"
-            f"/ip/Cisco-IOS-XE-ospf:router-ospf/ospf/process-id={process_id}"
-        )
+        if self._is_legacy_ospf_schema(device_version):
+            path = (
+                f"{mount}/Cisco-IOS-XE-native:native/interface/{iface_type}={encoded_num}"
+                f"/ip/Cisco-IOS-XE-ospf:ospf={process_id}"
+            )
+        else:
+            path = (
+                f"{mount}/Cisco-IOS-XE-native:native/interface/{iface_type}={encoded_num}"
+                f"/ip/Cisco-IOS-XE-ospf:router-ospf/ospf/process-id={process_id}"
+            )
 
         return RequestSpec(
             method="DELETE",

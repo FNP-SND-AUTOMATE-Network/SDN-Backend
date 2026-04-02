@@ -481,7 +481,11 @@ class IntentService:
         try:
             logger.info(f"[PreCheck] Fetching OS version for Cisco device {node_id}")
             resp = await self.client.send(get_spec)
-            version_str = resp.get("Cisco-IOS-XE-native:version", {}).get("version", "16.9")
+            raw_version = resp.get("Cisco-IOS-XE-native:version", "16.9")
+            if isinstance(raw_version, dict):
+                version_str = str(raw_version.get("version", "16.9"))
+            else:
+                version_str = str(raw_version or "16.9")
         except Exception as e:
             logger.warning(f"[PreCheck] Failed to fetch Cisco version for {node_id}, defaulting to 16.9: {e}")
             version_str = "16.9"

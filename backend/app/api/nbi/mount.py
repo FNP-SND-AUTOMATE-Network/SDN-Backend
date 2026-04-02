@@ -2,8 +2,7 @@
 NBI Mount/Unmount Endpoints
 Device mount, unmount, and status endpoints
 """
-import asyncio
-from fastapi import APIRouter, HTTPException, status, Depends, Query
+from fatapi import APIRouter, HTTPException, status, Depends, Query # type: ignore
 from typing import Dict, Any
 from app.services.odl_mount_service import OdlMountService
 from app.core.logging import logger
@@ -13,6 +12,36 @@ from .models import ErrorCode, MountRequest, MountResponse
 
 router = APIRouter()
 odl_mount_service = OdlMountService()
+DEFAULT_POLL_INTERVAL_SECONDS = 5
+
+
+def _build_handshake_failure_payload(node_id: str, controller_message: str | None) -> Dict[str, Any]:
+    reason = controller_message or "Unknown reason"
+    return {
+        "connection_status": "unable-to-connect",
+        "reason": reason,
+        "status": "error",
+        "error_type": "application_handshake_failed",
+        "controller_message": reason,
+        "diagnosis": "The controller established a connection but failed to sync device structure (YANG Schema).",
+        "suggested_actions": [
+            {
+                "label": "Clear Cache & Retry",
+                "action_id": "CLEAN_REMOUNT",
+                "description": "Deletes local schema cache and attempts a fresh connection."
+            },
+            {
+                "label": "Reset NETCONF Session",
+                "action_id": "RESET_NETCONF_SESSION",
+                "description": "Run clear netconf-session on the router, then retry mount."
+            },
+            {
+                "label": "Connect in Light Mode",
+                "action_id": "MOUNT_SCHEMALESS",
+                "description": "Retry mount with schemaless=true for faster lightweight connection."
+            }
+        ]
+    }
 
 
 @router.post("/devices/{node_id}/mount", response_model=MountResponse)
@@ -37,46 +66,54 @@ async def mount_device(
     """
     try:
         user_id = current_user["id"]
-        
-        if request.wait_for_connection:
-            result = await odl_mount_service.mount_and_wait(
-                node_id=node_id,
-                user_id=user_id,
-                max_wait_seconds=request.max_wait_seconds
-            )
-        else:
-            result = await odl_mount_service.mount_device(node_id, user_id=user_id)
+
+        # Backend policy: /mount is always async-first.
+        # Frontend does not control wait strategy here.
+        result = await odl_mount_service.mount_device(node_id, user_id=user_id)
         
         # Determine response based on result
         is_success = result.get("success", False)
         already_mounted = result.get("already_mounted", False)
         
-        if is_success:
-            # ✅ Device mounted AND connected → 200 OK
-            return MountResponse(
-                success=True,
-                code=ErrorCode.SUCCESS.value,
-                message=result.get("message", ""),
-                node_id=result.get("node_id"),
-                connection_status=result.get("connection_status"),
-                device_status=result.get("device_status"),
-                ready_for_intent=result.get("ready_for_intent", False),
-                data={
-                    "wait_time_seconds": result.get("wait_time_seconds"),
-                    "node_id": node_id
-                }
-            )
-        elif already_mounted:
+        if already_mounted:
             # Device already mounted and connected → 200 OK (idempotent)
             return MountResponse(
                 success=True,
                 code=ErrorCode.DEVICE_ALREADY_MOUNTED.value,
+                status="completed",
                 message=result.get("message", ""),
                 node_id=result.get("node_id"),
                 connection_status=result.get("connection_status"),
                 device_status=result.get("device_status"),
                 ready_for_intent=True,
                 data={"node_id": node_id}
+            )
+        elif is_success:
+            ready_for_intent = result.get("ready_for_intent", False)
+            connection_status = result.get("connection_status")
+
+            # Non-blocking mount: acknowledge immediately and let frontend poll status.
+            accepted = not ready_for_intent
+            return MountResponse(
+                success=True,
+                code=ErrorCode.SUCCESS.value if ready_for_intent else ErrorCode.DEVICE_CONNECTING.value,
+                status="accepted" if accepted else "completed",
+                message=(
+                    "Mounting in progress..."
+                    if accepted
+                    else result.get("message", "")
+                ),
+                node_id=result.get("node_id"),
+                connection_status=connection_status,
+                device_status=result.get("device_status"),
+                ready_for_intent=ready_for_intent,
+                data={
+                    "wait_time_seconds": result.get("wait_time_seconds"),
+                    "node_id": node_id,
+                    "status_endpoint": f"/api/v1/nbi/devices/{node_id}/status",
+                    "wait_ready_endpoint": f"/api/v1/nbi/devices/{node_id}/wait-ready",
+                    "poll_interval_seconds": DEFAULT_POLL_INTERVAL_SECONDS,
+                }
             )
         else:
             # ❌ Mount sent but NOT connected → non-200
@@ -92,7 +129,7 @@ async def mount_device(
                     "suggestion": (
                         "Device may still be connecting. "
                         "Use GET /api/v1/nbi/devices/{node_id}/status to check, "
-                        "or retry with wait_for_connection=true"
+                        "or call GET /api/v1/nbi/devices/{node_id}/wait-ready"
                     )
                 }
             )
@@ -129,16 +166,6 @@ async def mount_device(
             detail_data["required_fields"] = ["node_id", "netconf_host or ip_address", "netconf_username", "netconf_password"]
             
         raise HTTPException(status_code=status_code, detail=detail_data)
-        
-    except asyncio.TimeoutError:
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail={
-                "code": ErrorCode.MOUNT_TIMEOUT.value,
-                "message": f"Mount timeout after {request.max_wait_seconds} seconds",
-                "suggestion": "Check device reachability and NETCONF configuration"
-            }
-        )
         
     except Exception as e:
         logger.error(f"Mount failed: {e}")
@@ -230,9 +257,24 @@ async def check_device_status(
         else:
             code = ErrorCode.DEVICE_NOT_CONNECTED
         
+        if connection_status == "unable-to-connect":
+            controller_message = result.get("connected_message")
+            return MountResponse(
+                success=False,
+                code=ErrorCode.DEVICE_NOT_CONNECTED.value,
+                status="error",
+                message=result.get("message", "Device connection failed"),
+                node_id=result.get("node_id"),
+                connection_status=connection_status,
+                device_status=result.get("device_status"),
+                ready_for_intent=False,
+                data=_build_handshake_failure_payload(node_id, controller_message),
+            )
+
         return MountResponse(
             success=result.get("synced", False),
             code=code.value,
+            status="completed" if result.get("ready_for_intent", False) else "accepted",
             message=result.get("message", ""),
             node_id=result.get("node_id"),
             connection_status=connection_status,
@@ -241,7 +283,8 @@ async def check_device_status(
             data={
                 "node_id": node_id,
                 "device_name": result.get("device_name"),
-                "mounted": result.get("mounted", False)
+                "mounted": result.get("mounted", False),
+                "controller_message": result.get("connected_message"),
             }
         )
         
@@ -277,10 +320,10 @@ async def check_device_status(
 async def wait_for_device_ready(
     node_id: str,
     max_wait_seconds: int = Query(
-        120,
+        300,
         ge=5,
         le=300,
-        description="Maximum seconds to wait for ODL to finish mounting (default 120s). "
+        description="Maximum seconds to wait for ODL to finish mounting (default 300s). "
                     "Cisco ASR hardware typically needs 30–90 s to download YANG modules."
     ),
     check_interval: int = Query(
@@ -332,6 +375,24 @@ async def wait_for_device_ready(
 
         conn = result.get("connection_status", "unknown")
 
+        if conn == "unable-to-connect":
+            controller_message = result.get("connected_message")
+            return MountResponse(
+                success=False,
+                code=ErrorCode.DEVICE_NOT_CONNECTED.value,
+                status="error",
+                message=result["message"],
+                node_id=node_id,
+                connection_status=conn,
+                device_status="OFFLINE",
+                ready_for_intent=False,
+                data={
+                    **_build_handshake_failure_payload(node_id, controller_message),
+                    "waited_seconds": result.get("waited_seconds", 0),
+                    "max_wait_seconds": max_wait_seconds,
+                },
+            )
+
         if result.get("ready"):
             code = ErrorCode.SUCCESS
         elif conn == "connecting":
@@ -342,6 +403,7 @@ async def wait_for_device_ready(
         return MountResponse(
             success=result["ready"],
             code=code.value,
+            status="completed" if result.get("ready") else "accepted",
             message=result["message"],
             node_id=node_id,
             connection_status=conn,
@@ -351,6 +413,7 @@ async def wait_for_device_ready(
                 "node_id": node_id,
                 "waited_seconds": result.get("waited_seconds", 0),
                 "max_wait_seconds": max_wait_seconds,
+                "controller_message": result.get("connected_message"),
             },
         )
 

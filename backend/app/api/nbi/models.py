@@ -66,12 +66,14 @@ class APIResponse(BaseModel):
 class MountRequest(BaseModel):
     """Request body สำหรับ mount device"""
     wait_for_connection: bool = Field(
-        default=True,
+        default=False,
+        description="Deprecated: Backend decides wait strategy automatically for /mount",
     )
     max_wait_seconds: int = Field(
-        default=120,
+        default=300,
         ge=5,
         le=300,
+        description="Used by /wait-ready or explicit wait flows. /mount returns async-first by backend policy.",
     )
 
 
@@ -79,6 +81,7 @@ class MountResponse(BaseModel):
     """Response สำหรับ mount operations"""
     success: bool
     code: str
+    status: Optional[str] = None
     message: str
     node_id: Optional[str] = None
     connection_status: Optional[str] = None

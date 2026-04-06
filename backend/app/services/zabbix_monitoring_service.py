@@ -353,18 +353,19 @@ class ZabbixMonitoringService:
         item_ids = [it["itemid"] for it in traffic_items]
 
         # Fetch numeric float (0) and numeric unsigned (3)
+        # Increase limit from 1000 to 10000 because 15s polling interval on 20+ ports generates ~5000+ records/hour
         history_float = await zabbix_client.get_history(
             item_ids=item_ids,
             history_type=0,
             time_from=time_from,
-            limit=1000,
+            limit=10000,
             sort_order="ASC",
         )
         history_uint = await zabbix_client.get_history(
             item_ids=item_ids,
             history_type=3,
             time_from=time_from,
-            limit=1000,
+            limit=10000,
             sort_order="ASC",
         )
 
@@ -437,12 +438,80 @@ class ZabbixMonitoringService:
                 "history": history,
             })
 
+        # === Add formatting for MUI X-Charts ===
+        # The frontend expects a shared 'timestamps' array and 'series' array.
+        all_clocks = set()
+        for iface in interfaces_data:
+            for h in iface.get("history", []):
+                all_clocks.add(h["clock"])
+        
+        timestamps = sorted(list(all_clocks))
+        series = []
+        
+        for iface in interfaces_data:
+            history = iface.get("history", [])
+            if not history:
+                continue # Skip interfaces with no data in this period
+                
+            # Create a lookup for fast matching
+            history_map = {h["clock"]: h["value_bps"] for h in history}
+            
+            # Build data array corresponding to the shared timestamps axis
+            # Use None for missing data points so the chart can interpolate or leave a gap
+            data_points = []
+            for t in timestamps:
+                data_points.append(history_map.get(t, None))
+                
+            # Filter to only actual traffic/bandwidth items for the chart
+            # We don't want to plot errors, discards, or status
+            key_lower = iface.get("key", "").lower()
+            name_lower = iface.get("name", "").lower()
+            
+            is_in_out_traffic = (
+                "net.if.in[" in key_lower or "net.if.out[" in key_lower
+                or "ifhcinoctets" in key_lower or "ifhcoutoctets" in key_lower
+                or "ifinoctets" in key_lower or "ifoutoctets" in key_lower
+                or "bits received" in name_lower or "bits sent" in name_lower
+            )
+            
+            is_noise = (
+                "error" in name_lower or "discard" in name_lower 
+                or "status" in name_lower or "speed" in name_lower
+                or "discards" in key_lower or "errors" in key_lower
+            )
+
+            if is_in_out_traffic and not is_noise:
+                # Clean up the label name (e.g. 'Interface Gi1(): Bits received' -> 'Gi1: In')
+                label = iface.get("name", "")
+                if "Interface " in label:
+                    label = label.replace("Interface ", "")
+                # Shorten to make legend cleaner
+                label = label.replace("Bits received", "In").replace("Bits sent", "Out")
+                    
+                # Compute peak traffic for sorting so we only show the "Top" lines
+                max_traffic = max([v for v in data_points if v is not None] + [0])
+                    
+                series.append({
+                    "label": label,
+                    "data": data_points,
+                    "_max_traffic": max_traffic
+                })
+
+        # --- Limit to Top 10 High-Traffic Series ---
+        # Huawei and switches with many ports will crash the UI if we plot 50+ lines simultaneously.
+        # Keeping only the 10 highest peak traffic lines.
+        series = sorted(series, key=lambda x: x.get("_max_traffic", 0), reverse=True)[:10]
+        for s in series:
+            s.pop("_max_traffic", None)
+
         result = {
             "host_id": host_id,
             "period_hours": period_hours,
             "time_from": time_from,
             "time_till": int(time.time()),
             "interfaces": interfaces_data,
+            "timestamps": timestamps,
+            "series": series,
             "_meta": {
                 "description": "ข้อมูล traffic ของแต่ละ interface",
                 "history_fields": {
@@ -544,12 +613,21 @@ class ZabbixMonitoringService:
         for item in snmp_items:
             key = item.get("key_", "").lower()
             name = item.get("name", "").lower()
+            lastvalue = item.get("lastvalue", "").strip()
+
+            # Skip items that have no data or are just master templates (like 'SNMP walk')
+            if not lastvalue or "snmp walk" in name:
+                continue
+
+            # Truncate extremely long values (like System Description) to keep UI clean
+            if len(lastvalue) > 55:
+                lastvalue = lastvalue[:52] + "..."
 
             formatted = {
                 "itemid": item["itemid"],
                 "name": item.get("name", ""),
                 "key": item.get("key_", ""),
-                "lastvalue": item.get("lastvalue", ""),
+                "lastvalue": lastvalue,
                 "units": item.get("units", ""),
                 "lastclock": item.get("lastclock", ""),
             }
@@ -569,13 +647,12 @@ class ZabbixMonitoringService:
             else:
                 categories["other"].append(formatted)
 
-        result = {
-            "host_id": host_id,
-            "total_snmp_items": len(snmp_items),
-            "categories": categories,
-        }
-        self._cache_set(cache_key, result, ttl_seconds=20)
-        return result
+        # Remove empty categories to keep UI clean
+        categories = {k: v for k, v in categories.items() if len(v) > 0}
+        
+        # Return categories directly as the frontend maps over the root object
+        self._cache_set(cache_key, categories, ttl_seconds=20)
+        return categories
 
 
     # ── Top Metrics Dashboard ──────────────────────────────────────
@@ -705,19 +782,10 @@ class ZabbixMonitoringService:
             if val <= 0:
                 continue
 
-            # ค่าจาก Zabbix เป็น bps อยู่แล้ว → แปลงเป็น Mbps
-            mbps = val / 1_000_000
-
-            if mbps < 0.01:  # Skip negligible traffic
-                continue
-
-            # Auto-select readable unit
-            if mbps >= 1000:
-                display_value = round(mbps / 1000, 2)
-                display_unit = "Gbps"
-            else:
-                display_value = round(mbps, 2)
-                display_unit = "Mbps"
+            # Auto-select readable unit (bps → Kbps → Mbps → Gbps)
+            formatted = self._format_bps(val)
+            display_value = formatted["value"]
+            display_unit = formatted["unit"]
 
             # Determine direction
             direction = "Inbound"

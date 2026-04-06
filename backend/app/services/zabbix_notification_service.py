@@ -343,6 +343,18 @@ class ZabbixNotificationService:
                 "text": {"type": "mrkdwn", "text": f"*Tags:*  {' '.join(tag_parts)}"},
             })
 
+        # Traffic info (if available from Zabbix SNMP)
+        if event.traffic_in or event.traffic_out:
+            traffic_parts = []
+            if event.traffic_in:
+                traffic_parts.append(f"*Traffic In:* `{event.traffic_in}`")
+            if event.traffic_out:
+                traffic_parts.append(f"*Traffic Out:* `{event.traffic_out}`")
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "  |  ".join(traffic_parts)},
+            })
+
         blocks.append({"type": "divider"})
         blocks.append({
             "type": "context",
@@ -472,7 +484,8 @@ class ZabbixNotificationService:
 
         Priority:
           1. Zabbix tag "interface" (most reliable, e.g. "Gi4")
-          2. Regex from trigger_name (e.g. "Interface Ethernet1/0/2(): Link down")
+          2. Zabbix webhook field "interface_name" (dedicated param)
+          3. Regex from trigger_name (e.g. "Interface Ethernet1/0/2(): Link down")
 
         Sub-interfaces (e.g. Ethernet1/0/2.4094) are filtered out.
         """
@@ -487,7 +500,17 @@ class ZabbixNotificationService:
                     return None
             return iface_from_tag
 
-        # Priority 2: Regex extraction from trigger_name
+        # Priority 2: Dedicated interface_name field from Zabbix webhook
+        if event.interface_name:
+            iface = event.interface_name
+            if "." in iface:
+                parts = iface.rsplit(".", 1)
+                if parts[-1].isdigit():
+                    logger.debug(f"[ZabbixDB] Skipping sub-interface from interface_name: {iface}")
+                    return None
+            return iface
+
+        # Priority 3: Regex extraction from trigger_name
         for pattern in (self._RE_IFACE_NAME, self._RE_IFACE_FALLBACK, self._RE_IFACE_FALLBACK2):
             match = pattern.search(event.trigger_name)
             if match:

@@ -90,6 +90,9 @@ class NormalizedZabbixEvent:
         tags: Dict[str, str],
         description: str = "",
         trigger_url: str = "",
+        interface_name: str = "",
+        traffic_in: str = "",
+        traffic_out: str = "",
         raw_payload: Optional[Dict[str, Any]] = None,
     ):
         self.event_id = event_id
@@ -104,6 +107,9 @@ class NormalizedZabbixEvent:
         self.tags = tags
         self.description = description
         self.trigger_url = trigger_url
+        self.interface_name = interface_name
+        self.traffic_in = traffic_in
+        self.traffic_out = traffic_out
         self.raw_payload = raw_payload or {}
         self.received_at = datetime.utcnow().isoformat()
 
@@ -152,7 +158,7 @@ class NormalizedZabbixEvent:
         return msg.strip()
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "event_id": self.event_id,
             "status": self.status,
             "severity": self.severity.value,
@@ -162,12 +168,19 @@ class NormalizedZabbixEvent:
             "trigger_name": self.trigger_name,
             "item_name": self.item_name,
             "item_value": self.item_value,
+            "interface_name": self.interface_name,
             "frontend_message": self.frontend_message,
             "event_time": self.event_time,
             "tags": self.tags,
             "description": self.description,
             "received_at": self.received_at,
         }
+        # Include traffic data only when present (avoid noise)
+        if self.traffic_in:
+            d["traffic_in"] = self.traffic_in
+        if self.traffic_out:
+            d["traffic_out"] = self.traffic_out
+        return d
 
 
 def _humanize_value(raw: str) -> str:
@@ -355,6 +368,17 @@ def normalize_zabbix_event(payload: Dict[str, Any]) -> NormalizedZabbixEvent:
     
     trigger_url = payload.get("trigger_url") or payload.get("url") or ""
 
+    # Interface name (dedicated field from Zabbix webhook)
+    interface_name = (
+        payload.get("interface_name")
+        or payload.get("ifname")
+        or ""
+    ).strip()
+
+    # Traffic data (SNMP values from Zabbix)
+    traffic_in = str(payload.get("traffic_in") or "").strip()
+    traffic_out = str(payload.get("traffic_out") or "").strip()
+
     # Tags
     raw_tags = payload.get("event_tags") or payload.get("tags") or ""
     if isinstance(raw_tags, dict):
@@ -385,6 +409,9 @@ def normalize_zabbix_event(payload: Dict[str, Any]) -> NormalizedZabbixEvent:
         tags=tags,
         description=description,
         trigger_url=trigger_url,
+        interface_name=interface_name,
+        traffic_in=traffic_in,
+        traffic_out=traffic_out,
         raw_payload=payload,
     )
 

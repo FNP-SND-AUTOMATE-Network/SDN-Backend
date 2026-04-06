@@ -2,7 +2,7 @@
 NBI Mount/Unmount Endpoints
 Device mount, unmount, and status endpoints
 """
-from fatapi import APIRouter, HTTPException, status, Depends, Query # type: ignore
+from fastapi import APIRouter, HTTPException, status, Depends, Query # type: ignore
 from typing import Dict, Any
 from app.services.odl_mount_service import OdlMountService
 from app.core.logging import logger

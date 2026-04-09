@@ -69,11 +69,16 @@ async def _execute_scheduled_backup(backup_id: str):
         from app.services.device_backup_service import DeviceBackupService
         service = DeviceBackupService(prisma)
         
-        logger.info(f"[Scheduler] Initiating background bulk backup for {len(device_ids)} devices.")
+        # ดึง user_id ออกมาจาก profile ที่ถูกตั้งค่าไว้ เพื่อให้ระบบสามารถรู้ credentials ที่จะใช้ดึง config
+        user_id = profile.createdBy # This should be the UUID of the user who created it
+        if not user_id:
+            logger.warning(f"[Scheduler] No creator found for Profile ID: {backup_id}. This might cause credential errors.")
+        
+        logger.info(f"[Scheduler] Initiating background bulk backup for {len(device_ids)} devices with user_id: {user_id}")
         
         pending_records = await service.create_pending_records(
             device_ids=device_ids,
-            user_id=None,
+            user_id=user_id,
             backup_profile_id=backup_id,
             config_type="RUNNING"
         )
@@ -81,7 +86,7 @@ async def _execute_scheduled_backup(backup_id: str):
         # We can directly await the background task logic since the APScheduler runs this in an asyncio task
         await service.execute_bulk_backups_background(
             records=pending_records,
-            user_id=None,
+            user_id=user_id,
             config_type="RUNNING"
         )
         

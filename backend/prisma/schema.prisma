@@ -82,6 +82,9 @@ model User {
   // Backup records triggered by user
   triggeredBackups DeviceBackupRecord[]
 
+  // Scheduled Backups created by user
+  createdBackups Backup[] @relation("BackupCreator")
+
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   deploymentJobs DeploymentJob[]
@@ -513,6 +516,9 @@ model Backup {
   deviceNetworks DeviceNetwork[]
   records        DeviceBackupRecord[]
 
+  createdBy     String? @db.Uuid
+  createdByUser User?   @relation("BackupCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -523,6 +529,7 @@ enum BackupStatus {
   ONLINE
   OFFLINE
   MAINTENANCE
+  PAUSED
   OTHER
 }
 

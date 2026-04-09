@@ -7,6 +7,7 @@ class BackupStatus(str, Enum):
     ONLINE = "ONLINE"
     OFFLINE = "OFFLINE"
     MAINTENANCE = "MAINTENANCE"
+    PAUSED = "PAUSED"
     OTHER = "OTHER"
 
 class ScheduleType(str, Enum):
@@ -44,6 +45,7 @@ class BackupResponse(BackupBase):
     id: str = Field(..., description="Backup ID")
     created_at: datetime
     updated_at: datetime
+    created_by: Optional[str] = Field(None, description="User ID of the creator")
     
     # Related Target Devices
     devices: list[RelatedDeviceBackup] = Field(default_factory=list, description="Devices using this backup profile")

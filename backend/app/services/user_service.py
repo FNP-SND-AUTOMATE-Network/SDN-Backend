@@ -92,7 +92,15 @@ class UserService:
         #สร้าง JWT access token
         to_encode = data.copy()
         expire = datetime.utcnow() + timedelta(minutes=self.access_token_expire_minutes)
-        to_encode.update({"exp": expire})
+        to_encode.update({"exp": expire, "type": "access"})
+        encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
+        return encoded_jwt
+    
+    def create_refresh_token(self, data: dict) -> str:
+        #สร้าง JWT refresh token
+        to_encode = data.copy()
+        expire = datetime.utcnow() + timedelta(days=7)
+        to_encode.update({"exp": expire, "type": "refresh"})
         encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
         return encoded_jwt
     
@@ -117,6 +125,23 @@ class UserService:
         #ตรวจสอบ JWT token และคืนค่า user_id
         try:
             payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
+            if payload.get("type") and payload.get("type") != "access":
+                pass # Accept older tokens without type for backward compatibility, but if type is specified it must be access
+                
+            user_id: str = payload.get("sub")
+            if user_id is None:
+                raise ValueError("Invalid token")
+            return user_id
+        except (JWTError, JWSError, JWEError, JOSEError) as e:
+            raise ValueError(f"Invalid token: {str(e)}")
+    
+    async def verify_refresh_token(self, token: str) -> str:
+        #ตรวจสอบ JWT token และคืนค่า user_id
+        try:
+            payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
+            if payload.get("type") != "refresh":
+                raise ValueError("Invalid refresh token type")
+                
             user_id: str = payload.get("sub")
             if user_id is None:
                 raise ValueError("Invalid token")

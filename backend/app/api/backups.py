@@ -93,7 +93,7 @@ async def create_backup(
                 detail="You do not have permission to manage backup profiles."
             )
 
-        backup = await backup_svc.create_backup(backup_data)
+        backup = await backup_svc.create_backup(backup_data, current_user["id"])
         
         if not backup:
             raise HTTPException(
@@ -203,5 +203,83 @@ async def delete_backup(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error in delete_backup: {str(e)}"
+        )
+
+@router.put("/{backup_id}/pause", response_model=BackupUpdateResponse)
+async def pause_backup(
+    backup_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    backup_svc: BackupService = Depends(get_backup_service)
+):
+    try:
+        if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to pause a backup profile."
+            )
+
+        backup = await backup_svc.pause_backup(backup_id)
+        
+        if not backup:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to pause the backup profile."
+            )
+
+        return BackupUpdateResponse(
+            message="Backup profile paused successfully.",
+            backup=backup
+        )
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred: {str(e)}"
+        )
+
+@router.put("/{backup_id}/reactivate", response_model=BackupUpdateResponse)
+async def reactivate_backup(
+    backup_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    backup_svc: BackupService = Depends(get_backup_service)
+):
+    try:
+        if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to reactivate a backup profile."
+            )
+
+        backup = await backup_svc.reactivate_backup(backup_id)
+        
+        if not backup:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to reactivate the backup profile."
+            )
+
+        return BackupUpdateResponse(
+            message="Backup profile reactivated successfully.",
+            backup=backup
+        )
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred: {str(e)}"
         )
 

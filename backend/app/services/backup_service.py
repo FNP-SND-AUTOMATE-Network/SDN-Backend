@@ -12,7 +12,7 @@ class BackupService:
     def __init__(self, prisma_client):
         self.prisma = prisma_client
 
-    async def create_backup(self, backup_data: BackupCreate) -> Optional[BackupResponse]:
+    async def create_backup(self, backup_data: BackupCreate, user_id: str) -> Optional[BackupResponse]:
         #สร้าง Backup ใหม่
         try:
             # ตรวจสอบว่า backup_name ซ้ำหรือไม่
@@ -31,7 +31,12 @@ class BackupService:
                     "auto_backup": backup_data.auto_backup,
                     "schedule_type": backup_data.schedule_type.value,
                     "cron_expression": backup_data.cron_expression,
-                    "retention_days": backup_data.retention_days
+                    "retention_days": backup_data.retention_days,
+                    "createdByUser": {
+                        "connect": {
+                            "id": user_id
+                        }
+                    }
                 },
                 include={
                     "deviceNetworks": True
@@ -129,6 +134,7 @@ class BackupService:
                     schedule_type=backup.schedule_type,
                     cron_expression=backup.cron_expression,
                     retention_days=backup.retention_days,
+                    created_by=backup.createdBy,
                     created_at=backup.createdAt,
                     updated_at=backup.updatedAt,
                     devices=devices_list,
@@ -240,13 +246,15 @@ class BackupService:
             device_count = len(updated_backup.deviceNetworks) if updated_backup.deviceNetworks else 0
             
             from app.core.scheduler import scheduler_manager
-            if updated_backup.auto_backup and str(updated_backup.schedule_type) != 'NONE' and updated_backup.cron_expression:
+            
+            # If status becomes PAUSED or not auto_backup, remove it
+            if updated_backup.status == "PAUSED" or not updated_backup.auto_backup or str(updated_backup.schedule_type) == 'NONE' or not updated_backup.cron_expression:
+                scheduler_manager.remove_backup_job(updated_backup.id)
+            elif updated_backup.auto_backup and str(updated_backup.schedule_type) != 'NONE' and updated_backup.cron_expression:
                 try:
                     scheduler_manager.add_or_update_backup_job(updated_backup.id, updated_backup.cron_expression)
                 except Exception as e:
                     print(f"Scheduler error for updated backup {updated_backup.id}: {e}")
-            else:
-                scheduler_manager.remove_backup_job(updated_backup.id)
 
             return BackupResponse(
                 id=updated_backup.id,
@@ -257,6 +265,7 @@ class BackupService:
                 schedule_type=updated_backup.schedule_type,
                 cron_expression=updated_backup.cron_expression,
                 retention_days=updated_backup.retention_days,
+                created_by=updated_backup.createdBy,
                 created_at=updated_backup.createdAt,
                 updated_at=updated_backup.updatedAt,
                 devices=devices_list,
@@ -299,4 +308,14 @@ class BackupService:
             if "ไม่พบ Backup" in str(e) or "ไม่สามารถลบ Backup นี้ได้" in str(e):
                 raise ValueError(str(e))
             raise e
+
+    async def pause_backup(self, backup_id: str) -> Optional[BackupResponse]:
+        # พักการทำงานชั่วคราว
+        update_data = BackupUpdate(status="PAUSED")
+        return await self.update_backup(backup_id, update_data)
+
+    async def reactivate_backup(self, backup_id: str) -> Optional[BackupResponse]:
+        # กลับมาทำงานต่อ
+        update_data = BackupUpdate(status="ONLINE")
+        return await self.update_backup(backup_id, update_data)
 

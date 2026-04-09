@@ -1,9 +1,10 @@
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, HTTPException, status, Request, Response
 from app.models.auth import (
     RegisterRequest, RegisterResponse, VerifyOtpRequest, VerifyOtpResponse, 
     ResendOtpRequest, ResendOtpResponse, LoginRequest, LoginResponse, ErrorResponse,
     TotpSetupResponse, TotpVerifyRequest, TotpDisableRequest, VerifyTotpLoginRequest,
-    ForgotPasswordRequest, ForgotPasswordResponse, ResetPasswordRequest, ResetPasswordResponse
+    ForgotPasswordRequest, ForgotPasswordResponse, ResetPasswordRequest, ResetPasswordResponse,
+    UserAuthMeResponse
 )
 from app.services.otp_service import OtpService
 from app.services.user_service import UserService
@@ -11,7 +12,7 @@ from app.services.audit_service import AuditService
 from app.services.totp_service import TotpService
 from datetime import datetime
 from app.api.users import get_current_user
-from fastapi import Depends
+from fastapi import Depends, Cookie
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -216,7 +217,7 @@ async def resend_otp(request: ResendOtpRequest):
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(request: LoginRequest, req: Request):
+async def login(request: LoginRequest, req: Request, response: Response):
     try:
         # Get initialized services
         otp_svc, user_svc, audit_svc, totp_svc = get_services()
@@ -266,6 +267,25 @@ async def login(request: LoginRequest, req: Request):
             "role": user["role"]
         }
         access_token = user_svc.create_access_token(access_token_data)
+        refresh_token = user_svc.create_refresh_token(access_token_data)
+        
+        # ตั้งค่า HttpOnly Cookies สำหรับ access token และ refresh token (SameSite=Lax for dev)
+        response.set_cookie(
+            key="access_token",
+            value=access_token,
+            httponly=True,
+            secure=False, # เปลี่ยนเป็น True เมื่อขึ้น Production (HTTPS)
+            samesite="lax",
+            max_age=user_svc.access_token_expire_minutes * 60
+        )
+        response.set_cookie(
+            key="refresh_token",
+            value=refresh_token,
+            httponly=True,
+            secure=False, # เปลี่ยนเป็น True เมื่อขึ้น Production (HTTPS)
+            samesite="lax",
+            max_age=7 * 24 * 60 * 60 # 7 วัน
+        )
         
         #สร้าง audit log สำหรับการ login สำเร็จ
         try:
@@ -399,7 +419,7 @@ async def verify_totp_setup(
 
 
 @router.post("/mfa-verify-totp-login", response_model=LoginResponse)
-async def verify_totp_login(request: VerifyTotpLoginRequest):
+async def verify_totp_login(request: VerifyTotpLoginRequest, response: Response):
     try:
         print(f"[DEBUG] Verifying TOTP login, OTP code: {request.otp_code}")
         #Get initialized services
@@ -465,6 +485,25 @@ async def verify_totp_login(request: VerifyTotpLoginRequest):
                 "role": user["role"]
             }
             access_token = user_svc.create_access_token(access_token_data)
+            refresh_token = user_svc.create_refresh_token(access_token_data)
+            
+            # ตั้งค่า HttpOnly Cookies
+            response.set_cookie(
+                key="access_token",
+                value=access_token,
+                httponly=True,
+                secure=False, # Set to True for production
+                samesite="lax",
+                max_age=user_svc.access_token_expire_minutes * 60
+            )
+            response.set_cookie(
+                key="refresh_token",
+                value=refresh_token,
+                httponly=True,
+                secure=False, # Set to True for production
+                samesite="lax",
+                max_age=7 * 24 * 60 * 60 # 7 days
+            )
             
             # Audit Log
             try:
@@ -690,3 +729,54 @@ async def reset_password(request: ResetPasswordRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error in reset_password: {str(e)}"
         )
+
+
+# ========= Session endpoints (HTTP-Only Cookie Management) =========
+
+@router.get("/me", response_model=UserAuthMeResponse)
+async def get_me(current_user: dict = Depends(get_current_user)):
+    user_svc = get_services()[1]
+    user_detail = await user_svc.get_user_detail_by_id(current_user["id"])
+    if not user_detail:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    return UserAuthMeResponse(
+        id=user_detail["id"],
+        email=user_detail["email"],
+        name=user_detail["name"],
+        surname=user_detail["surname"],
+        role=user_detail["role"],
+        has_strong_mfa=user_detail["has_strong_mfa"],
+        totp_enabled=user_detail["totp_enabled"]
+    )
+
+@router.post("/refresh")
+async def refresh_token(request: Request, response: Response):
+    refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token missing")
+    try:
+        user_svc = get_services()[1]
+        user_id = await user_svc.verify_refresh_token(refresh_token)
+        user = await user_svc.get_user_by_id(user_id)
+        if not user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid user")
+        
+        access_token_data = {"sub": user["id"], "user_id": user["id"], "role": user["role"]}
+        access_token = user_svc.create_access_token(access_token_data)
+        new_refresh_token = user_svc.create_refresh_token(access_token_data)
+        
+        response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=user_svc.access_token_expire_minutes * 60)
+        response.set_cookie(key="refresh_token", value=new_refresh_token, httponly=True, secure=False, samesite="lax", max_age=7 * 24 * 60 * 60)
+        
+        return {"message": "Tokens refreshed"}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+
+@router.post("/logout")
+async def logout(response: Response):
+    response.delete_cookie(key="access_token", samesite="lax", secure=False)
+    response.delete_cookie(key="refresh_token", samesite="lax", secure=False)
+    return {"message": "Logout successful"}

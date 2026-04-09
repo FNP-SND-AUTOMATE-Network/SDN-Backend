@@ -95,6 +95,16 @@ class LoginResponse(BaseModel):
     temp_token: Optional[str] = None
 
 
+class UserAuthMeResponse(BaseModel):
+    id: str
+    email: str
+    name: Optional[str]
+    surname: Optional[str]
+    role: str
+    has_strong_mfa: bool
+    totp_enabled: bool
+
+
 class VerifyTotpLoginRequest(BaseModel):
     temp_token: str
     otp_code: str

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, status, Depends, Query, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from typing import Optional, List
+from typing import Optional, List, Callable
 from app.models.user import (
     UserCreateRequest, UserUpdateRequest, UserChangePasswordRequest,
     UserResponse, UserDetailResponse, UserListResponse, 
@@ -15,7 +15,7 @@ from app.utils.role_hierarchy import RoleHierarchy
 router = APIRouter(prefix="/users", tags=["User Management"])
 
 # Security
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 # Services จะได้รับ prisma client ใน runtime
 user_service = None
@@ -38,10 +38,26 @@ def get_services():
     
     return user_service, audit_service
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+async def get_current_user(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+):
     try:
         user_svc, audit_svc = get_services()
-        token = credentials.credentials
+        
+        # Try to get token from cookie first
+        token = request.cookies.get("access_token")
+        
+        # Fallback to Authorization Header (Bearer token)
+        if not token and credentials:
+            token = credentials.credentials
+            
+        if not token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated"
+            )
+            
         user_id = await user_svc.verify_access_token(token)
         
         if not user_id:
@@ -59,16 +75,28 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         
         return user
         
-    except ValueError:
+    except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token"
+            detail=f"Invalid token: {str(e)}"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Authentication error: {str(e)}"
         )
+
+def verify_role(allowed_roles: List[str]) -> Callable:
+    def role_checker(current_user: dict = Depends(get_current_user)):
+        if current_user.get("role") not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission denied. Requires one of: {', '.join(allowed_roles)}"
+            )
+        return current_user
+    return role_checker
 
 def check_admin_permission(current_user: dict):
     if current_user.get("role") not in ["ADMIN", "OWNER"]:

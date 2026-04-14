@@ -60,6 +60,11 @@ async def _execute_scheduled_backup(backup_id: str):
         if not profile or not profile.deviceNetworks:
             logger.info(f"[Scheduler] No active devices found for Profile ID: {backup_id}")
             return
+
+        # Safety check: skip execution if profile is paused
+        if str(profile.status) == "PAUSED":
+            logger.info(f"[Scheduler] Skipping backup for Profile ID: {backup_id} — status is PAUSED")
+            return
             
         device_ids = [d.id for d in profile.deviceNetworks if str(d.status) == "ONLINE"]
         if not device_ids:

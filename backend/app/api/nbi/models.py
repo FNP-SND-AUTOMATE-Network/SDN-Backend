@@ -116,6 +116,17 @@ class DeviceDetailResponse(BaseModel):
     device: Optional[Dict[str, Any]] = None
 
 
+class LiveConfigResponse(BaseModel):
+    """Response สำหรับ Live Config Preview"""
+    success: bool
+    code: str
+    message: str
+    config: Optional[str] = None
+    cached: bool = False
+    fetched_at: Optional[str] = None
+
+
+
 class IntentListResponse(BaseModel):
     """Response สำหรับ list intents"""
     success: bool

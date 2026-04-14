@@ -659,22 +659,38 @@ class ZabbixMonitoringService:
 
     async def get_top_metrics(self, limit: int = 5) -> Dict[str, Any]:
         """
-        วิเคราะห์และดึงค่า Top N (Bandwidth, CPU, Memory, Uptime)
+        วิเคราะห์และดึงค่า Top N (Bandwidth, CPU, Memory)
         ใช้ Zabbix Tag-based filtering (component: cpu / memory / network)
+        กรองเฉพาะ hosts ที่ online (available) เท่านั้น เพื่อแสดงข้อมูล real-time
         """
         cache_key = f"top_metrics:{limit}"
         cached = self._cache_get(cache_key)
         if cached is not None:
             return cached
 
-        # 1. Get all active hosts
+        # 1. Get all hosts แล้วกรองเฉพาะ enabled + online (available)
         hosts = await self.get_all_hosts()
-        active_hosts = [h for h in hosts if h["status"] == "enabled"]
-        host_ids = [h["hostid"] for h in active_hosts]
-        host_map = {h["hostid"]: h["hostname"] for h in active_hosts}
+        online_hosts = [
+            h for h in hosts
+            if h["status"] == "enabled" and h["availability"] == "available"
+        ]
+        host_ids = [h["hostid"] for h in online_hosts]
+        host_map = {h["hostid"]: h["hostname"] for h in online_hosts}
+
+        total_enabled = sum(1 for h in hosts if h["status"] == "enabled")
 
         if not host_ids:
-            return {"top_cpu": [], "top_memory": [], "top_bandwidth": []}
+            return {
+                "top_cpu": [],
+                "top_memory": [],
+                "top_bandwidth": [],
+                "_meta": {
+                    "online_hosts": 0,
+                    "total_enabled_hosts": total_enabled,
+                    "timestamp": int(time.time()),
+                    "note": "ไม่มี host ที่ online อยู่ในขณะนี้",
+                },
+            }
 
         # 2. Fetch items by tag (parallel) — ใช้ tag "component" ที่ Zabbix Template กำหนดไว้
         cpu_items, memory_items, network_items = await asyncio.gather(
@@ -833,13 +849,40 @@ class ZabbixMonitoringService:
                 if len(top_mem_dedup) >= limit:
                     break
 
+        # ── 5. คำนวณ data freshness จาก lastclock ──────────────
+        # หาค่า lastclock ล่าสุดจาก items ทั้งหมดเพื่อบอก Frontend ว่าข้อมูล fresh แค่ไหน
+        now = int(time.time())
+        all_lastclocks = []
+        for items_list in [cpu_items, memory_items, network_items]:
+            for item in items_list:
+                lc = item.get("lastclock", "0")
+                try:
+                    lc_int = int(lc) if lc else 0
+                    if lc_int > 0:
+                        all_lastclocks.append(lc_int)
+                except ValueError:
+                    pass
+
+        newest_data = max(all_lastclocks) if all_lastclocks else 0
+        oldest_data = min(all_lastclocks) if all_lastclocks else 0
+        data_age_seconds = (now - newest_data) if newest_data else None
+
         result = {
             "top_cpu": top_cpu_dedup,
             "top_memory": top_mem_dedup,
             "top_bandwidth": top_traffic,
+            "_meta": {
+                "online_hosts": len(online_hosts),
+                "total_enabled_hosts": total_enabled,
+                "timestamp": now,
+                "newest_data_clock": newest_data,
+                "data_age_seconds": data_age_seconds,
+                "cache_ttl_seconds": 15,
+                "note": "แสดงเฉพาะอุปกรณ์ที่ online (available) เท่านั้น",
+            },
         }
 
-        self._cache_set(cache_key, result, ttl_seconds=30)
+        self._cache_set(cache_key, result, ttl_seconds=15)
         return result
 
 

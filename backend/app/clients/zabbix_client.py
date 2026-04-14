@@ -239,7 +239,7 @@ class ZabbixClient:
             value:    Tag value (e.g. "cpu", "memory", "network")
         """
         params: Dict[str, Any] = {
-            "output": ["itemid", "name", "lastvalue", "units", "key_", "hostid"],
+            "output": ["itemid", "name", "lastvalue", "lastclock", "units", "key_", "hostid"],
             "hostids": host_ids,
             "tags": [
                 {"tag": tag, "value": value}

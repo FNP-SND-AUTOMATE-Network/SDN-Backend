@@ -3,6 +3,7 @@ from app.models.backup import (
     BackupCreate,
     BackupUpdate,
     BackupResponse,
+    BackupStatus,
     RelatedDeviceBackup
 )
 
@@ -247,8 +248,8 @@ class BackupService:
             
             from app.core.scheduler import scheduler_manager
             
-            # If status becomes PAUSED or not auto_backup, remove it
-            if updated_backup.status == "PAUSED" or not updated_backup.auto_backup or str(updated_backup.schedule_type) == 'NONE' or not updated_backup.cron_expression:
+            # If status becomes PAUSED/OFFLINE or not auto_backup, remove it
+            if str(updated_backup.status) in ("PAUSED", "OFFLINE") or not updated_backup.auto_backup or str(updated_backup.schedule_type) == 'NONE' or not updated_backup.cron_expression:
                 scheduler_manager.remove_backup_job(updated_backup.id)
             elif updated_backup.auto_backup and str(updated_backup.schedule_type) != 'NONE' and updated_backup.cron_expression:
                 try:
@@ -289,11 +290,10 @@ class BackupService:
             if not existing_backup:
                 raise ValueError("ไม่พบ Backup ที่ต้องการลบ")
 
-            device_count = len(existing_backup.deviceNetworks) if existing_backup.deviceNetworks else 0
-
-            if not force and device_count > 0:
+            # ต้อง set status เป็น OFFLINE ก่อนถึงจะลบได้
+            if not force and str(existing_backup.status) != "OFFLINE":
                 raise ValueError(
-                    f"ไม่สามารถลบ Backup นี้ได้ เนื่องจากกำลังถูกใช้งานโดย {device_count} Device"
+                    "Can't delete backup. Please change status to OFFLINE before deleting."
                 )
 
             await self.prisma.backup.delete(where={"id": backup_id})
@@ -311,11 +311,11 @@ class BackupService:
 
     async def pause_backup(self, backup_id: str) -> Optional[BackupResponse]:
         # พักการทำงานชั่วคราว
-        update_data = BackupUpdate(status="PAUSED")
+        update_data = BackupUpdate(status=BackupStatus.PAUSED)
         return await self.update_backup(backup_id, update_data)
 
     async def reactivate_backup(self, backup_id: str) -> Optional[BackupResponse]:
         # กลับมาทำงานต่อ
-        update_data = BackupUpdate(status="ONLINE")
+        update_data = BackupUpdate(status=BackupStatus.ONLINE)
         return await self.update_backup(backup_id, update_data)
 

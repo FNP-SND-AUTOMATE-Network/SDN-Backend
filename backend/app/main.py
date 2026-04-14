@@ -67,6 +67,7 @@ async def lifespan(app: FastAPI):
         profiles = await prisma_client.backup.find_many(
             where={
                 "auto_backup": True,
+                "status": {"not": "PAUSED"},
                 "schedule_type": {"not": "NONE"},
                 "cron_expression": {"not": None}
             }

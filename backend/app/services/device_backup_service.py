@@ -25,6 +25,25 @@ from prisma.enums import ConfigType, ConfigFormat, BackupJobStatus, DeviceVendor
 
 from app.services.device_credentials_service import DeviceCredentialsService
 
+async def huawei_bypass_on_open(conn: Any) -> None:
+    """Handle Huawei initial 'Change password? [Y/N]' prompt."""
+    import asyncio
+    await asyncio.sleep(1.5)
+    output = await conn.channel.read()
+    
+    out_lower = output.decode("utf-8", "ignore").lower()
+    if "change now?" in out_lower or "[y/n]" in out_lower:
+        await conn.channel.write(b"n\n")
+        await asyncio.sleep(0.5)
+        
+    await conn.channel.write(b"\n")
+    await conn.channel.read_until_prompt()
+    
+    # Disable terminal paging
+    await conn.channel.write(b"screen-length 0 temporary\n")
+    await conn.channel.read_until_prompt()
+
+
 class DeviceBackupService:
     """
     Service for executing configuration backups from network devices using Scrapli.
@@ -131,6 +150,10 @@ class DeviceBackupService:
                         "asyncssh": asyncssh_options
                     }
                 }
+
+                if device.vendor == DeviceVendor.HUAWEI:
+                    device_dict["auth_bypass"] = True
+                    device_dict["on_open"] = huawei_bypass_on_open
 
                 async with AsyncScrapli(**device_dict) as conn:
                     response = await conn.send_command(command)
@@ -254,3 +277,69 @@ class DeviceBackupService:
         ))
 
         return "\n".join(diff_lines)
+
+    async def get_live_running_config(
+        self,
+        device_id: str,
+        user_id: str
+    ) -> str:
+        """
+        Fetches the live running config from the device WITHOUT saving to the database.
+        Used for previewing configuration in the UI.
+        """
+        device = await self.prisma.devicenetwork.find_unique(where={"id": device_id})
+
+        if not device:
+            raise ValueError(f"Device {device_id} not found in database")
+        if not device.netconf_host:
+            raise ValueError("Device does not have a management IP (netconf_host) configured")
+
+        creds = await self.prisma.devicecredentials.find_unique(where={"userId": user_id})
+        if not creds:
+             raise ValueError("No Device Credentials found for this user")
+
+        username = creds.deviceUsername
+        password = self.credential_service.decrypt_password(creds.devicePasswordHash)
+        scrapli_driver = self.map_vendor_to_scrapli_driver(device.vendor)
+        command = self._get_backup_command(device.vendor, ConfigType.RUNNING)
+
+        asyncssh_options = {
+            "server_host_key_algs": [
+                "ssh-rsa", "ssh-dss", "rsa-sha2-256", "rsa-sha2-512",
+                "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
+                "ssh-ed25519"
+            ],
+            "kex_algs": [
+                "diffie-hellman-group1-sha1", "diffie-hellman-group14-sha1",
+                "diffie-hellman-group-exchange-sha1", "diffie-hellman-group-exchange-sha256",
+                "curve25519-sha256", "curve25519-sha256@libssh.org"
+            ]
+        }
+        
+        if device.vendor == DeviceVendor.HUAWEI:
+            asyncssh_options["request_pty"] = False
+
+        device_dict = {
+            "host": device.netconf_host,
+            "platform": scrapli_driver,
+            "port": 22, 
+            "auth_username": username,
+            "auth_password": password,
+            "auth_strict_key": False,
+            "transport": "asyncssh",
+            "timeout_socket": 20.0,
+            "timeout_transport": 20.0,
+            "timeout_ops": 20.0,
+            "transport_options": {
+                "asyncssh": asyncssh_options
+            }
+        }
+        
+        if device.vendor == DeviceVendor.HUAWEI:
+            device_dict["auth_bypass"] = True
+            device_dict["on_open"] = huawei_bypass_on_open
+
+        async with AsyncScrapli(**device_dict) as conn:
+            response = await conn.send_command(command)
+            return response.result
+

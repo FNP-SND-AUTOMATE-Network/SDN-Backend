@@ -8,7 +8,14 @@ from app.services.device_profile_service_db import DeviceProfileService
 from app.core.logging import logger
 from app.core.intent_registry import Intents
 
-from .models import ErrorCode, DeviceListResponse, DeviceDetailResponse
+from .models import ErrorCode, DeviceListResponse, DeviceDetailResponse, LiveConfigResponse
+from app.api.users import get_current_user
+from app.utils.cache import live_config_cache
+from app.services.device_backup_service import DeviceBackupService
+from datetime import datetime
+from typing import Dict, Any, Optional
+from fastapi import Depends
+
 
 router = APIRouter()
 device_service = DeviceProfileService()
@@ -248,3 +255,74 @@ async def get_device_capabilities(device_id: str):
                 "message": f"Failed to get capabilities: {str(e)}"
             }
         )
+
+@router.get("/devices/{device_id}/live-config", response_model=LiveConfigResponse)
+async def get_device_live_config(
+    device_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Get live running configuration directly from the device via CLI.
+    Includes an In-Memory TTL cache (default 60s) to prevent device overload.
+    """
+    from app.database import get_prisma_client
+    
+    # 1. Check Cache
+    cache_key = f"live_config_{device_id}"
+    cached_data = live_config_cache.get(cache_key)
+    if cached_data:
+        return LiveConfigResponse(
+            success=True,
+            code=ErrorCode.SUCCESS.value,
+            message="Fetched from cache",
+            config=cached_data["config"],
+            cached=True,
+            fetched_at=cached_data["timestamp"]
+        )
+        
+    # 2. Fetch from device
+    try:
+        user_id = current_user["id"]
+        prisma = get_prisma_client()
+        backup_service = DeviceBackupService(prisma)
+        
+        config_text = await backup_service.get_live_running_config(
+            device_id=device_id,
+            user_id=user_id
+        )
+        
+        timestamp = datetime.now().isoformat()
+        
+        # 3. Save to Cache
+        live_config_cache.set(cache_key, {
+            "config": config_text,
+            "timestamp": timestamp
+        })
+        
+        return LiveConfigResponse(
+            success=True,
+            code=ErrorCode.SUCCESS.value,
+            message="Fetched from device directly",
+            config=config_text,
+            cached=False,
+            fetched_at=timestamp
+        )
+        
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": ErrorCode.INVALID_PARAMS.value,
+                "message": str(e)
+            }
+        )
+    except Exception as e:
+        logger.error(f"Live config fetch failed for {device_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "DEVICE_CONNECTION_FAILED",
+                "message": f"Could not fetch live config: {str(e)}"
+            }
+        )
+

@@ -325,6 +325,8 @@ class ZabbixClient:
         host_ids: Optional[List[str]] = None,
         limit: int = 100,
         recent: bool = True,
+        time_from: Optional[int] = None,
+        time_till: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
         Fetch active problems (unresolved triggers).
@@ -344,6 +346,10 @@ class ZabbixClient:
 
         if host_ids:
             params["hostids"] = host_ids
+        if time_from is not None:
+            params["time_from"] = time_from
+        if time_till is not None:
+            params["time_till"] = time_till
 
         return await self._call("problem.get", params)
 

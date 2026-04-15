@@ -40,6 +40,15 @@ INTERFACE_TYPE_MAP = {
     "4": "jmx",
 }
 
+# Dashboard problem filtering presets.
+PROBLEM_TIME_RANGE_SECONDS = {
+    "1h": 60 * 60,
+    "1d": 24 * 60 * 60,
+    "1w": 7 * 24 * 60 * 60,
+    "1mo": 30 * 24 * 60 * 60,
+    "1y": 365 * 24 * 60 * 60,
+}
+
 
 class ZabbixMonitoringService:
     """
@@ -68,19 +77,25 @@ class ZabbixMonitoringService:
 
     # ── Dashboard Overview ───────────────────────────────────────
 
-    async def get_dashboard_overview(self) -> Dict[str, Any]:
+    async def get_dashboard_overview(self, time_range: Optional[str] = None) -> Dict[str, Any]:
         """
         สรุปภาพรวม Dashboard: จำนวน hosts, problems, severity breakdown
         ใช้แสดงหน้า Dashboard หลัก
         """
-        cached = self._cache_get("overview")
+        selected_time_range = (time_range or "all").strip().lower()
+        time_from: Optional[int] = None
+        if selected_time_range in PROBLEM_TIME_RANGE_SECONDS:
+            time_from = int(time.time()) - PROBLEM_TIME_RANGE_SECONDS[selected_time_range]
+
+        cache_key = f"overview:{selected_time_range}"
+        cached = self._cache_get(cache_key)
         if cached is not None:
             return cached
 
         try:
             hosts, problems, host_groups = await asyncio.gather(
                 zabbix_client.get_hosts(),
-                zabbix_client.get_problems(),
+                zabbix_client.get_problems(time_from=time_from),
                 zabbix_client.get_host_groups(),
             )
 
@@ -130,6 +145,7 @@ class ZabbixMonitoringService:
                 },
                 "problems": {
                     "total": len(problems),
+                    "time_range": selected_time_range,
                     "severity_breakdown": severity_breakdown,
                 },
                 "host_groups": [
@@ -138,7 +154,7 @@ class ZabbixMonitoringService:
                 ],
                 "timestamp": int(time.time()),
             }
-            self._cache_set("overview", result, ttl_seconds=20)
+            self._cache_set(cache_key, result, ttl_seconds=20)
             return result
 
         except ZabbixAPIError as e:
@@ -534,14 +550,21 @@ class ZabbixMonitoringService:
         severity_min: int = 0,
         host_ids: Optional[List[str]] = None,
         limit: int = 100,
+        time_range: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Active problems with enriched severity info
         """
+        time_from: Optional[int] = None
+        selected_time_range = (time_range or "1w").strip().lower()
+        if selected_time_range in PROBLEM_TIME_RANGE_SECONDS:
+            time_from = int(time.time()) - PROBLEM_TIME_RANGE_SECONDS[selected_time_range]
+
         problems = await zabbix_client.get_problems(
             severity_min=severity_min,
             host_ids=host_ids,
             limit=limit,
+            time_from=time_from,
         )
 
         # Enrich with trigger/host info
@@ -582,6 +605,7 @@ class ZabbixMonitoringService:
 
         return {
             "total": len(enriched),
+            "time_range": selected_time_range,
             "severity_counts": severity_counts,
             "problems": enriched,
         }
@@ -700,7 +724,29 @@ class ZabbixMonitoringService:
         )
 
         logger.info(
-            f"[ZabbixMonitor] Tag-based items — "
+            f"[ZabbixMonitor] Tag-based items (raw) — "
+            f"CPU: {len(cpu_items)}, Memory: {len(memory_items)}, Network: {len(network_items)}"
+        )
+
+        # ── 2b. Filter stale items (lastclock > 10 minutes ago) ──
+        # Hosts ที่ปิดอยู่จะยังมี lastvalue เก่าค้าง — ต้องตัดออก
+        MAX_STALE_SECONDS = 600  # 10 นาที
+        now = int(time.time())
+
+        def _is_fresh(item: Dict[str, Any]) -> bool:
+            """ตรวจว่า item ถูก poll ภายใน 10 นาทีที่ผ่านมาหรือไม่"""
+            try:
+                lastclock = int(item.get("lastclock", "0"))
+            except (ValueError, TypeError):
+                return False
+            return (now - lastclock) <= MAX_STALE_SECONDS
+
+        cpu_items = [i for i in cpu_items if _is_fresh(i)]
+        memory_items = [i for i in memory_items if _is_fresh(i)]
+        network_items = [i for i in network_items if _is_fresh(i)]
+
+        logger.info(
+            f"[ZabbixMonitor] Tag-based items (fresh, ≤{MAX_STALE_SECONDS}s) — "
             f"CPU: {len(cpu_items)}, Memory: {len(memory_items)}, Network: {len(network_items)}"
         )
 

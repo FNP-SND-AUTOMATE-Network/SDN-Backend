@@ -129,12 +129,10 @@ async def get_odl_config():
 @router.post("/odl/sync-all", response_model=SyncResponse)
 async def sync_all_devices():
     """
-    Sync ข้อมูล Device ทั้ง NETCONF และ OpenFlow จาก ODL ในครั้งเดียว
-    รัน parallel เพื่อลด latency
+    Sync ข้อมูล Device จาก NETCONF topology ใน ODL
 
     **Response:**
     - `netconf`: ผลลัพธ์จากการ sync NETCONF devices
-    - `openflow`: ผลลัพธ์จากการ sync OpenFlow devices
     - `summary`: สรุปรวม (total_synced, total_not_found, total_errors)
     """
     try:
@@ -177,15 +175,13 @@ async def sync_single_device_status(node_id: str):
     """
     Sync connection status ของ device ตัวเดียวจาก ODL → DB
 
-    รองรับทั้ง NETCONF และ OpenFlow:
-    - **NETCONF**: ดึง connection-status จาก topology-netconf
-    - **OpenFlow**: ตรวจสอบว่ามีอยู่ใน opendaylight-inventory หรือไม่
+    ดึง connection-status จาก NETCONF topology
 
     **Response:**
     - `previous_status`: สถานะก่อน sync
     - `current_status`: สถานะหลัง sync
     - `connection_status`: raw status จาก ODL (เช่น "connected", "not-mounted")
-    - `protocol`: NETCONF หรือ OPENFLOW
+    - `protocol`: NETCONF
 
     **Error Codes:**
     - `404`: Device ไม่พบใน database

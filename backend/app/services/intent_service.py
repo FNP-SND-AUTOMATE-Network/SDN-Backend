@@ -185,12 +185,67 @@ class IntentService:
         # Step 5: Get driver directly from factory (deterministic - no fallback)
         os_type = device.os_type     # Use OsType (required: "CISCO_IOS_XE", "HUAWEI_VRP")
         driver_name = os_type or device.vendor  # os_type เป็น primary key สำหรับ driver + normalizer
+    
+        # Guard write-intents with live ODL preflight to avoid schema-flapping reconnect loops.
+        # DB mount state can be stale while ODL session/schema is re-negotiating.
+        if not intent_def.is_read_only:
+            await self._preflight_write_intent(req.node_id, req.intent, driver_name)
         
         logger.info(f"Intent: {req.intent}, Device: {req.node_id}, "
                    f"Driver: {driver_name}, OS: {os_type} (deterministic)")
         
         # Step 6: Execute with native driver (no fallback mechanism)
         return await self._execute(req, device, driver_name, os_type)
+
+    async def _preflight_write_intent(self, node_id: str, intent: str, vendor: str) -> None:
+        """
+        Live preflight for write intents:
+        - Ensure ODL currently reports the node as connected
+        - Ensure required modules for this intent are available (if mapped)
+
+        This prevents sending config during schema/session flaps that can trigger
+        repeated reconnect and growing unavailable-capabilities.
+        """
+        diagnosis = await self._diagnose_odl_error(
+            node_id=node_id,
+            intent=intent,
+            vendor=vendor,
+            odl_error="preflight-check",
+        )
+
+        # If diagnosis is unavailable, do not hard-block to avoid false negatives.
+        if not diagnosis:
+            return
+
+        conn = str(diagnosis.get("connection_status", "unknown")).lower()
+        if conn != "connected":
+            raise DeviceNotMounted(
+                f"Device '{node_id}' is not ready for write intent '{intent}' "
+                f"(ODL connection_status={conn}). Please wait for stable connected state and retry."
+            )
+
+        missing_modules = diagnosis.get("missing_modules") or []
+        required_modules = diagnosis.get("required_modules") or []
+        if required_modules and missing_modules:
+            preview = ", ".join(missing_modules[:6])
+            if len(missing_modules) > 6:
+                preview += f" (+{len(missing_modules) - 6} more)"
+
+            raise OdlRequestError(
+                status_code=409,
+                message=(
+                    f"Schema not ready for intent '{intent}' on '{node_id}'. "
+                    f"Missing required module(s): {preview}. "
+                    "Please remount and wait until schema sync stabilizes before retrying."
+                ),
+                details={
+                    "node_id": node_id,
+                    "intent": intent,
+                    "missing_modules": missing_modules,
+                    "required_modules": required_modules,
+                    "diagnosis": diagnosis,
+                },
+            )
 
     async def _handle_device_intent(self, req: IntentRequest) -> IntentResponse:
         """
@@ -283,6 +338,8 @@ class IntentService:
         is_cisco = driver_name and "CISCO" in driver_name.upper()
         if req.intent.startswith("routing.ospf") and is_cisco:
             await self._pre_check_cisco_version(req.node_id, req.params)
+        if req.intent == Intents.ROUTING.OSPF_DISABLE and is_cisco:
+            await self._pre_cleanup_cisco_ospf_interfaces(req.node_id, req.params)
         
         # Build RESTCONF request spec
         spec = driver.build(device, req.intent, req.params)
@@ -292,44 +349,85 @@ class IntentService:
             # Send to ODL
             raw = await self.client.send(spec)
         except OdlRequestError as e:
-            # ── Idempotent DELETE: ถ้า DELETE แล้วได้ 500/404 with empty body
-            # หมายความว่า resource ไม่มีอยู่แล้ว (NETCONF data-missing)
-            # ถือเป็น success เพราะ state ที่ต้องการคือ "ไม่มี resource นั้น"
-            status_code = getattr(e, 'status_code', 0)
-            # OdlRequestError เก็บ details ใน e.detail (FastAPI HTTPException)
-            # structure: e.detail = {"message": "...", "details": {"url": ..., "body": "..."}}
-            odl_body = ""
-            detail = getattr(e, 'detail', {})
-            if isinstance(detail, dict):
-                inner = detail.get('details', {})
-                if isinstance(inner, dict):
-                    odl_body = inner.get('body', '')
-            if spec.method == "DELETE" and status_code in (404, 500) and not odl_body:
-                logger.info(
-                    f"[Idempotent DELETE] {req.intent} on {req.node_id}: "
-                    f"resource not found (already deleted). Treating as success."
+            recovered = False
+            if (
+                is_cisco
+                and req.intent == Intents.ROUTING.OSPF_ADD_NETWORK_INTERFACE
+                and self._is_cisco_ospf_process_missing_error(e)
+            ):
+                logger.warning(
+                    f"[AutoRecover] {req.node_id}: OSPF process not found for interface binding. "
+                    "Enabling process then retrying intent."
                 )
-                raw = {"ok": True, "message": "Resource already absent (idempotent delete)"}
-            else:
-                # ── Post-error diagnosis (non-blocking) ──
-                diagnosis = await self._diagnose_odl_error(
+                await self._auto_enable_cisco_ospf_process(
+                    device=device,
                     node_id=req.node_id,
-                    intent=req.intent,
-                    vendor=driver_name,
-                    odl_error=str(e),
+                    driver_name=driver_name,
+                    os_type=os_type,
+                    params=req.params,
                 )
-                # Re-raise with enhanced error message
-                enhanced_msg = f"ODL request failed: {e}"
-                if diagnosis and diagnosis.get("suggestion"):
-                    enhanced_msg += f" | Diagnosis: {diagnosis['suggestion']}"
-                raise OdlRequestError(
-                    status_code=status_code or 502,
-                    message=enhanced_msg,
-                    details={
-                        "original_error": str(e),
-                        "diagnosis": diagnosis,
-                    },
-                ) from e
+                # Retry the original intent once after creating process.
+                spec = driver.build(device, req.intent, req.params)
+                raw = await self.client.send(spec)
+                recovered = True
+
+            if not recovered:
+                # Huawei mount is connected but schema/module context is not ready.
+                # Return an actionable message instead of generic payload diagnosis.
+                if is_huawei and self._is_huawei_module_lookup_error(e):
+                    raise OdlRequestError(
+                        status_code=409,
+                        message=(
+                            f"Huawei module context is not ready on {req.node_id}. "
+                            "ODL cannot resolve required module (huawei-ifm/huawei-ip). "
+                            "Please remount with schemaless=false and wait until schema sync completes, then retry."
+                        ),
+                        details={
+                            "node_id": req.node_id,
+                            "intent": req.intent,
+                            "original_error": str(e),
+                            "hint": "Wait for full schema sync or force-remount with schema enabled",
+                        },
+                    ) from e
+
+                # ── Idempotent DELETE: ถ้า DELETE แล้วได้ 500/404 with empty body
+                # หมายความว่า resource ไม่มีอยู่แล้ว (NETCONF data-missing)
+                # ถือเป็น success เพราะ state ที่ต้องการคือ "ไม่มี resource นั้น"
+                status_code = getattr(e, 'status_code', 0)
+                # OdlRequestError เก็บ details ใน e.detail (FastAPI HTTPException)
+                # structure: e.detail = {"message": "...", "details": {"url": ..., "body": "..."}}
+                odl_body = ""
+                detail = getattr(e, 'detail', {})
+                if isinstance(detail, dict):
+                    inner = detail.get('details', {})
+                    if isinstance(inner, dict):
+                        odl_body = inner.get('body', '')
+                if spec.method == "DELETE" and status_code in (404, 500) and not odl_body:
+                    logger.info(
+                        f"[Idempotent DELETE] {req.intent} on {req.node_id}: "
+                        f"resource not found (already deleted). Treating as success."
+                    )
+                    raw = {"ok": True, "message": "Resource already absent (idempotent delete)"}
+                else:
+                    # ── Post-error diagnosis (non-blocking) ──
+                    diagnosis = await self._diagnose_odl_error(
+                        node_id=req.node_id,
+                        intent=req.intent,
+                        vendor=driver_name,
+                        odl_error=str(e),
+                    )
+                    # Re-raise with enhanced error message
+                    enhanced_msg = f"ODL request failed: {e}"
+                    if diagnosis and diagnosis.get("suggestion"):
+                        enhanced_msg += f" | Diagnosis: {diagnosis['suggestion']}"
+                    raise OdlRequestError(
+                        status_code=status_code or 502,
+                        message=enhanced_msg,
+                        details={
+                            "original_error": str(e),
+                            "diagnosis": diagnosis,
+                        },
+                    ) from e
 
         # ── Huawei post-step: encap VLAN หลังสร้าง sub-interface ──
         if req.intent == Intents.INTERFACE.CREATE_SUBINTERFACE and is_huawei:
@@ -348,6 +446,18 @@ class IntentService:
             node_id=req.node_id,
             driver_used=driver_name,
             result=result
+        )
+
+    @staticmethod
+    def _is_huawei_module_lookup_error(err: Exception) -> bool:
+        """Detect ODL unknown-element/module-lookup errors for Huawei YANG modules."""
+        text = str(err).lower()
+        return (
+            "failed to lookup for module with name" in text
+            and ("huawei-ifm" in text or "huawei-ip" in text)
+        ) or (
+            "unknown-element" in text
+            and ("huawei-ifm" in text or "huawei-ip" in text)
         )
 
     async def _post_huawei_encap_vlan(
@@ -492,6 +602,177 @@ class IntentService:
             
         logger.info(f"[PreCheck] Cisco device {node_id} version detected as: {version_str}")
         params["device_version"] = version_str
+
+    @staticmethod
+    def _is_cisco_ospf_process_missing_error(err: Exception) -> bool:
+        """Detect IOS-XE error when interface OSPF is configured before process exists."""
+        text = str(err).lower()
+        return "configure router ospf first" in text and "bad-element" in text
+
+    async def _auto_enable_cisco_ospf_process(
+        self,
+        device,
+        node_id: str,
+        driver_name: str,
+        os_type: Optional[str],
+        params: Dict[str, Any],
+    ) -> None:
+        """Issue routing.ospf.enable using current process_id before retrying interface bind."""
+        process_id = params.get("process_id")
+        if process_id is None:
+            raise OdlRequestError(
+                status_code=400,
+                message="process_id is required for OSPF auto-recovery",
+                details={"node_id": node_id, "intent": Intents.ROUTING.OSPF_ENABLE},
+            )
+
+        driver = self._get_driver(Intents.ROUTING.OSPF_ENABLE, driver_name, os_type)
+        if not driver:
+            raise OdlRequestError(
+                status_code=500,
+                message="Unable to resolve Cisco routing driver for OSPF auto-recovery",
+                details={"node_id": node_id, "intent": Intents.ROUTING.OSPF_ENABLE},
+            )
+
+        enable_params: Dict[str, Any] = {"process_id": process_id}
+        if "device_version" in params:
+            enable_params["device_version"] = params["device_version"]
+
+        enable_spec = driver.build(device, Intents.ROUTING.OSPF_ENABLE, enable_params)
+        await self.client.send(enable_spec)
+        logger.info(
+            f"[AutoRecover] OSPF process {process_id} enabled on {node_id}; retrying interface OSPF intent"
+        )
+
+    async def _pre_cleanup_cisco_ospf_interfaces(
+        self, node_id: str, params: Dict[str, Any]
+    ) -> None:
+        """
+        Before disabling OSPF process, remove interface-level OSPF references
+        that still point to the same process-id.
+
+        Without this, IOS-XE can reject the transaction with:
+        "configure router ospf first <bad-element>id</bad-element>".
+        """
+        import urllib.parse
+        from app.builders.odl_paths import odl_mount_base
+        from app.schemas.request_spec import RequestSpec
+
+        process_id = params.get("process_id")
+        if process_id is None:
+            return
+
+        try:
+            process_id_int = int(process_id)
+        except Exception:
+            logger.warning(
+                f"[PreCheck] Invalid OSPF process_id for cleanup: {process_id}"
+            )
+            return
+
+        mount = odl_mount_base(node_id)
+        get_spec = RequestSpec(
+            method="GET",
+            datastore="config",
+            path=f"{mount}/Cisco-IOS-XE-native:native/interface",
+            payload=None,
+            headers={"Accept": "application/yang-data+json"},
+            intent="pre_check.ospf_disable.get_interfaces",
+            driver="cisco",
+        )
+
+        try:
+            iface_resp = await self.client.send(get_spec)
+        except Exception as e:
+            logger.warning(
+                f"[PreCheck] Failed to fetch interface config for OSPF cleanup on {node_id}: {e}"
+            )
+            return
+
+        iface_root = iface_resp.get("Cisco-IOS-XE-native:interface") or iface_resp.get("interface")
+        if not isinstance(iface_root, dict):
+            return
+
+        cleaned = 0
+        for if_type, if_entries in iface_root.items():
+            if not isinstance(if_entries, list):
+                continue
+
+            for if_entry in if_entries:
+                if not isinstance(if_entry, dict):
+                    continue
+
+                if_name = str(if_entry.get("name", "") or "")
+                ip_cfg = if_entry.get("ip", {})
+                if not if_name or not isinstance(ip_cfg, dict):
+                    continue
+
+                if not self._cisco_interface_has_ospf_process(ip_cfg, process_id_int):
+                    continue
+
+                encoded_if_name = urllib.parse.quote(if_name, safe="")
+                delete_paths = [
+                    (
+                        f"{mount}/Cisco-IOS-XE-native:native/interface/{if_type}={encoded_if_name}"
+                        f"/ip/Cisco-IOS-XE-ospf:router-ospf/ospf/process-id={process_id_int}"
+                    ),
+                    (
+                        f"{mount}/Cisco-IOS-XE-native:native/interface/{if_type}={encoded_if_name}"
+                        f"/ip/Cisco-IOS-XE-ospf:ospf={process_id_int}"
+                    ),
+                ]
+
+                for delete_path in delete_paths:
+                    del_spec = RequestSpec(
+                        method="DELETE",
+                        datastore="config",
+                        path=delete_path,
+                        payload=None,
+                        headers={"Accept": "application/yang-data+json"},
+                        intent="pre_check.ospf_disable.cleanup_interface",
+                        driver="cisco",
+                    )
+                    try:
+                        await self.client.send(del_spec)
+                    except OdlRequestError as e:
+                        # Ignore already-absent path during cleanup.
+                        if getattr(e, "status_code", 0) in (404, 500):
+                            continue
+                        raise
+
+                cleaned += 1
+
+        if cleaned:
+            logger.info(
+                f"[PreCheck] Removed OSPF process {process_id_int} from {cleaned} interface(s) on {node_id}"
+            )
+
+    @staticmethod
+    def _cisco_interface_has_ospf_process(ip_cfg: Dict[str, Any], process_id: int) -> bool:
+        """Detect whether an interface IP config references the given OSPF process-id."""
+        # IOS-XE 17+ shape
+        router_ospf = ip_cfg.get("Cisco-IOS-XE-ospf:router-ospf") or ip_cfg.get("router-ospf")
+        if isinstance(router_ospf, dict):
+            ospf = router_ospf.get("ospf")
+            if isinstance(ospf, dict):
+                process_list = ospf.get("process-id", [])
+                if isinstance(process_list, dict):
+                    process_list = [process_list]
+                if isinstance(process_list, list):
+                    for item in process_list:
+                        if isinstance(item, dict) and int(item.get("id", -1)) == process_id:
+                            return True
+
+        # IOS-XE 16.x shape
+        legacy_ospf = ip_cfg.get("Cisco-IOS-XE-ospf:ospf") or ip_cfg.get("ospf", [])
+        if isinstance(legacy_ospf, dict):
+            legacy_ospf = [legacy_ospf]
+        if isinstance(legacy_ospf, list):
+            for item in legacy_ospf:
+                if isinstance(item, dict) and int(item.get("id", -1)) == process_id:
+                    return True
+
+        return False
 
     async def _pre_check_huawei_set_ipv4(
         self, node_id: str, device, params: Dict[str, Any]

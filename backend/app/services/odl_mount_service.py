@@ -106,6 +106,7 @@ class OdlMountService:
         between_attempts_ms = profile["between_attempts_ms"]
         concurrent_rpc_limit = profile["concurrent_rpc_limit"]
         sleep_factor = profile["sleep_factor"]
+        schemaless = profile["schemaless"]
 
         return {
             "network-topology:node": [
@@ -124,7 +125,7 @@ class OdlMountService:
                     "netconf-node-topology:concurrent-rpc-limit": concurrent_rpc_limit,
                     "netconf-node-topology:sleep-factor": sleep_factor,
                     "netconf-node-topology:reconnect-on-changed-schema": reconnect_on_changed_schema,
-                    "netconf-node-topology:schemaless": False,
+                    "netconf-node-topology:schemaless": schemaless,
                     "netconf-node-topology:lock-datastore": False
                 }
             ]
@@ -156,6 +157,7 @@ class OdlMountService:
         return {
             "keepalive_delay": 30,
             "reconnect_on_changed_schema": True,
+            "schemaless": False,
             "connection_timeout_ms": 180000,
             "request_timeout_ms": 600000,
             "max_attempts": 3,
@@ -166,23 +168,25 @@ class OdlMountService:
 
     @staticmethod
     def _get_cisco_mount_profile() -> Dict[str, Any]:
-        """Cisco baseline profile."""
+        """Cisco baseline profile aligned with Huawei stability profile."""
         return {
-            "keepalive_delay": 180,
+            "keepalive_delay": 300,
             "reconnect_on_changed_schema": False,
-            "connection_timeout_ms": 300000,
-            "request_timeout_ms": 900000,
-            "max_attempts": 5,
-            "between_attempts_ms": 15000,
-            "concurrent_rpc_limit": 1,
-            "sleep_factor": 2.0,
+            "schemaless": False,
+            "connection_timeout_ms": 360000,
+            "request_timeout_ms": 1200000,
+            "max_attempts": 8,
+            "between_attempts_ms": 30000,
+            "concurrent_rpc_limit": 6,
+            "sleep_factor": 2.5,
         }
 
     @staticmethod
     def _get_csr1000v_overrides() -> Dict[str, Any]:
-        """CSR1000v overrides on top of Cisco baseline."""
+        """CSR1000v overrides aligned with Huawei stability profile."""
         return {
             "keepalive_delay": 300,
+            "schemaless": False,
             "connection_timeout_ms": 360000,
             "request_timeout_ms": 1200000,
             "max_attempts": 8,
@@ -195,14 +199,15 @@ class OdlMountService:
     def _get_huawei_mount_profile() -> Dict[str, Any]:
         """Huawei baseline profile."""
         return {
-            "keepalive_delay": 30,
-            "reconnect_on_changed_schema": True,
-            "connection_timeout_ms": 180000,
-            "request_timeout_ms": 600000,
-            "max_attempts": 3,
-            "between_attempts_ms": 8000,
-            "concurrent_rpc_limit": 2,
-            "sleep_factor": 1.5,
+            "keepalive_delay": 300,
+            "schemaless": False,
+            "reconnect_on_changed_schema": False,
+            "connection_timeout_ms": 360000,
+            "request_timeout_ms": 1200000,
+            "max_attempts": 8,
+            "between_attempts_ms": 30000,
+            "concurrent_rpc_limit": 6,
+            "sleep_factor": 2.5,
         }
 
     @staticmethod

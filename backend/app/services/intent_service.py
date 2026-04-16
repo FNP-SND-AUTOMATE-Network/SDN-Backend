@@ -226,7 +226,15 @@ class IntentService:
 
         missing_modules = diagnosis.get("missing_modules") or []
         required_modules = diagnosis.get("required_modules") or []
+        is_schemaless = bool(diagnosis.get("schemaless", False))
         if required_modules and missing_modules:
+            if is_schemaless:
+                logger.warning(
+                    f"[Preflight] {node_id}/{intent}: node is mounted with schemaless=true; "
+                    "skipping strict module availability check"
+                )
+                return
+
             preview = ", ".join(missing_modules[:6])
             if len(missing_modules) > 6:
                 preview += f" (+{len(missing_modules) - 6} more)"

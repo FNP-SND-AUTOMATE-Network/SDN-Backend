@@ -269,6 +269,7 @@ class DeviceManager:
             "available_capabilities": sorted(set(available_modules)),
             "unavailable_capabilities": unavailable_modules,
             "connection_status": status,
+            "schemaless": bool(node_data.get("netconf-node-topology:schemaless", False)),
             "last_sync_time": datetime.now().isoformat(),
         }
 
@@ -575,6 +576,7 @@ class DeviceManager:
 
             diagnosis["diagnosed"] = True
             diagnosis["connection_status"] = device_info["connection_status"]
+            diagnosis["schemaless"] = bool(device_info.get("schemaless", False))
 
             # ── Check connection ──
             if device_info["connection_status"] != "connected":

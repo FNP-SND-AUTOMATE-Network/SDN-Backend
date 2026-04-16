@@ -24,6 +24,7 @@ from app.normalizers.zabbix import (
     normalize_zabbix_event,
 )
 from app.database import get_prisma_client
+from app.services.phpipam_service import PhpipamService
 
 
 class ZabbixNotificationService:
@@ -76,6 +77,7 @@ class ZabbixNotificationService:
 
     def __init__(self):
         self.slack = SlackClient()
+        self.phpipam_service = PhpipamService()
         self._event_history: List[Dict[str, Any]] = []
         self._max_history = 200
         self._db_updates = 0
@@ -644,6 +646,8 @@ class ZabbixNotificationService:
                 where={"id": device.id},
                 data={"status": new_status},
             )
+            # Sync phpIPAM tag to match new device status
+            await self.phpipam_service.sync_device_status_to_ipam(device.id, new_status)
             logger.info(
                 f"[ZabbixDB] Device reachability {device.device_name}: "
                 f"{old_status} → {new_status}"

@@ -36,6 +36,7 @@ from app.models.interface import (
     InterfaceStatus,
     InterfaceType
 )
+from app.services.phpipam_service import PhpipamService
 from prisma import Prisma
 
 router = APIRouter(prefix="/interfaces", tags=["Network Interfaces"])
@@ -236,7 +237,7 @@ async def get_interfaces_from_db(
             }
 
         # 3. Format response
-        interfaces = []
+        result_interfaces = []
         for intf in db_interfaces:
             ipv4 = None
             if intf.ip_address and intf.subnet_mask:
@@ -244,7 +245,7 @@ async def get_interfaces_from_db(
             elif intf.ip_address:
                 ipv4 = intf.ip_address
 
-            interfaces.append({
+            result_interfaces.append({
                 "name": intf.name,
                 "type": intf.type or "OTHER",
                 "number": str(intf.port_number) if intf.port_number is not None else "",
@@ -259,14 +260,15 @@ async def get_interfaces_from_db(
                 "duplex": intf.duplex,
                 "mtu": intf.mtu,
                 "oper_status": None,
+                "phpipam_address_id": intf.phpipam_address_id,
             })
 
         return {
             "success": True,
             "node_id": node_id,
             "source": "database",
-            "count": len(interfaces),
-            "interfaces": interfaces,
+            "count": len(result_interfaces),
+            "interfaces": result_interfaces,
         }
 
     except HTTPException:
@@ -435,6 +437,53 @@ async def sync_interfaces(
                     },
                 )
 
+        # ── Step 3c: IPAM auto-book discovered IPs ────────────────────────
+        ipam_notifications = []
+        phpipam_svc = PhpipamService()
+
+        if phpipam_svc.enabled and rows_to_upsert:
+            for row in rows_to_upsert:
+                ip_addr = row.get("ip_address")
+                if not ip_addr:
+                    continue
+
+                try:
+                    result = await phpipam_svc.book_ip(
+                        ip_address=ip_addr,
+                        hostname=f"{node_id}-{row['name']}",
+                        mac_address=row.get("mac_address"),
+                        purpose="Interface IP"
+                    )
+
+                    if result.get("success") and result.get("phpipam_address_id"):
+                        # Update interface record with phpipam_address_id
+                        await prisma.interface.update_many(
+                            where={
+                                "device_id": db_device_id,
+                                "name": row["name"],
+                            },
+                            data={
+                                "phpipam_address_id": result["phpipam_address_id"]
+                            },
+                        )
+
+                    ipam_notifications.append({
+                        "interface": row["name"],
+                        "ip_address": ip_addr,
+                        "code": result.get("code"),
+                        "phpipam_address_id": result.get("phpipam_address_id"),
+                        "message": result.get("error_message") or result.get("code"),
+                    })
+                except Exception as ipam_e:
+                    logger.warning(f"IPAM auto-book failed for {ip_addr}: {ipam_e}")
+                    ipam_notifications.append({
+                        "interface": row["name"],
+                        "ip_address": ip_addr,
+                        "code": "IPAM_ERROR",
+                        "phpipam_address_id": None,
+                        "message": str(ipam_e),
+                    })
+
         # ── Step 4: Read-back from DB (source of truth) ──────────────────
         db_interfaces = await prisma.interface.find_many(
             where={"device_id": db_device_id},
@@ -464,6 +513,7 @@ async def sync_interfaces(
                 "duplex": intf.duplex,
                 "mtu": intf.mtu,
                 "oper_status": None,
+                "phpipam_address_id": intf.phpipam_address_id,
             })
 
         return {
@@ -474,6 +524,7 @@ async def sync_interfaces(
             "synced_count": synced_count,
             "count": len(result_interfaces),
             "interfaces": result_interfaces,
+            "ipam_notifications": ipam_notifications,
         }
 
     except HTTPException:

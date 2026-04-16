@@ -16,9 +16,39 @@ from app.models.device_network import (
 class DeviceNetworkService:
     #Service สำหรับจัดการ Device Network
 
+    # Notification template map
+    _NOTIFICATION_MAP = {
+        "IPAM_BOOKED": ("success", "IP {ip} ถูกจองใน phpIPAM สำเร็จ (Subnet: {subnet})"),
+        "IPAM_ALREADY_EXISTS": ("info", "IP {ip} มีอยู่ใน phpIPAM อยู่แล้ว — อัปเดต hostname/MAC แล้วใช้ record เดิม"),
+        "IPAM_CONFLICT": ("error", "IP {ip} ขัดแย้งกับ IP อื่นใน phpIPAM: {error}"),
+        "IPAM_NO_SUBNET": ("warning", "ไม่เจอ subnet ที่ครอบคลุม IP {ip} ใน phpIPAM — IP ถูกบันทึกในระบบแต่ไม่ได้จองใน IPAM"),
+        "IPAM_DISABLED": ("info", "phpIPAM ถูกปิดอยู่ — IP ถูกบันทึกในระบบเท่านั้น"),
+        "IPAM_RELEASED": ("success", "IP {ip} ถูกปล่อยเป็น IP ว่างใน phpIPAM สำเร็จ (ยังเก็บ record ไว้)"),
+        "IPAM_RELEASE_FAILED": ("warning", "ไม่สามารถปล่อย IP จาก phpIPAM ได้ — อาจต้องจัดการ manual"),
+    }
+
     def __init__(self, prisma_client):
         self.prisma = prisma_client
         self.phpipam_service = PhpipamService()
+
+    def _build_ipam_notification(self, result: dict) -> dict:
+        """แปลง IpamResult dict เป็น notification dict สำหรับ Frontend"""
+        code = result.get("code", "")
+        severity, msg_tpl = self._NOTIFICATION_MAP.get(
+            code, ("info", result.get("error_message") or "Unknown IPAM status")
+        )
+        return {
+            "code": code,
+            "severity": severity,
+            "message": msg_tpl.format(
+                ip=result.get("ip_address") or "N/A",
+                subnet=result.get("subnet_info") or "N/A",
+                error=result.get("error_message") or ""
+            ),
+            "ip_address": result.get("ip_address"),
+            "subnet": result.get("subnet_info"),
+            "phpipam_address_id": result.get("phpipam_address_id"),
+        }
 
     async def _sync_ip_to_phpipam(self, ip_address: str, hostname: str, mac_address: Optional[str] = None) -> Optional[str]:
         #เช็คว่า IP นี้อยู่ใน phpIPAM หรือยัง ถ้ายังหา Subnet ที่ตรงแล้วไปจอง (Step 2)
@@ -84,9 +114,11 @@ class DeviceNetworkService:
             if not template:
                 raise ValueError(f"ไม่พบ Configuration Template ID: {data['configuration_template_id']}")
 
-    async def create_device(self, device_data: DeviceNetworkCreate) -> Optional[DeviceNetworkResponse]:
-        #สร้าง Device Network ใหม่
+    async def create_device(self, device_data: DeviceNetworkCreate) -> tuple:
+        """สร้าง Device Network ใหม่ — returns (DeviceNetworkResponse, ipam_notifications)"""
         try:
+            ipam_notifications = []
+
             #ตรวจสอบว่า serial_number ซ้ำหรือไม่
             existing_device = await self.prisma.devicenetwork.find_unique(
                 where={"serial_number": device_data.serial_number}
@@ -118,35 +150,41 @@ class DeviceNetworkService:
                 if existing_node:
                     raise ValueError(f"node_id '{device_data.node_id}' มีอยู่ในระบบแล้ว")
 
-            # จัดการนำ Management IP ไปผูกกับ phpIPAM อัตโนมัติ (Step 2)
-            netconf_host = device_data.netconf_host or device_data.ip_address
+            # ======= IPAM: Book IPs =======
+            mgmt_ip = device_data.ip_address
+            netconf_ip = device_data.netconf_host
             resolved_phpipam_id = device_data.phpipam_address_id
-            
-            if netconf_host and not resolved_phpipam_id:
-                resolved_phpipam_id = await self._sync_ip_to_phpipam(
-                    ip_address=netconf_host,
+            ipam_subnet_id = getattr(device_data, 'ipam_subnet_id', None)
+
+            print(f"[IPAM-CREATE] mgmt_ip={mgmt_ip}, netconf_ip={netconf_ip}, resolved_phpipam_id={resolved_phpipam_id}, subnet_id={ipam_subnet_id}, phpipam_enabled={self.phpipam_service.enabled}")
+
+            if mgmt_ip:
+                # Always attempt to book — book_ip handles dedup internally (ALREADY_EXISTS)
+                result = await self.phpipam_service.book_ip(
+                    ip_address=mgmt_ip,
                     hostname=device_data.device_name,
-                    mac_address=device_data.mac_address
+                    mac_address=device_data.mac_address,
+                    subnet_id=ipam_subnet_id,
+                    purpose="Management IP",
+                    device_status="OFFLINE"
                 )
+                print(f"[IPAM-CREATE] mgmt_ip book result: {result}")
+                ipam_notifications.append(self._build_ipam_notification(result))
+                if result.get("success"):
+                    resolved_phpipam_id = result.get("phpipam_address_id")
 
-            #สร้าง Device — only include required fields, add optional fields conditionally
-            create_data = {
-                    "serial_number": device_data.serial_number,
-                    "device_name": device_data.device_name,
-                    "device_model": device_data.device_model,
-                    "type": device_data.type.value if hasattr(device_data.type, 'value') else device_data.type,
-                    "status": "OFFLINE", # Force status to OFFLINE explicitly
-                    "mac_address": device_data.mac_address,
-            }
+            if netconf_ip and netconf_ip != mgmt_ip:
+                nc_result = await self.phpipam_service.book_ip(
+                    ip_address=netconf_ip,
+                    hostname=device_data.device_name,
+                    mac_address=device_data.mac_address,
+                    subnet_id=None,
+                    purpose="Netconf Host",
+                    device_status="OFFLINE"
+                )
+                print(f"[IPAM-CREATE] netconf_ip book result: {nc_result}")
+                ipam_notifications.append(self._build_ipam_notification(nc_result))
 
-            # Optional fields — only include if they have values
-            if device_data.ip_address:
-                create_data["ip_address"] = device_data.ip_address
-            if device_data.description:
-                create_data["description"] = device_data.description
-            if device_data.policy_id:
-                create_data["policy_id"] = device_data.policy_id
-            # Optional fields — only include if they have values
             # Prepare manual dictionary for Prisma create to avoid Pydantic serialization issues
             create_data_dict = {
                 "serial_number": device_data.serial_number,
@@ -178,11 +216,9 @@ class DeviceNetworkService:
                 "odl_connection_status": "UNABLE_TO_CONNECT"
             }
 
-            # Filter out None values to prevent "Could not find field" errors if engine is strict or schema mismatch
-            # This ensures we only send fields that actually have values
+            # Filter out None values to prevent "Could not find field" errors
             final_create_data = {k: v for k, v in create_data_dict.items() if v is not None}
             
-            # DEBUG: Print create payload
             print(f"DEBUG CREATE DEVICE PAYLOAD (FILTERED): {final_create_data}")
             
             device = await self.prisma.devicenetwork.create(
@@ -195,7 +231,7 @@ class DeviceNetworkService:
                 }
             )
 
-            return self._build_device_response(device)
+            return self._build_device_response(device), ipam_notifications
 
         except Exception as e:
             print(f"Error creating device: {e}")
@@ -279,6 +315,7 @@ class DeviceNetworkService:
             ip_address=getattr(device, 'ip_address', None),
             mac_address=device.mac_address,
             description=getattr(device, 'description', None),
+            phpipam_address_id=getattr(device, 'phpipam_address_id', None),
             policy_id=getattr(device, 'policy_id', None),
             os_id=getattr(device, 'os_id', None),
             backup_id=getattr(device, 'backup_id', None),
@@ -391,9 +428,11 @@ class DeviceNetworkService:
             print(f"Error getting device by id: {e}")
             return None
 
-    async def update_device(self, device_id: str, update_data: DeviceNetworkUpdate) -> Optional[DeviceNetworkResponse]:
-        #อัปเดต Device Network
+    async def update_device(self, device_id: str, update_data: DeviceNetworkUpdate) -> tuple:
+        """อัปเดต Device Network — returns (DeviceNetworkResponse, ipam_notifications)"""
         try:
+            ipam_notifications = []
+
             existing_device = await self.prisma.devicenetwork.find_unique(where={"id": device_id})
 
             if not existing_device:
@@ -440,7 +479,6 @@ class DeviceNetworkService:
             # Foreign keys - ตรวจสอบก่อนอัปเดต
             foreign_keys_to_validate = {}
             
-            # Uncommented fields (requires 'prisma generate')
             if update_data.os_id is not None:
                 foreign_keys_to_validate['os_id'] = update_data.os_id
                 update_dict["os_id"] = update_data.os_id
@@ -463,7 +501,6 @@ class DeviceNetworkService:
 
             # NBI/ODL Fields
             if update_data.node_id is not None:
-                # ตรวจสอบว่า node_id ไม่ซ้ำกับ device อื่น
                 if update_data.node_id != existing_device.node_id:
                     duplicate = await self.prisma.devicenetwork.find_unique(
                         where={"node_id": update_data.node_id}
@@ -481,24 +518,109 @@ class DeviceNetworkService:
             if update_data.datapath_id is not None:
                 update_dict["datapath_id"] = update_data.datapath_id
 
-            if update_data.management_protocol is not None:
-                update_dict["management_protocol"] = update_data.management_protocol.value
-
-            if update_data.datapath_id is not None:
-                update_dict["datapath_id"] = update_data.datapath_id
-
-            # NETCONF Connection Fields
             if update_data.netconf_host is not None:
                 update_dict["netconf_host"] = update_data.netconf_host
-                # ถ้าเปลี่ยน IP Management ใหม่ ให้ผูก phpIPAM ใหม่ด้วย
-                if update_data.netconf_host != existing_device.netconf_host:
-                    new_phpipam_id = await self._sync_ip_to_phpipam(
-                        ip_address=update_data.netconf_host,
+
+            # ======= IPAM: Handle IP changes =======
+            # Determine the effective management IP (new or existing)
+            new_netconf = update_data.netconf_host if update_data.netconf_host is not None else existing_device.netconf_host
+            new_ip = update_data.ip_address if update_data.ip_address is not None else existing_device.ip_address
+            effective_mgmt_ip = new_netconf or new_ip
+
+            old_mgmt_ip = existing_device.netconf_host or existing_device.ip_address
+
+            # ======= IPAM: Handle IP changes =======
+            new_status = update_dict.get("status", existing_device.status)
+            new_status_str = new_status.value if hasattr(new_status, "value") else str(new_status)
+            new_status_str = new_status_str.split('.')[-1].upper()
+            
+            old_status_raw = existing_device.status
+            old_status_str = old_status_raw.value if hasattr(old_status_raw, "value") else str(old_status_raw)
+            old_status_str = old_status_str.split('.')[-1].upper()
+            status_changed = update_data.status is not None and new_status_str != old_status_str
+            name_changed = update_data.device_name is not None and update_dict.get("device_name") != existing_device.device_name
+            mac_changed = update_data.mac_address is not None and update_dict.get("mac_address") != existing_device.mac_address
+
+            # 1. Management IP
+            old_mgmt_ip = existing_device.ip_address
+            new_mgmt_ip = update_dict.get("ip_address", existing_device.ip_address)
+            ip_changed = (new_mgmt_ip != old_mgmt_ip) and new_mgmt_ip is not None
+            never_booked = (not existing_device.phpipam_address_id) and new_mgmt_ip is not None
+
+            print(f"[IPAM-UPDATE] mgmt_ip={new_mgmt_ip}, old_mgmt_ip={old_mgmt_ip}, ip_changed={ip_changed}")
+
+            if ip_changed or never_booked:
+                if existing_device.phpipam_address_id and ip_changed:
+                    # Release old
+                    release_result = await self.phpipam_service.release_ip_safe(existing_device.phpipam_address_id)
+                    ipam_notifications.append(self._build_ipam_notification(release_result))
+                
+                # Book new mgmt IP
+                book_result = await self.phpipam_service.book_ip(
+                    ip_address=new_mgmt_ip,
+                    hostname=update_dict.get("device_name", existing_device.device_name),
+                    mac_address=update_dict.get("mac_address", existing_device.mac_address),
+                    purpose="Management IP",
+                    device_status=new_status_str
+                )
+                ipam_notifications.append(self._build_ipam_notification(book_result))
+                if book_result.get("success"):
+                    update_dict["phpipam_address_id"] = book_result.get("phpipam_address_id")
+            
+            elif existing_device.phpipam_address_id and (status_changed or name_changed or mac_changed):
+                # Sync updates for mgmt IP
+                target_tag = "1" if new_status_str == "ONLINE" else "2"
+                update_kwargs = {"tag": target_tag, "state": target_tag}
+                if name_changed:
+                    update_kwargs["hostname"] = update_dict.get("device_name")
+                    update_kwargs["description"] = f"[Management IP] {update_kwargs['hostname']}"[:64]
+                if mac_changed:
+                    mac_addr = update_dict.get("mac_address")
+                    normalized_mac = self.phpipam_service._normalize_mac(mac_addr) if mac_addr else None
+                    if normalized_mac:
+                        update_kwargs["mac"] = normalized_mac
+                await self.phpipam_service.update_ip_address(existing_device.phpipam_address_id, **update_kwargs)
+
+            # 2. Netconf IP
+            old_netconf_ip = existing_device.netconf_host
+            new_netconf_ip = update_dict.get("netconf_host", existing_device.netconf_host)
+            netconf_changed = (new_netconf_ip != old_netconf_ip) and new_netconf_ip is not None
+            
+            print(f"[IPAM-UPDATE] netconf_ip={new_netconf_ip}, old_netconf_ip={old_netconf_ip}, netconf_changed={netconf_changed}")
+
+            if netconf_changed:
+                if old_netconf_ip and old_netconf_ip != old_mgmt_ip:
+                    # Release old netconf IP dynamically
+                    old_nc_obj = await self.phpipam_service.search_ip(old_netconf_ip)
+                    if old_nc_obj and old_nc_obj.get("id"):
+                        nc_rel_result = await self.phpipam_service.release_ip_safe(str(old_nc_obj["id"]))
+                        ipam_notifications.append(self._build_ipam_notification(nc_rel_result))
+                
+                if new_netconf_ip and new_netconf_ip != new_mgmt_ip:
+                    nc_result = await self.phpipam_service.book_ip(
+                        ip_address=new_netconf_ip,
                         hostname=update_dict.get("device_name", existing_device.device_name),
-                        mac_address=update_dict.get("mac_address", existing_device.mac_address)
+                        mac_address=update_dict.get("mac_address", existing_device.mac_address),
+                        purpose="Netconf Host",
+                        device_status=new_status_str
                     )
-                    if new_phpipam_id:
-                        update_dict["phpipam_address_id"] = new_phpipam_id
+                    ipam_notifications.append(self._build_ipam_notification(nc_result))
+            elif not netconf_changed and new_netconf_ip and new_netconf_ip != new_mgmt_ip:
+                if status_changed or name_changed or mac_changed:
+                    # Update properties for existing netconf IP dynamically if it was booked
+                    nc_obj = await self.phpipam_service.search_ip(new_netconf_ip)
+                    if nc_obj and nc_obj.get("id"):
+                        target_tag = "1" if new_status_str == "ONLINE" else "2"
+                        nc_update_kwargs = {"tag": target_tag, "state": target_tag}
+                        if name_changed:
+                            nc_update_kwargs["hostname"] = update_dict.get("device_name")
+                            nc_update_kwargs["description"] = f"[Netconf Host] {nc_update_kwargs['hostname']}"[:64]
+                        if mac_changed:
+                            mac_addr = update_dict.get("mac_address")
+                            normalized_mac = self.phpipam_service._normalize_mac(mac_addr) if mac_addr else None
+                            if normalized_mac:
+                                nc_update_kwargs["mac"] = normalized_mac
+                        await self.phpipam_service.update_ip_address(str(nc_obj["id"]), **nc_update_kwargs)
 
             if update_data.netconf_port is not None:
                 update_dict["netconf_port"] = update_data.netconf_port
@@ -522,24 +644,50 @@ class DeviceNetworkService:
                 }
             )
 
-            return self._build_device_response(updated_device)
+            return self._build_device_response(updated_device), ipam_notifications
 
         except Exception as e:
             print(f"Error updating device: {e}")
             raise e
 
-    async def delete_device(self, device_id: str) -> bool:
-        #ลบ Device Network
+    async def delete_device(self, device_id: str) -> tuple:
+        """ลบ Device Network — returns (success: bool, ipam_notifications)"""
         try:
+            ipam_notifications = []
+
             existing_device = await self.prisma.devicenetwork.find_unique(
-                where={"id": device_id}
+                where={"id": device_id},
+                include={"interfaces": True}
             )
 
             if not existing_device:
                 raise ValueError("ไม่พบ Device Network ที่ต้องการลบ")
 
+            # ======= IPAM: Release device management IP =======
+            if existing_device.phpipam_address_id:
+                result = await self.phpipam_service.release_ip_safe(
+                    existing_device.phpipam_address_id
+                )
+                ipam_notifications.append(self._build_ipam_notification(result))
+
+            # ======= IPAM: Release netconf host IP =======
+            if existing_device.netconf_host and existing_device.netconf_host != existing_device.ip_address:
+                nc_obj = await self.phpipam_service.search_ip(existing_device.netconf_host)
+                if nc_obj and nc_obj.get("id"):
+                    nc_result = await self.phpipam_service.release_ip_safe(str(nc_obj["id"]))
+                    ipam_notifications.append(self._build_ipam_notification(nc_result))
+
+            # ======= IPAM: Release all interface IPs =======
+            if hasattr(existing_device, 'interfaces') and existing_device.interfaces:
+                for intf in existing_device.interfaces:
+                    if hasattr(intf, 'phpipam_address_id') and intf.phpipam_address_id:
+                        result = await self.phpipam_service.release_ip_safe(
+                            intf.phpipam_address_id
+                        )
+                        ipam_notifications.append(self._build_ipam_notification(result))
+
             await self.prisma.devicenetwork.delete(where={"id": device_id})
-            return True
+            return True, ipam_notifications
 
         except Exception as e:
             print(f"Error deleting device: {e}")

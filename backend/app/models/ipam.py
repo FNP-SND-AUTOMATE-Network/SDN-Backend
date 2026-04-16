@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, IPvAnyAddress
 from typing import Optional, List, Union
 from datetime import datetime
+from enum import Enum
 
 
 # ========= Subnet Models =========
@@ -206,3 +207,83 @@ class SectionResponse(BaseModel):
 class SectionListResponse(BaseModel):
     sections: List[SectionResponse]
     total: int
+
+
+# ========= IPAM Notification System =========
+
+class IpamNotificationCode(str, Enum):
+    """สถานะการ book/release IP ใน phpIPAM"""
+    BOOKED = "IPAM_BOOKED"                    # book IP ใหม่สำเร็จ
+    ALREADY_EXISTS = "IPAM_ALREADY_EXISTS"    # IP มีอยู่แล้วใน phpIPAM (reuse)
+    CONFLICT = "IPAM_CONFLICT"                # phpIPAM reject — IP ซ้ำ/overlap
+    NO_SUBNET = "IPAM_NO_SUBNET"              # ไม่เจอ subnet ที่ match กับ IP นี้
+    DISABLED = "IPAM_DISABLED"                # phpIPAM ถูกปิดอยู่
+    RELEASED = "IPAM_RELEASED"                # ปล่อย IP สำเร็จ
+    RELEASE_FAILED = "IPAM_RELEASE_FAILED"    # ปล่อย IP ไม่สำเร็จ
+
+
+class IpamNotification(BaseModel):
+    """Notification ส่งกลับ Frontend เพื่อแสดง Snackbar"""
+    code: str                                  # IpamNotificationCode value
+    severity: str                              # "success" | "info" | "warning" | "error"
+    message: str                               # Human-readable message
+    ip_address: Optional[str] = None
+    subnet: Optional[str] = None               # e.g. "10.10.5.0/24"
+    phpipam_address_id: Optional[str] = None
+
+
+class IpamResult(BaseModel):
+    """Internal result จาก IPAM booking — ใช้ภายใน service"""
+    success: bool
+    code: str                                  # IpamNotificationCode value
+    phpipam_address_id: Optional[str] = None
+    ip_address: Optional[str] = None
+    subnet_info: Optional[str] = None          # e.g. "10.10.5.0/24"
+    error_message: Optional[str] = None
+
+
+# ========= Subnet Picker Models (สำหรับ dropdown) =========
+
+class SubnetPickerItem(BaseModel):
+    """แต่ละ item ใน dropdown เลือก subnet"""
+    id: str
+    label: str                                 # "10.10.5.0/24 — Management Network (240 free)"
+    subnet: str                                # "10.10.5.0"
+    mask: str                                  # "24"
+    description: Optional[str] = None
+    usage_percent: Optional[float] = None      # % ที่ใช้ไปแล้ว
+    free_hosts: Optional[int] = None           # จำนวน IP ว่าง
+    total_hosts: Optional[int] = None          # จำนวน IP ทั้งหมด
+
+
+class SubnetPickerResponse(BaseModel):
+    subnets: List[SubnetPickerItem]
+    total: int
+
+
+# ========= Available IPs (สำหรับ dropdown เลือก IP) =========
+
+class AvailableIpListResponse(BaseModel):
+    subnet_id: str
+    subnet: str                                # "10.10.5.0/24"
+    available_ips: List[str]
+    total_available: int
+
+
+# ========= Space Map Models (สำหรับ visual IP map) =========
+
+class SpaceMapEntry(BaseModel):
+    ip: str
+    status: str                                # "used" | "free" | "offline" | "gateway" | "reserved"
+    hostname: Optional[str] = None
+    description: Optional[str] = None
+
+
+class SpaceMapResponse(BaseModel):
+    subnet_id: str
+    subnet: str
+    mask: str
+    total_hosts: int
+    used: int
+    free: int
+    addresses: List[SpaceMapEntry]

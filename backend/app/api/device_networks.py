@@ -100,7 +100,7 @@ async def create_device(
         # Require ENGINEER or ADMIN
         check_engineer_permission(current_user)
 
-        device = await device_svc.create_device(device_data)
+        device, ipam_notifications = await device_svc.create_device(device_data)
         
         if not device:
             raise HTTPException(
@@ -110,7 +110,8 @@ async def create_device(
 
         return DeviceNetworkCreateResponse(
             message="Device created successfully",
-            device=device
+            device=device,
+            ipam_notifications=ipam_notifications
         )
 
     except ValueError as e:
@@ -137,7 +138,7 @@ async def update_device(
         # Require ENGINEER or ADMIN
         check_engineer_permission(current_user)
 
-        device = await device_svc.update_device(device_id, update_data)
+        device, ipam_notifications = await device_svc.update_device(device_id, update_data)
         
         if not device:
             raise HTTPException(
@@ -147,7 +148,8 @@ async def update_device(
 
         return DeviceNetworkUpdateResponse(
             message="Device updated successfully",
-            device=device
+            device=device,
+            ipam_notifications=ipam_notifications
         )
 
     except ValueError as e:
@@ -176,7 +178,7 @@ async def delete_device(
                 detail="User role {current_user['role']} is not allowed to delete device"
             )
 
-        success = await device_svc.delete_device(device_id)
+        success, ipam_notifications = await device_svc.delete_device(device_id)
         
         if not success:
             raise HTTPException(
@@ -185,7 +187,8 @@ async def delete_device(
             )
 
         return DeviceNetworkDeleteResponse(
-            message="Device deleted successfully"
+            message="Device deleted successfully",
+            ipam_notifications=ipam_notifications
         )
 
     except ValueError as e:

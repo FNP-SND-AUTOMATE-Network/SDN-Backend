@@ -18,6 +18,7 @@ from app.core.errors import OdlRequestError
 from app.schemas.request_spec import RequestSpec
 from app.core.logging import logger
 from app.database import get_prisma_client
+from app.services.phpipam_service import PhpipamService
 
 
 # Map ODL connection status string to DB enum value
@@ -50,6 +51,7 @@ class OdlMountService:
     
     def __init__(self):
         self.odl_client = OdlRestconfClient()
+        self.phpipam_service = PhpipamService()
         # Per-device lock to prevent concurrent mount/unmount on the same device
         self._device_locks: Dict[str, asyncio.Lock] = {}
     
@@ -234,6 +236,7 @@ class OdlMountService:
                                 "last_synced_at": datetime.utcnow()
                             }
                         )
+                        await self.phpipam_service.sync_device_status_to_ipam(device.id, "ONLINE")
                     return {
                         "success": True,
                         "message": f"Device {device.node_id} is already mounted and connected",
@@ -308,6 +311,7 @@ class OdlMountService:
                             "status": "OFFLINE"
                         }
                     )
+                    await self.phpipam_service.sync_device_status_to_ipam(device.id, "OFFLINE")
                 except Exception:
                     pass
             
@@ -354,6 +358,7 @@ class OdlMountService:
                         "last_synced_at": datetime.utcnow()
                     }
                 )
+                await self.phpipam_service.sync_device_status_to_ipam(device.id, "OFFLINE")
                 return {
                     "success": True,
                     "message": f"Device {device.node_id} was already unmounted (DB synced)",
@@ -388,6 +393,7 @@ class OdlMountService:
                     "last_synced_at": datetime.utcnow()
                 }
             )
+            await self.phpipam_service.sync_device_status_to_ipam(device.id, "OFFLINE")
             
             return {
                 "success": True,
@@ -506,6 +512,9 @@ class OdlMountService:
                     "last_synced_at": datetime.utcnow()
                 }
             )
+            # Sync phpIPAM tag to match new device status
+            if str(device.status) != device_status:
+                await self.phpipam_service.sync_device_status_to_ipam(device.id, device_status)
             
             return {
                 "synced": True,
@@ -669,6 +678,7 @@ class OdlMountService:
                         "last_synced_at": datetime.utcnow()
                     }
                 )
+                await self.phpipam_service.sync_device_status_to_ipam(device_id, "ONLINE")
                 
                 return {
                     "success": True,
@@ -691,6 +701,7 @@ class OdlMountService:
                         "last_synced_at": datetime.utcnow()
                     }
                 )
+                await self.phpipam_service.sync_device_status_to_ipam(device_id, "OFFLINE")
                 
                 return {
                     "success": False,
@@ -720,6 +731,7 @@ class OdlMountService:
                 "last_synced_at": datetime.utcnow()
             }
         )
+        await self.phpipam_service.sync_device_status_to_ipam(device_id, "OFFLINE")
         
         return {
             "success": False,
@@ -766,6 +778,7 @@ class OdlMountService:
                         "status": "OFFLINE",
                     }
                 )
+                await self.phpipam_service.sync_device_status_to_ipam(device.id, "OFFLINE")
 
             # Step 3: Wait for ODL session teardown
             logger.info(f"[force-remount] Waiting {cleanup_wait}s for ODL session teardown")

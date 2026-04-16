@@ -14,6 +14,7 @@ from app.clients.odl_restconf_client import OdlRestconfClient
 from app.schemas.request_spec import RequestSpec
 from app.core.logging import logger
 from app.database import get_prisma_client
+from app.services.phpipam_service import PhpipamService
 
 
 # Map ODL connection status string to DB enum value
@@ -46,6 +47,7 @@ class OdlSyncService:
     
     def __init__(self):
         self.odl_client = OdlRestconfClient()
+        self.phpipam_service = PhpipamService()
     
     async def get_odl_mounted_nodes(self) -> List[Dict[str, Any]]:
         """
@@ -183,6 +185,9 @@ class OdlSyncService:
                                 "ip_address": odl_node.get("host") or device.ip_address,
                             }
                         )
+                        # Sync phpIPAM tag to match new device status
+                        if str(device.status) != new_status:
+                            await self.phpipam_service.sync_device_status_to_ipam(device.id, new_status)
                         
                         logger.info(f"[NETCONF-Sync] {node_id} ({odl_node.get('host','?')}): connection={odl_node['connection_status']} → status={new_status}")
                         result["synced"].append({
@@ -227,6 +232,8 @@ class OdlSyncService:
                                 "last_synced_at": datetime.utcnow()
                             }
                         )
+                        # Sync phpIPAM tag → Offline
+                        await self.phpipam_service.sync_device_status_to_ipam(device.id, "OFFLINE")
                         logger.info(f"[NETCONF-Sync] {device.node_id}: not in ODL topology → status=OFFLINE (unmounted)")
                         result["synced"].append({
                             "node_id": device.node_id,
@@ -299,6 +306,7 @@ class OdlSyncService:
                                 "last_synced_at": datetime.utcnow()
                             }
                         )
+                        await self.phpipam_service.sync_device_status_to_ipam(d.id, "OFFLINE")
                         result["synced"].append({
                             "device_id": d.id,
                             "node_id": d.node_id,
@@ -369,6 +377,7 @@ class OdlSyncService:
                                     "last_synced_at": datetime.utcnow()
                                 }
                             )
+                            await self.phpipam_service.sync_device_status_to_ipam(d.id, "OFFLINE")
 
             # 4. Sync each ODL node to the DB
             for odl_nd in odl_node_data:
@@ -421,6 +430,9 @@ class OdlSyncService:
                         "last_synced_at": datetime.utcnow()
                     }
                 )
+                # Sync phpIPAM tag → Online
+                if str(device.status) != "ONLINE":
+                    await self.phpipam_service.sync_device_status_to_ipam(device.id, "ONLINE")
 
                 # 5. Sync Interfaces
                 for conn in connectors:
@@ -706,6 +718,9 @@ class OdlSyncService:
                     "last_synced_at": datetime.utcnow(),
                 }
             )
+            # Sync phpIPAM tag to match new device status
+            if str(device.status) != new_status:
+                await self.phpipam_service.sync_device_status_to_ipam(device.id, new_status)
 
             logger.info(
                 f"[SingleSync] {node_id} ({protocol}): {previous_status} → {new_status} "

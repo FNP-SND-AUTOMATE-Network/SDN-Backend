@@ -64,6 +64,17 @@ class InterfaceResponse(BaseModel):
     port_number: Optional[int]
     mac_address: Optional[str]
     
+    # IPAM Integration Fields
+    ip_address: Optional[str] = Field(None, description="IP Address ที่ assign ให้ interface")
+    subnet_mask: Optional[str] = Field(None, description="Subnet mask (e.g. 255.255.255.0 or /24)")
+    gateway: Optional[str] = Field(None, description="Default gateway")
+    phpipam_address_id: Optional[str] = Field(None, description="phpIPAM address record ID")
+    
+    # ODL Operational Fields
+    speed: Optional[int] = Field(None, description="Interface speed in Mbps")
+    duplex: Optional[str] = Field(None, description="Duplex mode")
+    mtu: Optional[int] = Field(None, description="MTU in bytes")
+    
     created_at: datetime
     updated_at: datetime
     

@@ -99,7 +99,9 @@ async def get_dashboard_overview(
 
 @router.get("/top-metrics")
 async def get_dashboard_top_metrics(
-    limit: int = Query(5, description="Number of top items to return", ge=1, le=20)
+    limit: int = Query(5, description="Number of top items to return", ge=1, le=20),
+    mode: str = Query("current", description="Bandwidth basis: current or peak"),
+    window: int = Query(1, description="Lookback window (hours) for peak mode", ge=1, le=168),
 ):
     """
     ดึงข้อมูล Top N แบบเรียลไทม์ (ใช้งานหนาแน่นที่สุด) สำหรับหน้า Dashboard
@@ -108,9 +110,21 @@ async def get_dashboard_top_metrics(
     - top_bandwidth (Interface traffic In/Out — tag: component=network)
     - top_cpu (Device CPU utilization — tag: component=cpu)
     - top_memory (Device RAM utilization — tag: component=memory)
+
+    mode:
+    - current = จัดอันดับจากค่าปัจจุบันล่าสุดของแต่ละ interface (real-time)
+    - peak    = จัดอันดับจากค่าสูงสุดของ Total (In+Out) ย้อนหลังตาม window ชั่วโมง
     """
     try:
-        return await zabbix_monitoring_service.get_top_metrics(limit=limit)
+        selected_mode = (mode or "current").strip().lower()
+        if selected_mode not in {"current", "peak"}:
+            raise HTTPException(status_code=422, detail="Invalid mode. Allowed values: current, peak")
+
+        return await zabbix_monitoring_service.get_top_metrics(
+            limit=limit,
+            mode=selected_mode,
+            window_hours=window,
+        )
     except ZabbixAPIError as e:
         raise HTTPException(status_code=502, detail=f"Zabbix API error: {e.message}")
 
@@ -229,7 +243,9 @@ async def get_problem_time_ranges():
 async def get_problems(
     severity_min: int = Query(0, description="Min severity (0-5)", ge=0, le=5),
     host_id: Optional[str] = Query(None, description="Filter by host ID"),
-    limit: int = Query(100, description="Max problems to return", ge=1, le=500),
+    limit: int = Query(100, description="Legacy max problems to return (used when page_size is not provided)", ge=1, le=500),
+    page: int = Query(1, description="Page number (1-based)", ge=1, le=500),
+    page_size: Optional[int] = Query(None, description="Items per page", ge=1, le=100),
     time_range: Optional[str] = Query(
         "1w",
         description="Time range filter: all, 1h, 1d, 1w, 1mo, 1y",
@@ -268,10 +284,13 @@ async def get_problems(
             )
 
         host_ids = [host_id] if host_id else None
+        effective_page_size = page_size if page_size is not None else limit
         return await zabbix_monitoring_service.get_problems_summary(
             severity_min=severity_min,
             host_ids=host_ids,
-            limit=limit,
+            limit=effective_page_size,
+            page=page,
+            page_size=effective_page_size,
             time_range=selected_time_range,
         )
     except ZabbixAPIError as e:

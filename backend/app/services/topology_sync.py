@@ -7,6 +7,7 @@ from typing import Dict, Any, List, Set, Tuple, Optional
 from app.core.config import settings
 from app.core.logging import logger
 from app.database import get_prisma_client
+from app.services.topology_binding_service import get_lldp_binding_map, normalize_chassis_id
 
 
 # ── Helper: Expand abbreviated interface names ──────────────
@@ -25,11 +26,35 @@ def _expand_interface_name(name: str) -> str:
     return name
 
 
+def _clean_text(value: Optional[str]) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _normalize_remote_node(node_value: str) -> str:
+    node_value = _clean_text(node_value)
+    if not node_value:
+        return ""
+    node_value = node_value.strip('"').strip("'")
+    if "openflow" in node_value:
+        return node_value
+    return node_value.strip()
+
+
+def _normalize_mac_key(value: str) -> str:
+    """Normalize MAC-like string by removing separators."""
+    cleaned = _clean_text(value).lower()
+    if not cleaned:
+        return ""
+    return re.sub(r"[^0-9a-f]", "", cleaned)
+
+
 # ── Helper: Build a comprehensive node-name → UUID resolver ─
 async def _build_node_resolver(prisma, device_id_map: Dict[str, str]) -> Dict[str, str]:
     """
     สร้าง resolver map ที่ครอบคลุมหลายรูปแบบชื่อ → device UUID
-    เพื่อให้ LLDP neighbor name (system-name / device-id) resolve กลับไปหา device ในระบบได้
+    เพื่อให้ LLDP neighbor identity (node_id/MAC/IP) resolve กลับไปหา device ในระบบได้
     เฉพาะ device ที่ user สร้างเอง (exclude dummy/auto-discovered)
     """
     resolver: Dict[str, str] = dict(device_id_map)
@@ -47,22 +72,24 @@ async def _build_node_resolver(prisma, device_id_map: Dict[str, str]) -> Dict[st
         )
         for d in all_devices:
             uid = d.id
-            # Map by node_id (exact + lower)
+            # Map by node_id only (exact + lower)
             if d.node_id:
                 resolver.setdefault(d.node_id, uid)
                 resolver.setdefault(d.node_id.lower(), uid)
-            # Map by device_name (hostname) + stripped domain
-            if d.device_name:
-                resolver.setdefault(d.device_name, uid)
-                resolver.setdefault(d.device_name.lower(), uid)
-                base_name = d.device_name.split('.')[0]
-                resolver.setdefault(base_name, uid)
-                resolver.setdefault(base_name.lower(), uid)
             # Map by MAC address (LLDP chassis-id อาจเป็น MAC)
             if d.mac_address and not d.mac_address.startswith(("OF-MAC-", "DUMMY-MAC-", "LLDP-MAC-")):
                 mac_clean = d.mac_address.replace(":", "").replace(".", "").replace("-", "").lower()
                 resolver.setdefault(mac_clean, uid)
                 resolver.setdefault(d.mac_address.lower(), uid)
+                normalized_mac = _normalize_mac_key(d.mac_address)
+                if normalized_mac:
+                    resolver.setdefault(f"mac:{normalized_mac}", uid)
+            # Map by management IP (some LLDP implementations report IP as system/chassis ID)
+            if getattr(d, "ip_address", None):
+                ip_addr = _clean_text(d.ip_address)
+                if ip_addr:
+                    resolver.setdefault(ip_addr, uid)
+                    resolver.setdefault(ip_addr.lower(), uid)
     except Exception as e:
         logger.error(f"Failed to build node resolver: {e}")
 
@@ -73,9 +100,8 @@ def _resolve_node(node_id: str, device_id_map: Dict[str, str], resolver: Dict[st
     """
     พยายาม resolve node_id → device UUID ด้วยหลายกลยุทธ์:
     1. Direct match ใน device_id_map
-    2. Direct match ใน resolver (device_name, hostname, MAC)
+    2. Direct match ใน resolver (node_id, MAC, IP)
     3. Case-insensitive
-    4. ตัด domain suffix แล้วลองใหม่
     """
     if node_id in device_id_map:
         return device_id_map[node_id]
@@ -86,13 +112,87 @@ def _resolve_node(node_id: str, device_id_map: Dict[str, str], resolver: Dict[st
     if lower in resolver:
         return resolver[lower]
 
-    base = node_id.split('.')[0]
-    if base in resolver:
-        return resolver[base]
-    if base.lower() in resolver:
-        return resolver[base.lower()]
+    mac_like = _normalize_mac_key(node_id)
+    if mac_like:
+        if mac_like in resolver:
+            return resolver[mac_like]
+        if f"mac:{mac_like}" in resolver:
+            return resolver[f"mac:{mac_like}"]
 
     return None
+
+
+def _split_tp_id(tp_id: str, device_id_map: Dict[str, str], resolver: Dict[str, str]) -> Optional[Tuple[str, str]]:
+    """
+    Robust TP parser for values like:
+      - openflow:1:2
+      - CSRTH:GigabitEthernet1
+      - NE40TH1:Ethernet1/0/0:0
+      - 10.0.0.1:830:GigabitEthernet1
+    Chooses split point where node part can be resolved.
+    """
+    if not tp_id or ":" not in tp_id:
+        return None
+
+    split_indexes = [i for i, ch in enumerate(tp_id) if ch == ":"]
+    candidates: List[Tuple[str, str]] = []
+    for idx in split_indexes:
+        node_part = tp_id[:idx]
+        port_part = tp_id[idx + 1:]
+        if not node_part or not port_part:
+            continue
+        if _resolve_node(node_part, device_id_map, resolver):
+            candidates.append((node_part, port_part))
+
+    if candidates:
+        # Prefer the longest resolvable node part to support node IDs containing ':'.
+        candidates.sort(key=lambda x: len(x[0]), reverse=True)
+        return candidates[0]
+
+    # Fallback to previous behavior.
+    parts = tp_id.rsplit(':', 1)
+    if len(parts) == 2 and parts[0] and parts[1]:
+        return parts[0], parts[1]
+    return None
+
+
+def _resolve_remote_node_id(
+    remote_name: Optional[str],
+    remote_chassis: Optional[str],
+    resolver: Dict[str, str],
+    uuid_to_node_id: Dict[str, str],
+    chassis_binding_map: Dict[str, str],
+    known_node_ids: Set[str],
+) -> str:
+    """
+    Resolve LLDP remote endpoint to canonical node_id.
+    Strict mode: use only stable IDs (node_id exact, chassis/MAC, IP).
+    Do not fallback to hostname aliases.
+    """
+    chassis_norm = normalize_chassis_id(_clean_text(remote_chassis))
+    if chassis_norm:
+        bound_node = chassis_binding_map.get(chassis_norm)
+        if bound_node and bound_node in known_node_ids:
+            return bound_node
+
+    candidates: List[str] = []
+
+    # Accept remote_name only if it is exact node_id in resolver.
+    if remote_name:
+        n = _normalize_remote_node(remote_name)
+        if n in resolver or n.lower() in resolver:
+            candidates.append(n)
+
+    if remote_chassis:
+        candidates.append(_clean_text(remote_chassis))
+
+    for cand in candidates:
+        if not cand:
+            continue
+        resolved_uuid = _resolve_node(cand, {}, resolver)
+        if resolved_uuid and resolved_uuid in uuid_to_node_id:
+            return uuid_to_node_id[resolved_uuid]
+    return ""
 
 
 # ═════════════════════════════════════════════════════════════
@@ -121,6 +221,34 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
     # ---------------------------------------------------------
     raw_nodes: Set[str] = set()
     raw_links: List[Dict[str, str]] = []
+    strict_identity_unresolved = 0
+    strict_identity_unresolved_samples: List[str] = []
+
+    # Stable resolver for LLDP remote endpoints.
+    # Build once so we can map chassis-id/MAC/IP -> canonical node_id during parsing.
+    stable_resolver: Dict[str, str] = {}
+    uuid_to_node_id: Dict[str, str] = {}
+    known_node_ids: Set[str] = set()
+    chassis_binding_map: Dict[str, str] = {}
+    try:
+        resolver_devices = await prisma.devicenetwork.find_many(
+            where={
+                "node_id": {"not": None},
+                "NOT": [
+                    {"device_model": {"in": ["LLDP Neighbor (Auto-discovered)", "Unknown Neighbor"]}},
+                    {"serial_number": {"startsWith": "DUMMY-SN-"}},
+                    {"serial_number": {"startsWith": "LLDP-SN-"}},
+                ],
+            }
+        )
+        for d in resolver_devices:
+            if d.id and d.node_id:
+                uuid_to_node_id[d.id] = d.node_id
+                known_node_ids.add(d.node_id)
+        stable_resolver = await _build_node_resolver(prisma, {})
+        chassis_binding_map = await get_lldp_binding_map(prisma)
+    except Exception as e:
+        logger.warning(f"[0] Failed to build stable LLDP resolver: {e}")
 
     # ── Shared async HTTP client สำหรับทุก ODL call ──
     async with httpx.AsyncClient(auth=AUTH, headers=HEADERS, timeout=TIMEOUT) as http:
@@ -253,7 +381,6 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
                 }
             )
             logger.info(f"[1.2] Found {len(netconf_devices)} NETCONF devices in DB")
-
             for device in netconf_devices:
                 node_id = device.node_id
                 if not node_id:
@@ -277,18 +404,32 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
                             for neighbor in neighbors:
                                 state = neighbor.get("state", {})
                                 remote_node = state.get("system-name")
+                                remote_chassis = state.get("chassis-id") or neighbor.get("id")
                                 remote_port = state.get("port-id")
 
-                                if not remote_node or not remote_port:
+                                remote_node = _resolve_remote_node_id(
+                                    remote_name=remote_node,
+                                    remote_chassis=remote_chassis,
+                                    resolver=stable_resolver,
+                                    uuid_to_node_id=uuid_to_node_id,
+                                    chassis_binding_map=chassis_binding_map,
+                                    known_node_ids=known_node_ids,
+                                )
+                                remote_port = _clean_text(remote_port)
+                                local_port = _expand_interface_name(_clean_text(local_port))
+
+                                if not remote_node:
+                                    strict_identity_unresolved += 1
+                                    if len(strict_identity_unresolved_samples) < 10:
+                                        strict_identity_unresolved_samples.append(
+                                            f"{node_id}:{local_port} remote_name='{_clean_text(state.get('system-name'))}' chassis='{_clean_text(remote_chassis)}'"
+                                        )
+
+                                if not remote_node or not remote_port or not local_port:
                                     logger.debug(f"  [{node_id}] {local_port}: neighbor missing system-name or port-id, skip")
                                     continue
 
-                                # Clean domain (CSR1000vT.lab.local → CSR1000vT)
-                                # แต่ "openflow:1" ต้องเก็บไว้เต็ม
-                                if "openflow" not in remote_node:
-                                    remote_node_clean = remote_node.split('.')[0]
-                                else:
-                                    remote_node_clean = remote_node
+                                remote_node_clean = remote_node
 
                                 # Handle "Not Advertised" port
                                 remote_port_clean = remote_port
@@ -332,17 +473,32 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
                                 ios_data = res_ios.json()
                                 entries = ios_data.get("Cisco-IOS-XE-lldp-oper:lldp-entries", {}).get("lldp-entry", [])
                                 for entry in entries:
-                                    remote_id = entry.get('device-id', '')
-                                    local_intf = entry.get('local-interface')
-                                    remote_intf = entry.get('connecting-interface')
+                                    remote_id = _clean_text(entry.get('device-id') or "")
+                                    remote_chassis = _clean_text(entry.get('chassis-id') or "")
+                                    local_intf = _expand_interface_name(_clean_text(entry.get('local-interface')))
+                                    remote_intf = _clean_text(entry.get('connecting-interface') or entry.get('port-id-detail') or "")
 
-                                    if remote_id and "openflow" in remote_id:
-                                        pass   # keep as-is (e.g. "openflow:1")
-                                    elif remote_id:
-                                        remote_id = remote_id.split('.')[0]
-
+                                    remote_id = _resolve_remote_node_id(
+                                        remote_name=remote_id,
+                                        remote_chassis=remote_chassis,
+                                        resolver=stable_resolver,
+                                        uuid_to_node_id=uuid_to_node_id,
+                                        chassis_binding_map=chassis_binding_map,
+                                        known_node_ids=known_node_ids,
+                                    )
                                     if remote_intf:
                                         remote_intf = _expand_interface_name(remote_intf)
+
+                                    if not remote_id:
+                                        strict_identity_unresolved += 1
+                                        if len(strict_identity_unresolved_samples) < 10:
+                                            strict_identity_unresolved_samples.append(
+                                                f"{node_id}:{local_intf} remote_name='{_clean_text(entry.get('device-id'))}' chassis='{remote_chassis}'"
+                                            )
+
+                                    if not remote_id or not local_intf or not remote_intf:
+                                        logger.debug(f"  [{node_id}] LLDP(IOS-XE) skipped invalid entry: local='{local_intf}' remote='{remote_id}' port='{remote_intf}'")
+                                        continue
 
                                     link_src = f"{node_id}:{local_intf}"
                                     link_tgt = f"{remote_id}:{remote_intf}"
@@ -377,16 +533,34 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
                                         neighbors = intf.get("lldpNeighbors", {}).get("lldpNeighbor", [])
 
                                     for neighbor in neighbors:
-                                        remote_id = neighbor.get("sysName", "")
-                                        remote_intf = neighbor.get("portId", "")
+                                        remote_name = _clean_text(neighbor.get("sysName") or "")
+                                        remote_chassis = _clean_text(neighbor.get("chassisId") or "")
+                                        remote_intf = _clean_text(neighbor.get("portId") or neighbor.get("portDescription") or "")
+                                        local_intf_clean = _expand_interface_name(_clean_text(local_intf))
 
-                                        if remote_id and "openflow" not in remote_id:
-                                            remote_id = remote_id.split('.')[0]
-
+                                        remote_id = _resolve_remote_node_id(
+                                            remote_name=remote_name,
+                                            remote_chassis=remote_chassis,
+                                            resolver=stable_resolver,
+                                            uuid_to_node_id=uuid_to_node_id,
+                                            chassis_binding_map=chassis_binding_map,
+                                            known_node_ids=known_node_ids,
+                                        )
                                         if remote_intf:
                                             remote_intf = _expand_interface_name(remote_intf)
 
-                                        link_src = f"{node_id}:{local_intf}"
+                                        if not remote_id:
+                                            strict_identity_unresolved += 1
+                                            if len(strict_identity_unresolved_samples) < 10:
+                                                strict_identity_unresolved_samples.append(
+                                                    f"{node_id}:{local_intf_clean} remote_name='{remote_name}' chassis='{remote_chassis}'"
+                                                )
+
+                                        if not remote_id or not local_intf_clean or not remote_intf:
+                                            logger.debug(f"  [{node_id}] LLDP(Huawei) skipped invalid entry: local='{local_intf_clean}' remote='{remote_id}' port='{remote_intf}'")
+                                            continue
+
+                                        link_src = f"{node_id}:{local_intf_clean}"
                                         link_tgt = f"{remote_id}:{remote_intf}"
                                         raw_links.append({
                                             "link_id": f"{link_src}-to-{link_tgt}",
@@ -419,10 +593,60 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
     for ln in raw_links:
         logger.info(f"  raw_link: {ln['source']} -> {ln['target']}  (type={ln['type']})")
 
+    # 1.3) Strict NETCONF link policy
+    # Create link only when LLDP is seen from both directions (A->B and B->A).
+    # If one side is missing, the link is excluded from active set and will be removed in cleanup.
+    if raw_links:
+        raw_link_pairs = {(ln["source"], ln["target"]) for ln in raw_links}
+        filtered_raw_links: List[Dict[str, str]] = []
+        unilateral_netconf_dropped = 0
+        unilateral_netconf_samples: List[str] = []
+        for ln in raw_links:
+            if ln.get("type") != "NETCONF":
+                filtered_raw_links.append(ln)
+                continue
+            reverse_exists = (ln["target"], ln["source"]) in raw_link_pairs
+            if reverse_exists:
+                filtered_raw_links.append(ln)
+            else:
+                unilateral_netconf_dropped += 1
+                if len(unilateral_netconf_samples) < 10:
+                    unilateral_netconf_samples.append(f"{ln['source']} -> {ln['target']}")
+                logger.info(f"[1.3] Drop unilateral NETCONF LLDP link: {ln['source']} -> {ln['target']}")
+
+        if unilateral_netconf_dropped:
+            logger.info(f"[1.3] Dropped {unilateral_netconf_dropped} unilateral NETCONF links")
+        unilateral_netconf_dropped_count = unilateral_netconf_dropped
+        unilateral_netconf_samples_count = unilateral_netconf_samples
+        raw_links = filtered_raw_links
+    else:
+        unilateral_netconf_dropped_count = 0
+        unilateral_netconf_samples_count = []
+
     # ---------------------------------------------------------
     # 2. เขียนลง DB แบบ Upsert
     # ---------------------------------------------------------
-    stats = {"nodes_synced": 0, "interfaces_synced": 0, "links_synced": 0}
+    stats = {
+        "nodes_synced": 0,
+        "interfaces_synced": 0,
+        "links_synced": 0,
+        "raw_nodes": len(raw_nodes),
+        "raw_links": len(raw_links),
+        "unique_tps": 0,
+        "resolved_links": 0,
+        "skipped_missing_links": 0,
+        "skipped_dedup_links": 0,
+        "unilateral_netconf_dropped": 0,
+        "unilateral_netconf_samples": [],
+        "strict_identity_unresolved": 0,
+        "strict_identity_unresolved_samples": [],
+        "unresolved_nodes": [],
+        "unresolved_tps": [],
+    }
+    stats["unilateral_netconf_dropped"] = unilateral_netconf_dropped_count
+    stats["unilateral_netconf_samples"] = unilateral_netconf_samples_count
+    stats["strict_identity_unresolved"] = strict_identity_unresolved
+    stats["strict_identity_unresolved_samples"] = strict_identity_unresolved_samples
 
     # 2.1) Upsert Nodes (DeviceNetwork) ──────────────────────
     device_id_map: Dict[str, str] = {}   # node_id → device.id (UUID)
@@ -564,16 +788,19 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
     for ln in raw_links:
         unique_tps.add(ln["source"])
         unique_tps.add(ln["target"])
+    stats["unique_tps"] = len(unique_tps)
     logger.info(f"[2.2] Unique TPs to process: {sorted(unique_tps)}")
+    unresolved_nodes: Set[str] = set()
+    unresolved_tps: List[str] = []
 
     for tp_id in unique_tps:
         # Parse  "openflow:1:2" → ("openflow:1", "2")
         #        "CSRTH:GigabitEthernet3" → ("CSRTH", "GigabitEthernet3")
-        parts = tp_id.rsplit(':', 1)
-        if len(parts) != 2:
+        parsed_tp = _split_tp_id(tp_id, device_id_map, node_resolver)
+        if not parsed_tp:
             logger.warning(f"[2.2] Cannot parse tp_id '{tp_id}' — skipping")
             continue
-        node_id_parsed, port_str = parts
+        node_id_parsed, port_str = parsed_tp
 
         # Resolve node → UUID
         parent_uuid = _resolve_node(node_id_parsed, device_id_map, node_resolver)
@@ -585,6 +812,9 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
                 f"[2.2] Node '{node_id_parsed}' (tp_id='{tp_id}') not in resolver — skipping. "
                 f"Known nodes: {list(device_id_map.keys())}"
             )
+            unresolved_nodes.add(node_id_parsed)
+            if len(unresolved_tps) < 20:
+                unresolved_tps.append(tp_id)
             continue
 
         # Extract port_number (ใช้เฉพาะกับ port ที่เป็นตัวเลขล้วน เช่น OpenFlow port "2")
@@ -703,6 +933,11 @@ async def sync_odl_topology_to_db() -> Dict[str, Any]:
     if skipped_missing:
         logger.info(f"[2.3] Skipped {skipped_missing} links (missing interfaces)")
     logger.info(f"[2.3] {len(resolved_links)} unique links to upsert")
+    stats["resolved_links"] = len(resolved_links)
+    stats["skipped_missing_links"] = skipped_missing
+    stats["skipped_dedup_links"] = skipped_dedup
+    stats["unresolved_nodes"] = sorted(unresolved_nodes)
+    stats["unresolved_tps"] = unresolved_tps
 
     active_link_ids: Set[str] = set()
     for src_uuid, tgt_uuid, link_id in resolved_links:

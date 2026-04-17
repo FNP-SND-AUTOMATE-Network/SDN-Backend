@@ -1,26 +1,28 @@
-"""
-Slack Incoming Webhook Client
-ส่งข้อความแจ้งเตือนไปยัง Slack Channel ผ่าน Incoming Webhook
-
-รองรับ:
-  - Plain text messages
-  - Block Kit (rich formatting) messages
-  - Async with retry
-"""
-
 import httpx
+import asyncio
 from typing import Any, Dict, List, Optional
 from app.core.logging import logger
 from app.core.config import settings
 
 
 class SlackClient:
-    """HTTP client for Slack Incoming Webhooks."""
+    """HTTP client for Slack Incoming Webhooks with persistent connection pooling."""
 
     def __init__(self, webhook_url: Optional[str] = None):
         self.webhook_url = webhook_url or settings.SLACK_WEBHOOK_URL
-        self.timeout = httpx.Timeout(10.0, connect=5.0)
-        self.max_retries = 2
+        self.timeout = httpx.Timeout(15.0, connect=8.0)
+        self.max_retries = 3
+        self._client: Optional[httpx.AsyncClient] = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Get or create persistent HTTP client (connection pooling)."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=self.timeout,
+                limits=httpx.Limits(max_connections=5, max_keepalive_connections=2),
+                http2=False,
+            )
+        return self._client
 
     async def send_message(self, text: str, blocks: Optional[List[Dict]] = None) -> bool:
         """
@@ -43,8 +45,8 @@ class SlackClient:
 
         for attempt in range(1, self.max_retries + 1):
             try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.post(self.webhook_url, json=payload)
+                client = await self._get_client()
+                response = await client.post(self.webhook_url, json=payload)
 
                 if response.status_code == 200 and response.text == "ok":
                     logger.info(f"[Slack] Message sent successfully (attempt {attempt})")
@@ -56,11 +58,29 @@ class SlackClient:
                     )
             except httpx.TimeoutException:
                 logger.warning(f"[Slack] Timeout on attempt {attempt}/{self.max_retries}")
+                # Reset client on timeout to force fresh connection
+                await self._close_client()
             except Exception as exc:
                 logger.error(f"[Slack] Send failed (attempt {attempt}): {exc}")
+                await self._close_client()
+
+            # Wait before retry (exponential: 2s, 4s)
+            if attempt < self.max_retries:
+                wait = min(attempt * 2, 5)
+                logger.info(f"[Slack] Retrying in {wait}s...")
+                await asyncio.sleep(wait)
 
         logger.error("[Slack] All retry attempts exhausted — message not sent")
         return False
+
+    async def _close_client(self):
+        """Close the persistent client (will be recreated on next use)."""
+        if self._client and not self._client.is_closed:
+            try:
+                await self._client.aclose()
+            except Exception:
+                pass
+            self._client = None
 
     async def send_block_message(
         self,

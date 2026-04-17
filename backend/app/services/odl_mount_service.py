@@ -177,13 +177,12 @@ class OdlMountService:
             "request_timeout_ms": 1200000,
             "max_attempts": 8,
             "between_attempts_ms": 30000,
-            "concurrent_rpc_limit": 6,
+            "concurrent_rpc_limit": 32,  # high enough for schema discovery, low enough to not flood SSH
             "sleep_factor": 2.5,
         }
 
     @staticmethod
     def _get_csr1000v_overrides() -> Dict[str, Any]:
-        """CSR1000v overrides aligned with Huawei stability profile."""
         return {
             "keepalive_delay": 300,
             "schemaless": False,
@@ -191,7 +190,7 @@ class OdlMountService:
             "request_timeout_ms": 1200000,
             "max_attempts": 8,
             "between_attempts_ms": 30000,
-            "concurrent_rpc_limit": 6,
+            "concurrent_rpc_limit": 32,    
             "sleep_factor": 2.5,
         }
 
@@ -206,7 +205,7 @@ class OdlMountService:
             "request_timeout_ms": 1200000,
             "max_attempts": 8,
             "between_attempts_ms": 30000,
-            "concurrent_rpc_limit": 6,
+            "concurrent_rpc_limit": 32,  # high enough for schema discovery, low enough to not flood SSH
             "sleep_factor": 2.5,
         }
 

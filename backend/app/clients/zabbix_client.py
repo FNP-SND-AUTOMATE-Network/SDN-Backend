@@ -353,6 +353,34 @@ class ZabbixClient:
 
         return await self._call("problem.get", params)
 
+    async def get_problems_count(
+        self,
+        severity_min: int = 0,
+        host_ids: Optional[List[str]] = None,
+        recent: bool = True,
+        time_from: Optional[int] = None,
+        time_till: Optional[int] = None,
+    ) -> int:
+        """Fetch total count of active problems without list pagination limit."""
+        params: Dict[str, Any] = {
+            "countOutput": True,
+            "recent": recent,
+            "severities": list(range(severity_min, 6)),
+        }
+
+        if host_ids:
+            params["hostids"] = host_ids
+        if time_from is not None:
+            params["time_from"] = time_from
+        if time_till is not None:
+            params["time_till"] = time_till
+
+        result = await self._call("problem.get", params)
+        try:
+            return int(result)
+        except (TypeError, ValueError):
+            return 0
+
     async def get_triggers(
         self,
         host_ids: Optional[List[str]] = None,

@@ -95,10 +95,8 @@ class ChatOpsService:
         if netconf:
             faults.extend(self.fault_detector.detect_from_sync_result(netconf))
 
-        # ตรวจจาก OpenFlow results
-        openflow = data.get("openflow", {})
-        if openflow:
-            faults.extend(self.fault_detector.detect_from_sync_result(openflow))
+
+
 
         # ส่ง fault notifications
         for fault in faults:

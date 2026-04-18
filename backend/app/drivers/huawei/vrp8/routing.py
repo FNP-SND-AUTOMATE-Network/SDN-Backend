@@ -339,16 +339,19 @@ class HuaweiRoutingDriver(BaseDriver):
             vrf_name: VRF name (default: "_public_" for global)
             description: Route description (optional)
         """
-        prefix = params.get("prefix")  # e.g., "10.0.0.0/24"
+        prefix = params.get("prefix")  # e.g., "10.0.0.0/24" or "10.0.0.0"
+        mask = params.get("mask")      # optional when prefix has no "/"
         next_hop = params.get("next_hop")
         vrf_name = params.get("vrf_name", "_public_")
         description = params.get("description")
         
         if not prefix or not next_hop:
             raise DriverBuildError("params require prefix, next_hop")
-        
-        # Parse prefix
-        network, mask_len = prefix.split("/")
+
+        # Parse destination prefix. Accept both:
+        # - prefix="10.0.0.0/24"
+        # - prefix="10.0.0.0", mask="255.255.255.0" or mask="24"
+        network, mask_len = _parse_ipv4_prefix(prefix, mask)
         
         path = f"{mount}/huawei-staticrt:staticrt/staticrtbase/srRoutes"
         
@@ -389,13 +392,14 @@ class HuaweiRoutingDriver(BaseDriver):
         Path keys: vrfName, afType, topologyName, prefix, maskLength, ifName, nexthop, destVrfName
         """
         prefix = params.get("prefix")
+        mask = params.get("mask")
         next_hop = params.get("next_hop", "")
         vrf_name = params.get("vrf_name", "_public_")
         
         if not prefix:
             raise DriverBuildError("params require prefix")
-        
-        network, mask_len = prefix.split("/")
+
+        network, mask_len = _parse_ipv4_prefix(prefix, mask)
         
         # URL encode key components
         encoded_vrf = urllib.parse.quote(vrf_name, safe='')
@@ -461,7 +465,69 @@ def _prefix_to_netmask(prefix: int) -> str:
     return ".".join(str((mask >> (8*i)) & 0xff) for i in [3, 2, 1, 0])
 
 
+def _parse_ipv4_prefix(prefix: str, mask: Any = None) -> tuple[str, int]:
+    """
+    Parse IPv4 destination into (network, mask_length).
+
+    Accepted inputs:
+    - prefix="10.0.0.0/24"
+    - prefix="10.0.0.0", mask="24"
+    - prefix="10.0.0.0", mask="255.255.255.0"
+    """
+    if not prefix:
+        raise DriverBuildError("prefix is required")
+
+    prefix_text = str(prefix).strip()
+    mask_value: Any = mask
+
+    if "/" in prefix_text:
+        parts = prefix_text.split("/", 1)
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise DriverBuildError(
+                "invalid prefix format. Expected 'x.x.x.x/len' or provide mask separately"
+            )
+        network = parts[0].strip()
+        mask_value = parts[1].strip()
+    else:
+        network = prefix_text
+        if mask_value is None or str(mask_value).strip() == "":
+            raise DriverBuildError(
+                "mask is required when prefix has no '/'. Example: prefix='10.0.0.0', mask='255.255.255.0'"
+            )
+
+    mask_text = str(mask_value).strip()
+    if "." in mask_text:
+        mask_len = _netmask_to_prefix(mask_text)
+    else:
+        try:
+            mask_len = int(mask_text)
+        except ValueError as exc:
+            raise DriverBuildError(f"invalid mask value: {mask_text}") from exc
+
+    if mask_len < 0 or mask_len > 32:
+        raise DriverBuildError(f"mask length out of range: {mask_len}")
+
+    return network, mask_len
+
+
 def _netmask_to_wildcard(netmask: str) -> str:
     """Convert netmask to wildcard mask"""
     octets = netmask.split(".")
     return ".".join(str(255 - int(o)) for o in octets)
+
+
+def _netmask_to_prefix(netmask: str) -> int:
+    """Convert dotted decimal netmask (e.g. 255.255.255.0) to prefix length (24)."""
+    octets = str(netmask).strip().split(".")
+    if len(octets) != 4:
+        raise DriverBuildError(f"invalid netmask format: {netmask}")
+
+    try:
+        bits = "".join(f"{int(o):08b}" for o in octets)
+    except ValueError as exc:
+        raise DriverBuildError(f"invalid netmask format: {netmask}") from exc
+
+    if "01" in bits:
+        raise DriverBuildError(f"non-contiguous netmask is not allowed: {netmask}")
+
+    return bits.count("1")

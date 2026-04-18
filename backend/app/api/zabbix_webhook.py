@@ -97,6 +97,15 @@ async def receive_zabbix_event(
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
     logger.info(f"[ZabbixWebhook] Received event from Zabbix: {payload.get('event_id', 'N/A')}")
+    logger.info(
+        f"[ZabbixWebhook] RAW STATUS FIELDS → "
+        f"trigger_status={payload.get('trigger_status')!r}, "
+        f"status={payload.get('status')!r}, "
+        f"event_status={payload.get('event_status')!r}, "
+        f"event_value={payload.get('event_value')!r}, "
+        f"event_update_status={payload.get('event_update_status')!r}"
+    )
+    logger.info(f"[ZabbixWebhook] FULL PAYLOAD KEYS: {list(payload.keys())}")
 
     # Process: normalize → send to Slack
     result = await zabbix_notification_service.handle_zabbix_event(payload)

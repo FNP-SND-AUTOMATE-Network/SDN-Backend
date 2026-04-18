@@ -2,6 +2,11 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Any, Dict, Optional
 from app.services.topology_sync import sync_odl_topology_to_db
+from app.services.topology_binding_service import (
+    delete_lldp_binding,
+    list_lldp_bindings,
+    upsert_lldp_binding,
+)
 from app.core.logging import logger
 
 router = APIRouter()
@@ -35,7 +40,20 @@ class TopologyResponse(BaseModel):
 class TopologySyncResponse(BaseModel):
     success: bool
     message: str
-    stats: Dict[str, int]
+    stats: Dict[str, Any]
+
+
+class LldpBindingRequest(BaseModel):
+    chassis_id: str
+    node_id: str
+
+
+class LldpBindingResponse(BaseModel):
+    id: str
+    chassis_id_norm: str
+    node_id: str
+    created_at: Any
+    updated_at: Any
 
 
 @router.post("/topology/sync", response_model=TopologySyncResponse)
@@ -174,3 +192,40 @@ async def get_hybrid_topology(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+@router.get("/topology/lldp-bindings", response_model=List[LldpBindingResponse])
+async def get_lldp_bindings():
+    from app.database import get_prisma_client
+    prisma = get_prisma_client()
+    try:
+        rows = await list_lldp_bindings(prisma)
+        return rows
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list bindings: {str(e)}")
+
+
+@router.post("/topology/lldp-bindings", response_model=LldpBindingResponse)
+async def create_or_update_lldp_binding(payload: LldpBindingRequest):
+    from app.database import get_prisma_client
+    prisma = get_prisma_client()
+    try:
+        row = await upsert_lldp_binding(prisma, chassis_id=payload.chassis_id, node_id=payload.node_id)
+        return row
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to upsert binding: {str(e)}")
+
+
+@router.delete("/topology/lldp-bindings/{chassis_id}", response_model=LldpBindingResponse)
+async def remove_lldp_binding(chassis_id: str):
+    from app.database import get_prisma_client
+    prisma = get_prisma_client()
+    try:
+        row = await delete_lldp_binding(prisma, chassis_id=chassis_id)
+        return row
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete binding: {str(e)}")

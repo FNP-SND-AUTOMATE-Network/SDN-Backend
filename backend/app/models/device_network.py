@@ -68,6 +68,9 @@ class DeviceNetworkBase(BaseModel):
     description: Optional[str] = Field(None, description="คำอธิบายอุปกรณ์", max_length=1000)
     phpipam_address_id: Optional[str] = Field(None, description="phpIPAM Address ID")
     
+    # IPAM Picker mode — ถ้า user เลือก subnet จาก dropdown
+    ipam_subnet_id: Optional[str] = Field(None, description="Subnet ID จาก phpIPAM (Picker mode)")
+    
     # Foreign Keys
     policy_id: Optional[str] = Field(None, description="Policy ID")
     os_id: Optional[str] = Field(None, description="Operating System ID")
@@ -250,13 +253,25 @@ class DeviceNetworkListResponse(BaseModel):
 class DeviceNetworkCreateResponse(BaseModel):
     message: str
     device: DeviceNetworkResponse
+    ipam_notifications: list = Field(
+        default_factory=list,
+        description="แจ้งเตือนสถานะการ book IP ใน phpIPAM"
+    )
 
 class DeviceNetworkUpdateResponse(BaseModel):
     message: str
     device: DeviceNetworkResponse
+    ipam_notifications: list = Field(
+        default_factory=list,
+        description="แจ้งเตือนสถานะการ book/release IP ใน phpIPAM"
+    )
 
 class DeviceNetworkDeleteResponse(BaseModel):
     message: str
+    ipam_notifications: list = Field(
+        default_factory=list,
+        description="แจ้งเตือนสถานะการปล่อย IP จาก phpIPAM"
+    )
 
 
 class DeviceTagAssignment(BaseModel):

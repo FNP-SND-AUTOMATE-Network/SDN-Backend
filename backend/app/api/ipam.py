@@ -7,7 +7,10 @@ from app.models.ipam import (
     DeviceIpAssignRequest, InterfaceIpAssignRequest, IpAssignmentResponse,
     SyncRequest, SyncResponse,
     SubnetCreateRequest, SubnetUpdateRequest, SubnetDetailResponse, SubnetUsageResponse,
-    SectionResponse, SectionListResponse, SectionCreateRequest, SectionUpdateRequest
+    SectionResponse, SectionListResponse, SectionCreateRequest, SectionUpdateRequest,
+    SubnetPickerItem, SubnetPickerResponse,
+    AvailableIpListResponse,
+    SpaceMapEntry, SpaceMapResponse
 )
 from app.services.phpipam_service import PhpipamService
 from app.database import get_prisma_client, is_prisma_client_ready
@@ -80,6 +83,51 @@ async def get_subnets(
             detail=f"Error fetching subnets: {str(e)}"
         )
 
+
+# ========= IPAM Picker Endpoints (MUST be before /subnets/{subnet_id}) =========
+
+@router.get("/subnets/picker", response_model=SubnetPickerResponse)
+async def get_subnets_for_picker(
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Return subnet list with usage info for dropdown picker.
+    ใช้ใน Device/Interface form เพื่อให้ user เลือก subnet จาก dropdown
+    """
+    try:
+        phpipam_svc = get_phpipam_service()
+        
+        if not phpipam_svc.enabled:
+            return SubnetPickerResponse(subnets=[], total=0)
+        
+        picker_items = await phpipam_svc.get_subnets_for_picker()
+        
+        subnet_list = [
+            SubnetPickerItem(
+                id=item["id"],
+                label=item["label"],
+                subnet=item["subnet"],
+                mask=item["mask"],
+                description=item.get("description"),
+                usage_percent=item.get("usage_percent"),
+                free_hosts=item.get("free_hosts"),
+                total_hosts=item.get("total_hosts"),
+            )
+            for item in picker_items
+        ]
+        
+        return SubnetPickerResponse(
+            subnets=subnet_list,
+            total=len(subnet_list)
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching subnets for picker: {str(e)}"
+        )
 
 @router.get("/subnets/{subnet_id}/addresses", response_model=IpAddressListResponse)
 async def get_subnet_addresses(
@@ -1193,4 +1241,91 @@ async def get_subnet_children(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error fetching child subnets: {str(e)}"
+        )
+
+
+
+@router.get("/subnets/{subnet_id}/available", response_model=AvailableIpListResponse)
+async def get_available_ips(
+    subnet_id: str,
+    limit: int = Query(100, ge=1, le=1000, description="จำนวน IP ที่ต้องการดึงมาแสดง"),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Return list of available (free) IPs in a subnet.
+    ใช้ใน dropdown ตัวที่สอง หลังจาก user เลือก subnet แล้ว
+    """
+    try:
+        phpipam_svc = get_phpipam_service()
+        
+        if not phpipam_svc.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="phpIPAM integration is not enabled"
+            )
+        
+        result = await phpipam_svc.get_available_ips(subnet_id, limit=limit)
+        
+        return AvailableIpListResponse(
+            subnet_id=result["subnet_id"],
+            subnet=result["subnet"],
+            available_ips=result["available_ips"],
+            total_available=result["total_available"]
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching available IPs: {str(e)}"
+        )
+
+
+@router.get("/subnets/{subnet_id}/space-map", response_model=SpaceMapResponse)
+async def get_subnet_space_map(
+    subnet_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Return visual space map of a subnet.
+    แสดง IP ทั้งหมดใน subnet พร้อมสถานะ (used/free/gateway/reserved)
+    """
+    try:
+        phpipam_svc = get_phpipam_service()
+        
+        if not phpipam_svc.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="phpIPAM integration is not enabled"
+            )
+        
+        result = await phpipam_svc.get_space_map(subnet_id)
+        
+        addresses = [
+            SpaceMapEntry(
+                ip=addr["ip"],
+                status=addr["status"],
+                hostname=addr.get("hostname"),
+                description=addr.get("description")
+            )
+            for addr in result.get("addresses", [])
+        ]
+        
+        return SpaceMapResponse(
+            subnet_id=result["subnet_id"],
+            subnet=result["subnet"],
+            mask=result["mask"],
+            total_hosts=result["total_hosts"],
+            used=result["used"],
+            free=result["free"],
+            addresses=addresses
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching space map: {str(e)}"
         )

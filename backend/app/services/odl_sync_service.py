@@ -13,6 +13,7 @@ from app.clients.odl_restconf_client import OdlRestconfClient
 from app.schemas.request_spec import RequestSpec
 from app.core.logging import logger
 from app.database import get_prisma_client
+from app.services.phpipam_service import PhpipamService
 
 
 # Map ODL connection status string to DB enum value
@@ -44,6 +45,7 @@ class OdlSyncService:
     
     def __init__(self):
         self.odl_client = OdlRestconfClient()
+        self.phpipam_service = PhpipamService()
     
     async def get_odl_mounted_nodes(self) -> List[Dict[str, Any]]:
         """
@@ -181,6 +183,9 @@ class OdlSyncService:
                                 "ip_address": odl_node.get("host") or device.ip_address,
                             }
                         )
+                        # Sync phpIPAM tag to match new device status
+                        if str(device.status) != new_status:
+                            await self.phpipam_service.sync_device_status_to_ipam(device.id, new_status)
                         
                         logger.info(f"[NETCONF-Sync] {node_id} ({odl_node.get('host','?')}): connection={odl_node['connection_status']} → status={new_status}")
                         result["synced"].append({
@@ -219,6 +224,8 @@ class OdlSyncService:
                                 "last_synced_at": datetime.utcnow()
                             }
                         )
+                        # Sync phpIPAM tag → Offline
+                        await self.phpipam_service.sync_device_status_to_ipam(device.id, "OFFLINE")
                         logger.info(f"[NETCONF-Sync] {device.node_id}: not in ODL topology → status=OFFLINE (unmounted)")
                         result["synced"].append({
                             "node_id": device.node_id,
@@ -237,6 +244,258 @@ class OdlSyncService:
             result["errors"].append({"error": str(e)})
             return result
             
+    async def sync_openflow_devices_from_odl(self) -> Dict[str, Any]:
+        """
+        Sync ข้อมูล Device ที่เป็น OpenFlow จาก ODL แบบอัตโนมัติ
+        โดยจับคู่จาก IP Address
+        
+        Flow:
+        1. ดึงข้อมูล nodes จาก /opendaylight-inventory:nodes?content=nonconfig
+        2. วนลูปแล้วดึง node.id และ ip-address
+        3. ค้นหาใน DB ด้วย ip_address และ management_protocol = 'OPENFLOW'
+        4. อัปเดต node_id, status, last_synced_at
+        5. ซิงค์ interface (node-connector -> Interface)
+        """
+        prisma = get_prisma_client()
+        result = {
+            "synced": [],
+            "not_found": [],
+            "errors": [],
+            "duplicate_ips": [],
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+        try:
+            logger.info("[OF-Sync] Starting OpenFlow device sync from ODL inventory...")
+            # 1. ดึง inventory จาก ODL
+            spec = RequestSpec(
+                method="GET",
+                path=self.OPENFLOW_INVENTORY_PATH,
+                datastore="operational",
+                headers={"Accept": "application/yang-data+json"}
+            )
+            try:
+                response = await self.odl_client.send(spec)
+                nodes_list = response.get("opendaylight-inventory:nodes", {}).get("node", [])
+                if not nodes_list:
+                    # ฟอลแบ็คสำหรับบางเวอร์ชัน ODL
+                    nodes_list = response.get("nodes", {}).get("node", [])
+            except Exception as e:
+                error_str = str(e)
+                # ไม่ว่า error อะไรก็ตาม → mark ทุก OF device เป็น OFFLINE
+                reason = "409 data-missing" if ("409" in error_str and "data-missing" in error_str) else f"ODL error: {error_str[:100]}"
+                logger.warning(f"[OF-Sync] ODL fetch failed ({reason}). Marking all OF devices OFFLINE.")
+                db_of_devices = await prisma.devicenetwork.find_many(
+                    where={"management_protocol": "OPENFLOW"}
+                )
+                for d in db_of_devices:
+                    if d.status != "OFFLINE":
+                        await prisma.devicenetwork.update(
+                            where={"id": d.id},
+                            data={
+                                "status": "OFFLINE",
+                                "odl_connection_status": "UNABLE_TO_CONNECT",
+                                "last_synced_at": datetime.utcnow()
+                            }
+                        )
+                        await self.phpipam_service.sync_device_status_to_ipam(d.id, "OFFLINE")
+                        result["synced"].append({
+                            "device_id": d.id,
+                            "node_id": d.node_id,
+                            "device_name": d.device_name,
+                            "status": "OFFLINE",
+                            "note": f"Marked OFFLINE ({reason})"
+                        })
+                logger.info(f"[OF-Sync] Marked {len(result['synced'])} OF devices OFFLINE")
+                return result
+
+            odl_active_ips = set()
+            odl_active_node_ids = set()   # ALL OF nodes in inventory (for offline detection)
+            odl_node_data = []            # Only nodes with IP (for data sync)
+
+            # 2. Extract Data
+            for node in nodes_list:
+                node_id = node.get("id")
+                ip_addr = node.get("flow-node-inventory:ip-address")
+                
+                # เก็บ node-connector ด้วย
+                connectors = node.get("node-connector", [])
+                
+                if not node_id:
+                    continue
+
+                # Track ALL OF nodes as active (presence in inventory = connected)
+                if node_id.startswith("openflow:"):
+                    odl_active_node_ids.add(node_id)
+
+                # Only sync data if we have IP
+                if not ip_addr:
+                    continue
+
+                odl_active_ips.add(ip_addr)
+                odl_node_data.append({
+                    "node_id": node_id,
+                    "ip": ip_addr,
+                    "connectors": connectors
+                })
+
+            # 3. Get DB Devices with OPENFLOW
+            db_of_devices = await prisma.devicenetwork.find_many(
+                where={"management_protocol": "OPENFLOW"}
+            )
+            
+            # Map node_id or device_name to list of devices in DB
+            db_lookup_map = {}
+            for d in db_of_devices:
+                key = d.node_id if d.node_id else d.device_name
+                if key:
+                    if key not in db_lookup_map:
+                        db_lookup_map[key] = []
+                    db_lookup_map[key].append(d)
+
+            # odl_active_node_ids already built during extraction (step 2)
+            logger.info(f"[OF-Sync] ODL active OF nodes: {odl_active_node_ids}, DB OF devices: {list(db_lookup_map.keys())}")
+
+            # Mark devices offline that are in DB but not active in ODL
+            for key, devices in db_lookup_map.items():
+                if key not in odl_active_node_ids:
+                    for d in devices:
+                        if d.status != "OFFLINE":
+                            await prisma.devicenetwork.update(
+                                where={"id": d.id},
+                                data={
+                                    "status": "OFFLINE",
+                                    "odl_connection_status": "UNABLE_TO_CONNECT",
+                                    "last_synced_at": datetime.utcnow()
+                                }
+                            )
+                            await self.phpipam_service.sync_device_status_to_ipam(d.id, "OFFLINE")
+
+            # 4. Sync each ODL node to the DB
+            for odl_nd in odl_node_data:
+                odl_ip = odl_nd["ip"]
+                odl_node_id = odl_nd["node_id"]
+                connectors = odl_nd["connectors"]
+
+                matched_devices = db_lookup_map.get(odl_node_id, [])
+
+                if not matched_devices:
+                    result["not_found"].append({"ip": odl_ip, "node_id": odl_node_id})
+                    continue
+
+                if len(matched_devices) > 1:
+                    logger.warning(f"Duplicate device found in DB for OPENFLOW sync: {odl_node_id}")
+                    # In real-world, might append to duplicate array, but let's just proceed with first
+
+                device = matched_devices[0]
+
+                # Check if this node_id is already used by another device (to prevent Unique Constraint Error)
+                existing_node = await prisma.devicenetwork.find_unique(
+                    where={"node_id": odl_node_id}
+                )
+                
+                if existing_node and existing_node.id != device.id:
+                    # Node might have been reassigned, clear the old one first
+                    await prisma.devicenetwork.update(
+                        where={"id": existing_node.id},
+                        data={
+                            "node_id": None,
+                            "status": "OFFLINE",
+                            "odl_connection_status": "UNABLE_TO_CONNECT"
+                        }
+                    )
+
+                # Extract datapath_id from node_id (e.g. "openflow:1" -> "1")
+                extracted_dp_id = None
+                if odl_node_id.startswith("openflow:"):
+                    extracted_dp_id = odl_node_id.replace("openflow:", "")
+
+                # Update Device with new IP from ODL
+                await prisma.devicenetwork.update(
+                    where={"id": device.id},
+                    data={
+                        "node_id": odl_node_id,
+                        "ip_address": odl_ip,
+                        "datapath_id": extracted_dp_id,
+                        "status": "ONLINE",
+                        "odl_connection_status": "CONNECTED",
+                        "last_synced_at": datetime.utcnow()
+                    }
+                )
+                # Sync phpIPAM tag → Online
+                if str(device.status) != "ONLINE":
+                    await self.phpipam_service.sync_device_status_to_ipam(device.id, "ONLINE")
+
+                # 5. Sync Interfaces
+                for conn in connectors:
+                    tp_id = conn.get("id")
+                    port_num_str = conn.get("flow-node-inventory:port-number")
+                    mac_addr = conn.get("flow-node-inventory:hardware-address")
+                    name = conn.get("flow-node-inventory:name", tp_id)
+                    
+                    if not tp_id:
+                        continue
+                        
+                    # Parse port number
+                    port_num = None
+                    if port_num_str:
+                        try:
+                            # บางทีเป็น string "LOCAL", ข้ามถ้า cast int ไม่ได้
+                            if str(port_num_str).isdigit():
+                                port_num = int(port_num_str)
+                        except:
+                            pass
+
+                    # Upsert Interface
+                    # tp_id is unique, so we should first try to find by tp_id
+                    existing_iface = await prisma.interface.find_unique(
+                        where={"tp_id": tp_id}
+                    )
+                    
+                    if not existing_iface:
+                        # Fallback to device_id and name if tp_id wasn't set yet
+                        existing_iface = await prisma.interface.find_unique(
+                            where={"device_id_name": {"device_id": device.id, "name": name}}
+                        )
+
+                    params = {
+                        "name": name,
+                        "label": name,
+                        "tp_id": tp_id,
+                        "port_number": port_num,
+                        "mac_address": mac_addr,
+                        "status": "UP", # สมมติว่าพอร์ตมาด้วยคือ UP
+                        "device_id": device.id # ย้ายมาผูกกับ device ปัจจุบันเสมอเผื่อเปลี่ยน
+                    }
+
+                    if existing_iface:
+                        # อัปเดตข้อมูลและย้าย device_id (ถ้าเปลี่ยน)
+                        await prisma.interface.update(
+                            where={"id": existing_iface.id},
+                            data=params
+                        )
+                    else:
+                        await prisma.interface.create(
+                            data={
+                                **params,
+                                "type": "PHYSICAL"
+                            }
+                        )
+
+                result["synced"].append({
+                    "device_id": device.id,
+                    "ip_address": odl_ip,
+                    "node_id": odl_node_id,
+                    "interfaces_synced": len(connectors)
+                })
+
+            logger.info(f"[OF-Sync] Completed: {len(result['synced'])} synced, {len(result['not_found'])} not found, {len(result['errors'])} errors")
+            return result
+
+        except Exception as e:
+            logger.error(f"Sync OpenFlow failed: {e}")
+            result["errors"].append({"error": str(e)})
+            return result
 
     
     async def auto_create_from_odl(self, node_id: str, vendor: str = "cisco") -> Optional[Dict[str, Any]]:
@@ -423,6 +682,9 @@ class OdlSyncService:
                     "last_synced_at": datetime.utcnow(),
                 }
             )
+            # Sync phpIPAM tag to match new device status
+            if str(device.status) != new_status:
+                await self.phpipam_service.sync_device_status_to_ipam(device.id, new_status)
 
             logger.info(
                 f"[SingleSync] {node_id} ({protocol}): {previous_status} → {new_status} "

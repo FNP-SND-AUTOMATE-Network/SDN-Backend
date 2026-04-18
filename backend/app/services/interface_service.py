@@ -80,6 +80,15 @@ class InterfaceService:
             tp_id=interface.tp_id,
             port_number=interface.port_number,
             mac_address=interface.mac_address,
+            # IPAM fields
+            ip_address=getattr(interface, 'ip_address', None),
+            subnet_mask=getattr(interface, 'subnet_mask', None),
+            gateway=getattr(interface, 'gateway', None),
+            phpipam_address_id=getattr(interface, 'phpipam_address_id', None),
+            # Operational fields
+            speed=getattr(interface, 'speed', None),
+            duplex=getattr(interface, 'duplex', None),
+            mtu=getattr(interface, 'mtu', None),
             created_at=interface.createdAt,
             updated_at=interface.updatedAt,
             device=device_info

@@ -102,7 +102,7 @@ async def lifespan(app: FastAPI):
         device_interval = app_settings.SYNC_DEVICE_INTERVAL_SEC
         topo_interval = app_settings.SYNC_TOPOLOGY_INTERVAL_SEC
 
-        # Device status sync (NETCONF + OpenFlow)
+        # Device status sync (NETCONF)
         scheduler.add_job(
             _safe_sync_devices,
             'interval',

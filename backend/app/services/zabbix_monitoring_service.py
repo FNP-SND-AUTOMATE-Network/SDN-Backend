@@ -8,6 +8,7 @@ Flow:
 """
 
 import asyncio
+import re
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
@@ -40,6 +41,15 @@ INTERFACE_TYPE_MAP = {
     "4": "jmx",
 }
 
+# Dashboard problem filtering presets.
+PROBLEM_TIME_RANGE_SECONDS = {
+    "1h": 60 * 60,
+    "1d": 24 * 60 * 60,
+    "1w": 7 * 24 * 60 * 60,
+    "1mo": 30 * 24 * 60 * 60,
+    "1y": 365 * 24 * 60 * 60,
+}
+
 
 class ZabbixMonitoringService:
     """
@@ -68,19 +78,25 @@ class ZabbixMonitoringService:
 
     # ── Dashboard Overview ───────────────────────────────────────
 
-    async def get_dashboard_overview(self) -> Dict[str, Any]:
+    async def get_dashboard_overview(self, time_range: Optional[str] = None) -> Dict[str, Any]:
         """
         สรุปภาพรวม Dashboard: จำนวน hosts, problems, severity breakdown
         ใช้แสดงหน้า Dashboard หลัก
         """
-        cached = self._cache_get("overview")
+        selected_time_range = (time_range or "all").strip().lower()
+        time_from: Optional[int] = None
+        if selected_time_range in PROBLEM_TIME_RANGE_SECONDS:
+            time_from = int(time.time()) - PROBLEM_TIME_RANGE_SECONDS[selected_time_range]
+
+        cache_key = f"overview:{selected_time_range}"
+        cached = self._cache_get(cache_key)
         if cached is not None:
             return cached
 
         try:
             hosts, problems, host_groups = await asyncio.gather(
                 zabbix_client.get_hosts(),
-                zabbix_client.get_problems(),
+                zabbix_client.get_problems(time_from=time_from),
                 zabbix_client.get_host_groups(),
             )
 
@@ -130,6 +146,7 @@ class ZabbixMonitoringService:
                 },
                 "problems": {
                     "total": len(problems),
+                    "time_range": selected_time_range,
                     "severity_breakdown": severity_breakdown,
                 },
                 "host_groups": [
@@ -138,7 +155,7 @@ class ZabbixMonitoringService:
                 ],
                 "timestamp": int(time.time()),
             }
-            self._cache_set("overview", result, ttl_seconds=20)
+            self._cache_set(cache_key, result, ttl_seconds=20)
             return result
 
         except ZabbixAPIError as e:
@@ -296,6 +313,159 @@ class ZabbixMonitoringService:
         else:
             return {"value": round(bps, 2), "unit": "bps"}
 
+    @staticmethod
+    def _is_traffic_item(item: Dict[str, Any]) -> bool:
+        """ตรวจว่า item เป็นค่า network traffic (in/out throughput) หรือไม่"""
+        key = str(item.get("key_", "")).lower()
+        name_lower = str(item.get("name", "")).lower()
+        return (
+            key.startswith("net.if.in")
+            or key.startswith("net.if.out")
+            or "bits received" in name_lower
+            or "bits sent" in name_lower
+            or "ifhcinoctets" in key
+            or "ifhcoutoctets" in key
+            or "ifinoctets" in key
+            or "ifoutoctets" in key
+        )
+
+    @staticmethod
+    def _detect_traffic_direction(item: Dict[str, Any]) -> str:
+        """เดาทิศทาง traffic จาก key/name ของ Zabbix item"""
+        key = str(item.get("key_", "")).lower()
+        name_lower = str(item.get("name", "")).lower()
+        if (
+            key.startswith("net.if.out")
+            or "bits sent" in name_lower
+            or "ifhcoutoctets" in key
+            or "ifoutoctets" in key
+        ):
+            return "Outbound"
+        return "Inbound"
+
+    @staticmethod
+    def _extract_interface_index(item: Dict[str, Any]) -> Optional[str]:
+        """ดึง SNMP interface index จาก key/name เช่น .1, .2"""
+        key = str(item.get("key_", ""))
+        name = str(item.get("name", ""))
+
+        for source in [key, name]:
+            bracket_match = re.search(r"\[(?:[^\]]*\.)?(\d+)\]", source, flags=re.IGNORECASE)
+            if bracket_match:
+                return bracket_match.group(1)
+
+            dot_match = re.search(r"\.(\d+)$", source)
+            if dot_match:
+                return dot_match.group(1)
+
+        return None
+
+    @classmethod
+    def _build_interface_name_map_from_items(cls, items: List[Dict[str, Any]]) -> Dict[str, str]:
+        """สร้าง map index -> ชื่อ interface (ifName/ifDescr/ifAlias)"""
+        name_map: Dict[str, str] = {}
+
+        for item in items:
+            key_lower = str(item.get("key_", "")).lower()
+            looks_like_label_item = (
+                "ifname" in key_lower
+                or "ifdescr" in key_lower
+                or "ifalias" in key_lower
+            )
+            if not looks_like_label_item:
+                continue
+
+            idx = cls._extract_interface_index(item)
+            if not idx:
+                continue
+
+            raw_candidates = [
+                str(item.get("name", "")).strip(),
+                str(item.get("lastvalue", "")).strip(),
+            ]
+
+            candidate = ""
+            for raw in raw_candidates:
+                if not raw:
+                    continue
+                cleaned = (
+                    raw
+                    .replace("Interface", "")
+                    .replace("Bits received", "")
+                    .replace("Bits sent", "")
+                    .strip(": ")
+                )
+                # Skip pure numeric values (e.g. ifSpeed=1000000000) and OID-like names.
+                if cleaned.isdigit():
+                    continue
+                if cleaned and not re.match(r"^if(?:hc)?(?:in|out)octets\.\d+$", cleaned, flags=re.IGNORECASE):
+                    candidate = cleaned
+                    break
+
+            if candidate:
+                name_map[idx] = candidate
+
+        return name_map
+
+    @classmethod
+    def _extract_interface_name(cls, item: Dict[str, Any], interface_name_map: Optional[Dict[str, str]] = None) -> str:
+        """แปลงชื่อ item/key ให้เหลือ interface name ที่เทียบข้าม endpoint ได้"""
+        key = str(item.get("key_", ""))
+        key_lower = key.lower()
+        interface_name_map = interface_name_map or {}
+
+        raw_name = str(item.get("name", ""))
+        # Prefer human-readable label from item name when available
+        # e.g. "Interface Gi1(): Bits received" -> "Gi1()"
+        m = re.search(r"interface\s+(.+?)\s*:\s*(bits received|bits sent)", raw_name, flags=re.IGNORECASE)
+        if m:
+            candidate = m.group(1).strip()
+            if candidate and not candidate.isdigit():
+                return candidate
+
+        if key_lower.startswith("net.if.in[") or key_lower.startswith("net.if.out["):
+            start = key.find("[")
+            end = key.find("]", start + 1)
+            if start >= 0 and end > start:
+                inside = key[start + 1:end]
+                iface = inside.split(",")[0].strip().strip('"').strip("'")
+                if iface:
+                    idx_from_iface = re.search(r"(?:if(?:hc)?(?:in|out)octets\.)(\d+)$", iface, flags=re.IGNORECASE)
+                    if idx_from_iface and idx_from_iface.group(1) in interface_name_map:
+                        return interface_name_map[idx_from_iface.group(1)]
+                    return iface
+
+        iface = (
+            raw_name
+            .replace("Bits received", "")
+            .replace("Bits sent", "")
+            .replace("Interface", "")
+            .strip(": ")
+        )
+
+        # Some templates expose raw SNMP item names like ifHCOutOctets.1.
+        # Convert these to a readable port label.
+        oid_like = re.match(r"^if(?:hc)?(?:in|out)octets\.(\d+)$", iface, flags=re.IGNORECASE)
+        if oid_like:
+            idx = oid_like.group(1)
+            if idx in interface_name_map:
+                return interface_name_map[idx]
+            return f"Port {oid_like.group(1)}"
+
+        # Fallback: parse index from key forms like ifHCOutOctets.1 / ifInOctets.2
+        key_oid_like = re.search(r"if(?:hc)?(?:in|out)octets\.(\d+)", key, flags=re.IGNORECASE)
+        if key_oid_like:
+            idx = key_oid_like.group(1)
+            if idx in interface_name_map:
+                return interface_name_map[idx]
+            return f"Port {key_oid_like.group(1)}"
+
+        idx = cls._extract_interface_index(item)
+        if idx and idx in interface_name_map:
+            return interface_name_map[idx]
+
+        return iface
+
     async def get_host_traffic(
         self,
         host_id: str,
@@ -347,6 +517,8 @@ class ZabbixMonitoringService:
             }
             self._cache_set(cache_key, result, ttl_seconds=15)
             return result
+
+        interface_name_map = self._build_interface_name_map_from_items(all_items)
 
         # Get history for traffic items
         time_from = int(time.time()) - (period_hours * 3600)
@@ -457,22 +629,17 @@ class ZabbixMonitoringService:
             history_map = {h["clock"]: h["value_bps"] for h in history}
             
             # Build data array corresponding to the shared timestamps axis
-            # Use None for missing data points so the chart can interpolate or leave a gap
+            # Use 0 for missing data points to ensure continuous line (no gaps)
             data_points = []
             for t in timestamps:
-                data_points.append(history_map.get(t, None))
+                data_points.append(history_map.get(t, 0))
                 
             # Filter to only actual traffic/bandwidth items for the chart
             # We don't want to plot errors, discards, or status
             key_lower = iface.get("key", "").lower()
             name_lower = iface.get("name", "").lower()
             
-            is_in_out_traffic = (
-                "net.if.in[" in key_lower or "net.if.out[" in key_lower
-                or "ifhcinoctets" in key_lower or "ifhcoutoctets" in key_lower
-                or "ifinoctets" in key_lower or "ifoutoctets" in key_lower
-                or "bits received" in name_lower or "bits sent" in name_lower
-            )
+            is_in_out_traffic = self._is_traffic_item({"key_": iface.get("key", ""), "name": iface.get("name", "")})
             
             is_noise = (
                 "error" in name_lower or "discard" in name_lower 
@@ -481,12 +648,10 @@ class ZabbixMonitoringService:
             )
 
             if is_in_out_traffic and not is_noise:
-                # Clean up the label name (e.g. 'Interface Gi1(): Bits received' -> 'Gi1: In')
-                label = iface.get("name", "")
-                if "Interface " in label:
-                    label = label.replace("Interface ", "")
-                # Shorten to make legend cleaner
-                label = label.replace("Bits received", "In").replace("Bits sent", "Out")
+                # ใช้ parser เดียวกับ top-metrics เพื่อให้ชื่อ interface ตรงกันทุก endpoint
+                parsed_name = self._extract_interface_name({"key_": iface.get("key", ""), "name": iface.get("name", "")}, interface_name_map)
+                direction = "Out" if self._detect_traffic_direction({"key_": iface.get("key", ""), "name": iface.get("name", "")}) == "Outbound" else "In"
+                label = f"{parsed_name}: {direction}" if parsed_name else iface.get("name", "")
                     
                 # Compute peak traffic for sorting so we only show the "Top" lines
                 max_traffic = max([v for v in data_points if v is not None] + [0])
@@ -534,22 +699,66 @@ class ZabbixMonitoringService:
         severity_min: int = 0,
         host_ids: Optional[List[str]] = None,
         limit: int = 100,
+        page: int = 1,
+        page_size: Optional[int] = None,
+        time_range: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Active problems with enriched severity info
         """
-        problems = await zabbix_client.get_problems(
-            severity_min=severity_min,
-            host_ids=host_ids,
-            limit=limit,
+        time_from: Optional[int] = None
+        selected_time_range = (time_range or "1w").strip().lower()
+        if selected_time_range in PROBLEM_TIME_RANGE_SECONDS:
+            time_from = int(time.time()) - PROBLEM_TIME_RANGE_SECONDS[selected_time_range]
+
+        safe_page = max(1, int(page or 1))
+        safe_page_size = max(1, min(int(page_size or limit or 100), 100))
+        offset = (safe_page - 1) * safe_page_size
+        # Zabbix API problem.get has limit but no direct offset.
+        # Fetch enough rows up to requested page, then slice in service layer.
+        max_fetch_limit = 2000
+        fetch_limit = min(offset + safe_page_size, max_fetch_limit)
+
+        problems, total_count = await asyncio.gather(
+            zabbix_client.get_problems(
+                severity_min=severity_min,
+                host_ids=host_ids,
+                limit=fetch_limit,
+                time_from=time_from,
+            ),
+            zabbix_client.get_problems_count(
+                severity_min=severity_min,
+                host_ids=host_ids,
+                time_from=time_from,
+            ),
         )
 
-        # Enrich with trigger/host info
+        paged_problems = problems[offset: offset + safe_page_size]
+
+        trigger_ids = list({p.get("objectid") for p in paged_problems if p.get("objectid")})
+        trigger_host_map: Dict[str, str] = {}
+        if trigger_ids:
+            try:
+                triggers = await zabbix_client._call("trigger.get", {
+                    "triggerids": trigger_ids,
+                    "output": ["triggerid"],
+                    "selectHosts": ["hostid", "name"],
+                })
+                for t in triggers:
+                    hosts_list = t.get("hosts", [])
+                    if hosts_list:
+                        trigger_host_map[t["triggerid"]] = hosts_list[0].get("name", "")
+            except Exception as e:
+                logger.warning(f"[ZabbixMonitor] Failed to fetch trigger hosts: {e}")
+
         enriched = []
         bkk_tz = timezone(timedelta(hours=7))
-        for p in problems:
+        for p in paged_problems:
             sev = str(p.get("severity", "0"))
             meta = SEVERITY_MAP.get(sev, SEVERITY_MAP["0"])
+
+            # Lookup host name via trigger mapping
+            host_name = trigger_host_map.get(p.get("objectid", ""), "")
 
             # แปลง clock → datetime ที่มนุษย์อ่านได้
             clock_raw = p.get("clock", "")
@@ -564,6 +773,7 @@ class ZabbixMonitoringService:
                 "eventid": p.get("eventid"),
                 "objectid": p.get("objectid"),
                 "name": p.get("name", ""),
+                "host": host_name,
                 "severity": int(sev),
                 "severity_label": meta["label"],
                 "severity_color": meta["color"],
@@ -574,14 +784,25 @@ class ZabbixMonitoringService:
                 "tags": p.get("tags", []),
             })
 
-        # Count by severity
+        # Count by severity (based on fetched window, not only current page)
         severity_counts = {str(i): 0 for i in range(6)}
-        for p in enriched:
-            sev = str(p["severity"])
+        for p in problems:
+            sev = str(p.get("severity", "0"))
             severity_counts[sev] += 1
 
+        total_pages = max(1, (total_count + safe_page_size - 1) // safe_page_size)
+
         return {
-            "total": len(enriched),
+            "total": total_count,
+            "returned": len(enriched),
+            "fetched": len(problems),
+            "page": safe_page,
+            "page_size": safe_page_size,
+            "total_pages": total_pages,
+            "has_next": safe_page < total_pages,
+            "has_prev": safe_page > 1,
+            "is_partial_window": total_count > fetch_limit,
+            "time_range": selected_time_range,
             "severity_counts": severity_counts,
             "problems": enriched,
         }
@@ -599,16 +820,28 @@ class ZabbixMonitoringService:
 
         snmp_items = await zabbix_client.get_snmp_items(host_id)
 
-        # Categorize by item key pattern
+        # Show only concise and human-meaningful information.
+        # Keep just two sections for UI simplicity.
         categories = {
-            "interface": [],      # ifDescr, ifOperStatus, ifSpeed
-            "traffic": [],        # ifInOctets, ifOutOctets
-            "cpu": [],            # hrProcessorLoad, ssCpuIdle
-            "memory": [],         # hrStorageUsed, memTotalReal
-            "disk": [],           # hrStorageSize, hrStorageUsed
-            "system": [],         # sysUpTime, sysDescr, sysName
+            "system": [],
             "other": [],
         }
+
+        system_keywords = [
+            "sysname", "sysdescr", "syslocation", "syscontact",
+            "hostname", "host name", "operating system", "os version",
+            "software", "firmware", "serial", "model", "vendor",
+        ]
+        noisy_metric_keywords = [
+            "ifinoctets", "ifoutoctets", "ifhcinoctets", "ifhcoutoctets",
+            "net.if.in", "net.if.out", "bits received", "bits sent",
+            "traffic", "throughput", "bandwidth", "packet", "discard", "error",
+            "ifoperstatus", "ifadminstatus", "operational status", "admin status",
+            "cpu", "processor", "load", "memory", "swap", "buffer",
+            "disk", "storage", "filesystem", "uptime",
+        ]
+        numeric_like = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
+        seen_keys = set()
 
         for item in snmp_items:
             key = item.get("key_", "").lower()
@@ -618,6 +851,19 @@ class ZabbixMonitoringService:
             # Skip items that have no data or are just master templates (like 'SNMP walk')
             if not lastvalue or "snmp walk" in name:
                 continue
+
+            # Drop highly volatile counters/metrics that change continuously.
+            if numeric_like.match(lastvalue):
+                continue
+
+            # Skip obvious noisy metric/status lines.
+            if any(k in key or k in name for k in noisy_metric_keywords):
+                continue
+
+            dedupe_id = f"{item.get('key_', '')}|{item.get('name', '')}".lower()
+            if dedupe_id in seen_keys:
+                continue
+            seen_keys.add(dedupe_id)
 
             # Truncate extremely long values (like System Description) to keep UI clean
             if len(lastvalue) > 55:
@@ -632,20 +878,16 @@ class ZabbixMonitoringService:
                 "lastclock": item.get("lastclock", ""),
             }
 
-            if any(k in key or k in name for k in ["ifinoctets", "ifoutoctets", "ifhcinoctets", "ifhcoutoctets", "net.if.in", "net.if.out"]):
-                categories["traffic"].append(formatted)
-            elif any(k in key or k in name for k in ["ifoperstatus", "ifadminstatus", "ifdescr", "ifalias", "ifspeed"]):
-                categories["interface"].append(formatted)
-            elif any(k in key or k in name for k in ["cpu", "processor", "load"]):
-                categories["cpu"].append(formatted)
-            elif any(k in key or k in name for k in ["memory", "mem", "swap", "buffer"]):
-                categories["memory"].append(formatted)
-            elif any(k in key or k in name for k in ["disk", "storage", "filesystem"]):
-                categories["disk"].append(formatted)
-            elif any(k in key or k in name for k in ["sysuptime", "sysdescr", "sysname", "syslocation", "syscontact"]):
+            if any(k in key or k in name for k in system_keywords):
                 categories["system"].append(formatted)
             else:
                 categories["other"].append(formatted)
+
+        # Keep response compact.
+        if categories.get("system"):
+            categories["system"] = categories["system"][:20]
+        if categories.get("other"):
+            categories["other"] = categories["other"][:20]
 
         # Remove empty categories to keep UI clean
         categories = {k: v for k, v in categories.items() if len(v) > 0}
@@ -657,24 +899,50 @@ class ZabbixMonitoringService:
 
     # ── Top Metrics Dashboard ──────────────────────────────────────
 
-    async def get_top_metrics(self, limit: int = 5) -> Dict[str, Any]:
+    async def get_top_metrics(
+        self,
+        limit: int = 5,
+        mode: str = "current",
+        window_hours: int = 1,
+    ) -> Dict[str, Any]:
         """
-        วิเคราะห์และดึงค่า Top N (Bandwidth, CPU, Memory, Uptime)
+        วิเคราะห์และดึงค่า Top N (Bandwidth, CPU, Memory)
         ใช้ Zabbix Tag-based filtering (component: cpu / memory / network)
+        กรองเฉพาะ hosts ที่ online (available) เท่านั้น เพื่อแสดงข้อมูล real-time
         """
-        cache_key = f"top_metrics:{limit}"
+        selected_mode = (mode or "current").strip().lower()
+        if selected_mode not in {"current", "peak"}:
+            selected_mode = "current"
+        lookback_hours = max(1, int(window_hours or 1))
+
+        cache_key = f"top_metrics:{limit}:{selected_mode}:{lookback_hours}"
         cached = self._cache_get(cache_key)
         if cached is not None:
             return cached
 
-        # 1. Get all active hosts
+        # 1. Get all hosts แล้วกรองเฉพาะ enabled + online (available)
         hosts = await self.get_all_hosts()
-        active_hosts = [h for h in hosts if h["status"] == "enabled"]
-        host_ids = [h["hostid"] for h in active_hosts]
-        host_map = {h["hostid"]: h["hostname"] for h in active_hosts}
+        online_hosts = [
+            h for h in hosts
+            if h["status"] == "enabled" and h["availability"] == "available"
+        ]
+        host_ids = [h["hostid"] for h in online_hosts]
+        host_map = {h["hostid"]: h["hostname"] for h in online_hosts}
+
+        total_enabled = sum(1 for h in hosts if h["status"] == "enabled")
 
         if not host_ids:
-            return {"top_cpu": [], "top_memory": [], "top_bandwidth": []}
+            return {
+                "top_cpu": [],
+                "top_memory": [],
+                "top_bandwidth": [],
+                "_meta": {
+                    "online_hosts": 0,
+                    "total_enabled_hosts": total_enabled,
+                    "timestamp": int(time.time()),
+                    "note": "ไม่มี host ที่ online อยู่ในขณะนี้",
+                },
+            }
 
         # 2. Fetch items by tag (parallel) — ใช้ tag "component" ที่ Zabbix Template กำหนดไว้
         cpu_items, memory_items, network_items = await asyncio.gather(
@@ -684,9 +952,40 @@ class ZabbixMonitoringService:
         )
 
         logger.info(
-            f"[ZabbixMonitor] Tag-based items — "
+            f"[ZabbixMonitor] Tag-based items (raw) — "
             f"CPU: {len(cpu_items)}, Memory: {len(memory_items)}, Network: {len(network_items)}"
         )
+
+        # ── 2b. Filter stale items (lastclock > 10 minutes ago) ──
+        # Hosts ที่ปิดอยู่จะยังมี lastvalue เก่าค้าง — ต้องตัดออก
+        MAX_STALE_SECONDS = 600  # 10 นาที
+        now = int(time.time())
+
+        def _is_fresh(item: Dict[str, Any]) -> bool:
+            """ตรวจว่า item ถูก poll ภายใน 10 นาทีที่ผ่านมาหรือไม่"""
+            try:
+                lastclock = int(item.get("lastclock", "0"))
+            except (ValueError, TypeError):
+                return False
+            return (now - lastclock) <= MAX_STALE_SECONDS
+
+        cpu_items = [i for i in cpu_items if _is_fresh(i)]
+        memory_items = [i for i in memory_items if _is_fresh(i)]
+        network_items = [i for i in network_items if _is_fresh(i)]
+
+        logger.info(
+            f"[ZabbixMonitor] Tag-based items (fresh, ≤{MAX_STALE_SECONDS}s) — "
+            f"CPU: {len(cpu_items)}, Memory: {len(memory_items)}, Network: {len(network_items)}"
+        )
+
+        host_interface_name_map: Dict[str, Dict[str, str]] = {}
+        try:
+            host_items_tasks = [zabbix_client.get_items(host_id=hid, limit=2000) for hid in host_ids]
+            host_items_results = await asyncio.gather(*host_items_tasks)
+            for hid, items in zip(host_ids, host_items_results):
+                host_interface_name_map[str(hid)] = self._build_interface_name_map_from_items(items)
+        except Exception as e:
+            logger.warning(f"[ZabbixMonitor] Failed to build interface name map: {e}")
 
         # ── 3a. Process CPU items ────────────────────────────────
         top_cpu = []
@@ -748,67 +1047,120 @@ class ZabbixMonitoringService:
             })
 
         # ── 3c. Process Network (Bandwidth) items ────────────────
-        # Network tag returns ทุก Interface ทั้ง In/Out — เรา sort หา Top Bandwidth
-        # กรองเฉพาะ "Bits received" / "Bits sent" (ชื่อ item) หรือ key "net.if.*"
-        #
-        # ⚠ ค่าที่ Zabbix คืนมาเป็น bps (bits per second) อยู่แล้ว
-        #   → หาร 1,000,000 = Mbps  |  หาร 1,000,000,000 = Gbps
-        #   ไม่ต้องคูณ 8 (ไม่ใช่ octets/bytes)
-        top_traffic = []
-        for item in network_items:
+        # mode=current: rank by latest value
+        # mode=peak:    rank by peak Total (In+Out per timestamp) in lookback window
+        traffic_items = [i for i in network_items if self._is_traffic_item(i)]
+
+        history_by_item: Dict[str, Dict[int, float]] = {}
+        if selected_mode == "peak":
+            time_from_bw = now - (lookback_hours * 3600)
+            traffic_item_ids = [str(i.get("itemid")) for i in traffic_items if i.get("itemid")]
+
+            if traffic_item_ids:
+                history_float, history_uint = await asyncio.gather(
+                    zabbix_client.get_history(
+                        item_ids=traffic_item_ids,
+                        history_type=0,
+                        time_from=time_from_bw,
+                        limit=20000,
+                        sort_order="ASC",
+                    ),
+                    zabbix_client.get_history(
+                        item_ids=traffic_item_ids,
+                        history_type=3,
+                        time_from=time_from_bw,
+                        limit=20000,
+                        sort_order="ASC",
+                    ),
+                )
+
+                for h in history_float + history_uint:
+                    iid = str(h.get("itemid", ""))
+                    if not iid:
+                        continue
+                    try:
+                        clock = int(h.get("clock", 0))
+                        value_bps = float(h.get("value", "0") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if clock <= 0 or value_bps < 0:
+                        continue
+                    bucket = history_by_item.setdefault(iid, {})
+                    bucket[clock] = max(bucket.get(clock, 0.0), value_bps)
+
+        traffic_by_interface: Dict[str, Dict[str, Any]] = {}
+        for item in traffic_items:
             hostid = item.get("hostid")
             if not hostid:
                 continue
+
             hostname = host_map.get(str(hostid), f"Host {hostid}")
-            key = item.get("key_", "").lower()
-            name_lower = item.get("name", "").lower()
+            interface_name = self._extract_interface_name(item, host_interface_name_map.get(str(hostid), {}))
+            if not interface_name:
+                continue
+            direction = self._detect_traffic_direction(item)
 
-            # กรองเฉพาะ traffic items:
-            #   วิธี 1 — key ขึ้นต้นด้วย net.if.  (แม่นยำที่สุด)
-            #   วิธี 2 — ชื่อ item มีคำว่า "bits received" / "bits sent"
-            is_traffic = (
-                key.startswith("net.if.in") or key.startswith("net.if.out")
-                or "bits received" in name_lower
-                or "bits sent" in name_lower
-            )
-            if not is_traffic:
+            aggregate_key = f"{hostid}|{interface_name}"
+            if aggregate_key not in traffic_by_interface:
+                traffic_by_interface[aggregate_key] = {
+                    "host": hostname,
+                    "host_id": str(hostid),
+                    "interface": interface_name,
+                    "in_by_clock": {},
+                    "out_by_clock": {},
+                }
+
+            target = traffic_by_interface[aggregate_key]["in_by_clock" if direction == "Inbound" else "out_by_clock"]
+            iid = str(item.get("itemid", ""))
+            if selected_mode == "peak":
+                item_history = history_by_item.get(iid, {})
+
+                if item_history:
+                    for clock, v in item_history.items():
+                        target[clock] = max(target.get(clock, 0.0), v)
+                else:
+                    # Fallback when no history in lookback window: use latest sample.
+                    try:
+                        lv = float(item.get("lastvalue", "0") or 0)
+                    except ValueError:
+                        lv = 0.0
+                    target[now] = max(target.get(now, 0.0), lv)
+            else:
+                try:
+                    lv = float(item.get("lastvalue", "0") or 0)
+                except ValueError:
+                    lv = 0.0
+                target[now] = max(target.get(now, 0.0), lv)
+
+        top_traffic: List[Dict[str, Any]] = []
+        for agg in traffic_by_interface.values():
+            in_by_clock = agg["in_by_clock"]
+            out_by_clock = agg["out_by_clock"]
+
+            in_peak = max(in_by_clock.values()) if in_by_clock else 0.0
+            out_peak = max(out_by_clock.values()) if out_by_clock else 0.0
+
+            all_clocks = set(in_by_clock.keys()) | set(out_by_clock.keys())
+            total_peak = max((in_by_clock.get(c, 0.0) + out_by_clock.get(c, 0.0)) for c in all_clocks) if all_clocks else 0.0
+            if total_peak <= 0:
                 continue
 
-            lastvalue = item.get("lastvalue", "0")
-            try:
-                val = float(lastvalue) if lastvalue else 0.0
-            except ValueError:
-                val = 0.0
-            if val <= 0:
-                continue
-
-            # Auto-select readable unit (bps → Kbps → Mbps → Gbps)
-            formatted = self._format_bps(val)
-            display_value = formatted["value"]
-            display_unit = formatted["unit"]
-
-            # Determine direction
-            direction = "Inbound"
-            if "net.if.out" in key or "bits sent" in name_lower or "out" in key:
-                direction = "Outbound"
-
-            # Extract interface name (e.g. "Ethernet1/0/1: Bits received" → "Ethernet1/0/1")
-            raw_name = item.get("name", "")
-            interface_name = (
-                raw_name
-                .replace("Bits received", "")
-                .replace("Bits sent", "")
-                .replace("Interface", "")
-                .strip(": ")
-            )
+            total_fmt = self._format_bps(total_peak)
+            in_fmt = self._format_bps(in_peak)
+            out_fmt = self._format_bps(out_peak)
 
             top_traffic.append({
-                "host": hostname,
-                "interface": interface_name,
-                "direction": direction,
-                "value_bps": round(val, 0),       # ค่าดิบ bps เก็บไว้ใช้ sort
-                "value": display_value,
-                "unit": display_unit,
+                "host": agg["host"],
+                "host_id": agg["host_id"],
+                "interface": agg["interface"],
+                "direction": "Total",
+                "value_bps": round(total_peak, 0),
+                "value": total_fmt["value"],
+                "unit": total_fmt["unit"],
+                "in_value": in_fmt["value"],
+                "in_unit": in_fmt["unit"],
+                "out_value": out_fmt["value"],
+                "out_unit": out_fmt["unit"],
             })
 
         # ── 4. Sort & deduplicate ────────────────────────────────
@@ -833,13 +1185,47 @@ class ZabbixMonitoringService:
                 if len(top_mem_dedup) >= limit:
                     break
 
+        # ── 5. คำนวณ data freshness จาก lastclock ──────────────
+        # หาค่า lastclock ล่าสุดจาก items ทั้งหมดเพื่อบอก Frontend ว่าข้อมูล fresh แค่ไหน
+        now = int(time.time())
+        all_lastclocks = []
+        for items_list in [cpu_items, memory_items, network_items]:
+            for item in items_list:
+                lc = item.get("lastclock", "0")
+                try:
+                    lc_int = int(lc) if lc else 0
+                    if lc_int > 0:
+                        all_lastclocks.append(lc_int)
+                except ValueError:
+                    pass
+
+        newest_data = max(all_lastclocks) if all_lastclocks else 0
+        oldest_data = min(all_lastclocks) if all_lastclocks else 0
+        data_age_seconds = (now - newest_data) if newest_data else None
+
         result = {
             "top_cpu": top_cpu_dedup,
             "top_memory": top_mem_dedup,
             "top_bandwidth": top_traffic,
+            "_meta": {
+                "online_hosts": len(online_hosts),
+                "total_enabled_hosts": total_enabled,
+                "timestamp": now,
+                "newest_data_clock": newest_data,
+                "data_age_seconds": data_age_seconds,
+                "cache_ttl_seconds": 15,
+                "top_bandwidth_basis": (
+                    f"peak_total_bps_last_{lookback_hours}h"
+                    if selected_mode == "peak"
+                    else "current_total_bps_latest"
+                ),
+                "top_bandwidth_mode": selected_mode,
+                "top_bandwidth_window_hours": lookback_hours,
+                "note": "แสดงเฉพาะอุปกรณ์ที่ online (available) เท่านั้น",
+            },
         }
 
-        self._cache_set(cache_key, result, ttl_seconds=30)
+        self._cache_set(cache_key, result, ttl_seconds=15)
         return result
 
 

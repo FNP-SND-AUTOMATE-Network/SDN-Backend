@@ -9,7 +9,6 @@ Flow:
 """
 from typing import Dict, List, Any, Optional
 from datetime import datetime
-import asyncio
 from app.clients.odl_restconf_client import OdlRestconfClient
 from app.schemas.request_spec import RequestSpec
 from app.core.logging import logger
@@ -42,8 +41,7 @@ class OdlSyncService:
     # ODL topology-netconf path
     NETCONF_TOPOLOGY_PATH = "/network-topology:network-topology/topology=topology-netconf"
     
-    # ODL OPENFLOW Inventory path
-    OPENFLOW_INVENTORY_PATH = "/opendaylight-inventory:nodes?content=nonconfig"
+
     
     def __init__(self):
         self.odl_client = OdlRestconfClient()
@@ -212,16 +210,10 @@ class OdlSyncService:
                         "message": "ODL node not found in database. Create DeviceNetwork with this node_id to sync."
                     })
             
-            # 4. Mark NETCONF devices as unmounted if not in ODL
-            #    Skip OpenFlow devices — they are not in topology-netconf
+            # 4. Mark devices as unmounted if not in ODL
             odl_node_ids = {n["node_id"] for n in odl_nodes}
             for device in db_devices:
                 if device.node_id and device.node_id not in odl_node_ids:
-                    # Skip OpenFlow devices (managed via topology_sync, not NETCONF)
-                    if device.node_id.startswith("openflow:"):
-                        continue
-                    if device.management_protocol == "OPENFLOW":
-                        continue
                     if device.odl_mounted:  # Only update if was mounted
                         await prisma.devicenetwork.update(
                             where={"id": device.id},
@@ -504,6 +496,7 @@ class OdlSyncService:
             logger.error(f"Sync OpenFlow failed: {e}")
             result["errors"].append({"error": str(e)})
             return result
+
     
     async def auto_create_from_odl(self, node_id: str, vendor: str = "cisco") -> Optional[Dict[str, Any]]:
         """
@@ -599,54 +592,35 @@ class OdlSyncService:
         else:
             return "other"
 
-    # ─── UNIFIED SYNC (NETCONF + OpenFlow) ────────────────────────
+    # ─── UNIFIED SYNC (NETCONF only) ────────────────────────────
     async def sync_all_devices(self) -> Dict[str, Any]:
         """
-        Sync ข้อมูล Device ทั้ง NETCONF และ OpenFlow จาก ODL ในครั้งเดียว
-        ใช้ asyncio.gather() เพื่อรัน parallel ลด latency
+        Sync ข้อมูล Device จาก NETCONF topology ใน ODL
 
         Returns:
             {
                 "netconf": { "synced": [...], "not_found": [...], "errors": [...] },
-                "openflow": { "synced": [...], "not_found": [...], "errors": [...] },
                 "summary": { "total_synced": N, "total_not_found": N, "total_errors": N },
                 "timestamp": "..."
             }
         """
-        # Run both syncs in parallel
-        netconf_result, openflow_result = await asyncio.gather(
-            self.sync_netconf_devices_from_odl(),
-            self.sync_openflow_devices_from_odl(),
-            return_exceptions=True,
-        )
-
-        # Handle exceptions from gather
-        if isinstance(netconf_result, Exception):
-            logger.error(f"NETCONF sync failed in unified sync: {netconf_result}")
+        try:
+            netconf_result = await self.sync_netconf_devices_from_odl()
+        except Exception as e:
+            logger.error(f"NETCONF sync failed in unified sync: {e}")
             netconf_result = {
                 "synced": [], "not_found": [],
-                "errors": [{"error": str(netconf_result)}],
-                "timestamp": datetime.utcnow().isoformat(),
-            }
-        if isinstance(openflow_result, Exception):
-            logger.error(f"OpenFlow sync failed in unified sync: {openflow_result}")
-            openflow_result = {
-                "synced": [], "not_found": [],
-                "errors": [{"error": str(openflow_result)}],
+                "errors": [{"error": str(e)}],
                 "timestamp": datetime.utcnow().isoformat(),
             }
 
         # Build summary
         nc_synced = len(netconf_result.get("synced", []))
-        of_synced = len(openflow_result.get("synced", []))
         nc_not_found = len(netconf_result.get("not_found", []))
-        of_not_found = len(openflow_result.get("not_found", []))
         nc_errors = len(netconf_result.get("errors", []))
-        of_errors = len(openflow_result.get("errors", []))
 
         logger.info(
-            f"[UnifiedSync] NETCONF: {nc_synced} synced, {nc_not_found} not_found, {nc_errors} errors | "
-            f"OpenFlow: {of_synced} synced, {of_not_found} not_found, {of_errors} errors"
+            f"[UnifiedSync] NETCONF: {nc_synced} synced, {nc_not_found} not_found, {nc_errors} errors"
         )
 
         return {
@@ -655,15 +629,10 @@ class OdlSyncService:
                 "not_found": netconf_result.get("not_found", []),
                 "errors": netconf_result.get("errors", []),
             },
-            "openflow": {
-                "synced": openflow_result.get("synced", []),
-                "not_found": openflow_result.get("not_found", []),
-                "errors": openflow_result.get("errors", []),
-            },
             "summary": {
-                "total_synced": nc_synced + of_synced,
-                "total_not_found": nc_not_found + of_not_found,
-                "total_errors": nc_errors + of_errors,
+                "total_synced": nc_synced,
+                "total_not_found": nc_not_found,
+                "total_errors": nc_errors,
             },
             "timestamp": datetime.utcnow().isoformat(),
         }
@@ -673,8 +642,7 @@ class OdlSyncService:
         """
         Sync connection status ของ device ตัวเดียวจาก ODL → DB
 
-        - NETCONF device: ดึงจาก topology-netconf
-        - OpenFlow device: ดึงจาก opendaylight-inventory
+        - ดึง connection-status จาก topology-netconf
 
         Returns:
             {
@@ -682,7 +650,7 @@ class OdlSyncService:
                 "previous_status": "OFFLINE",
                 "current_status": "ONLINE",
                 "connection_status": "connected",
-                "protocol": "NETCONF" | "OPENFLOW",
+                "protocol": "NETCONF",
                 "timestamp": "..."
             }
         """
@@ -699,12 +667,8 @@ class OdlSyncService:
         protocol = device.management_protocol or "NETCONF"
 
         try:
-            if protocol == "OPENFLOW" or node_id.startswith("openflow:"):
-                # ─── OpenFlow: ดึงจาก inventory ─────────────
-                connection_status, new_status = await self._check_openflow_status(node_id)
-            else:
-                # ─── NETCONF: ดึงจาก topology-netconf ────────
-                connection_status, new_status = await self._check_netconf_status(node_id)
+            # ─── NETCONF: ดึงจาก topology-netconf ────────
+            connection_status, new_status = await self._check_netconf_status(node_id)
 
             db_connection_status = map_odl_status_to_enum(connection_status)
 
@@ -758,31 +722,5 @@ class OdlSyncService:
             logger.warning(f"[SingleSync] NETCONF check failed for {node_id}: {e}")
             return "unable-to-connect", "OFFLINE"
 
-    async def _check_openflow_status(self, node_id: str) -> tuple:
-        """ตรวจสอบ OpenFlow device status จาก ODL inventory"""
-        try:
-            spec = RequestSpec(
-                method="GET",
-                path=self.OPENFLOW_INVENTORY_PATH,
-                datastore="operational",
-                headers={"Accept": "application/yang-data+json"}
-            )
-            response = await self.odl_client.send(spec)
-            nodes_list = response.get("opendaylight-inventory:nodes", {}).get("node", [])
-            if not nodes_list:
-                nodes_list = response.get("nodes", {}).get("node", [])
 
-            # ค้นหา node ของเราใน inventory
-            for node in nodes_list:
-                if node.get("id") == node_id:
-                    return "connected", "ONLINE"
-
-            return "not-in-inventory", "OFFLINE"
-
-        except Exception as e:
-            error_str = str(e)
-            if "409" in error_str and "data-missing" in error_str:
-                return "not-in-inventory", "OFFLINE"
-            logger.warning(f"[SingleSync] OpenFlow check failed for {node_id}: {e}")
-            return "unable-to-connect", "OFFLINE"
 

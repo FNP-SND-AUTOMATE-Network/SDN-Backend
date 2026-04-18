@@ -424,3 +424,89 @@ class AuditService:
         )
 
         return await self.create_audit_log(audit_data)
+
+    # ========= System and Device Management Audit Functions =========
+    
+    async def create_device_audit(self, actor_user_id: str, action: AuditAction, device_id: str, device_name: str,
+                                 changes: dict = None, ip_address: str = None, user_agent: str = None) -> Optional[dict]:
+        #สร้าง audit log สำหรับการจัดการอุปกรณ์
+        details = {
+            "event": action.value.lower(),
+            "target_device_id": device_id,
+            "target_device_name": device_name,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if changes:
+            details["changes"] = changes
+            
+        if ip_address:
+            details["ip_address"] = ip_address
+        
+        if user_agent:
+            details["user_agent"] = user_agent
+
+        audit_data = AuditLogCreate(
+            actor_user_id=actor_user_id,
+            target_user_id=None,
+            action=action,
+            details=details
+        )
+
+        return await self.create_audit_log(audit_data)
+
+    async def create_backup_audit(self, actor_user_id: str, action: AuditAction, backup_id: str, backup_name: str,
+                                 changes: dict = None, ip_address: str = None, user_agent: str = None) -> Optional[dict]:
+        #สร้าง audit log สำหรับการจัดการ Backup
+        details = {
+            "event": action.value.lower(),
+            "target_backup_id": backup_id,
+            "target_backup_name": backup_name,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if changes:
+            details["changes"] = changes
+            
+        if ip_address:
+            details["ip_address"] = ip_address
+        
+        if user_agent:
+            details["user_agent"] = user_agent
+
+        audit_data = AuditLogCreate(
+            actor_user_id=actor_user_id,
+            target_user_id=None,
+            action=action,
+            details=details
+        )
+
+        return await self.create_audit_log(audit_data)
+
+    async def create_generic_system_audit(self, actor_user_id: str, action: AuditAction, entity_type: str, entity_id: str, entity_name: str,
+                                         changes: dict = None, ip_address: str = None, user_agent: str = None) -> Optional[dict]:
+        #สร้าง audit log สำหรับการจัดการข้อมูลระบบอื่นๆ (Template, Policy, Tag, Site, OS)
+        details = {
+            "event": action.value.lower(),
+            f"target_{entity_type}_id": entity_id,
+            f"target_{entity_type}_name": entity_name,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if changes:
+            details["changes"] = changes
+            
+        if ip_address:
+            details["ip_address"] = ip_address
+        
+        if user_agent:
+            details["user_agent"] = user_agent
+
+        audit_data = AuditLogCreate(
+            actor_user_id=actor_user_id,
+            target_user_id=None,
+            action=action,
+            details=details
+        )
+
+        return await self.create_audit_log(audit_data)

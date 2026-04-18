@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from typing import Dict, Any, Optional
 from app.database import get_db
 from app.api.users import get_current_user
@@ -13,11 +13,19 @@ from app.models.policy import (
     PolicyDeleteResponse
 )
 from prisma import Prisma
+from app.services.audit_service import AuditService
+from app.models.audit import AuditAction
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/policies", tags=["Policies"])
 
 def get_policy_service(db: Prisma = Depends(get_db)) -> PolicyService:
     return PolicyService(db)
+
+def get_audit_service(db = Depends(get_db)):
+    return AuditService(db)
 
 @router.get("/", response_model=PolicyListResponse)
 async def get_policies(
@@ -79,9 +87,11 @@ async def get_policy(
 
 @router.post("/", response_model=PolicyCreateResponse, status_code=status.HTTP_201_CREATED)
 async def create_policy(
+    request: Request,
     policy_data: PolicyCreate,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    policy_svc: PolicyService = Depends(get_policy_service)
+    policy_svc: PolicyService = Depends(get_policy_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
@@ -97,6 +107,26 @@ async def create_policy(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create policy"
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_generic_system_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.POLICY_CREATE,
+                entity_type="POLICY",
+                entity_id=policy.id,
+                entity_name=policy.policy_name,
+                changes=policy_data.dict(exclude_unset=True),
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return PolicyCreateResponse(
             message="Policy created successfully",
@@ -118,10 +148,12 @@ async def create_policy(
 
 @router.put("/{policy_id}", response_model=PolicyUpdateResponse)
 async def update_policy(
+    request: Request,
     policy_id: str,
     update_data: PolicyUpdate,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    policy_svc: PolicyService = Depends(get_policy_service)
+    policy_svc: PolicyService = Depends(get_policy_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
@@ -137,6 +169,26 @@ async def update_policy(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to update policy"
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_generic_system_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.POLICY_UPDATE,
+                entity_type="POLICY",
+                entity_id=policy.id,
+                entity_name=policy.policy_name,
+                changes=update_data.dict(exclude_unset=True),
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return PolicyUpdateResponse(
             message="Policy updated successfully",
@@ -158,10 +210,12 @@ async def update_policy(
 
 @router.delete("/{policy_id}", response_model=PolicyDeleteResponse)
 async def delete_policy(
+    request: Request,
     policy_id: str,
     force: bool = Query(False, description="Force delete even if in use"),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    policy_svc: PolicyService = Depends(get_policy_service)
+    policy_svc: PolicyService = Depends(get_policy_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         if force:
@@ -177,6 +231,10 @@ async def delete_policy(
                     detail="You do not have permission to delete a policy"
                 )
 
+        old_policy = await policy_svc.get_policy_by_id(policy_id)
+        if not old_policy:
+            raise HTTPException(status_code=404, detail="Policy not found")
+
         success = await policy_svc.delete_policy(policy_id, force=force)
         
         if not success:
@@ -184,6 +242,25 @@ async def delete_policy(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to delete policy"
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_generic_system_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.POLICY_DELETE,
+                entity_type="POLICY",
+                entity_id=policy_id,
+                entity_name=old_policy.policy_name,
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return PolicyDeleteResponse(
             message="Policy deleted successfully"

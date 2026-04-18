@@ -1,12 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request
 from pydantic import BaseModel
 from typing import List, Dict, Any
 
 from app.database import get_db
 from app.api.users import get_current_user
 from app.services.intent_engine_service import IntentEngineService
+from app.services.audit_service import AuditService
+from app.models.audit import AuditAction
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/deployments", tags=["Deployments"])
+
+def get_audit_service(db = Depends(get_db)):
+    return AuditService(db)
 
 class DeploymentRequest(BaseModel):
     template_id: str
@@ -17,8 +25,10 @@ class DeploymentRequest(BaseModel):
 async def create_deployment(
     req: DeploymentRequest,
     background_tasks: BackgroundTasks,
+    request: Request,
     current_user: dict = Depends(get_current_user),
-    db = Depends(get_db)
+    db = Depends(get_db),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     """
     Triggers an asynchronous configuration deployment to multiple devices based on a Jinja2 template.
@@ -38,6 +48,26 @@ async def create_deployment(
             user_id=user_id, 
             background_tasks=background_tasks
         )
+        
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_generic_system_audit(
+                actor_user_id=user_id,
+                action=AuditAction.DEPLOYMENT_START,
+                entity_type="DEPLOYMENT",
+                entity_id=job_id,
+                entity_name=f"Template {req.template_id} to {len(req.device_ids)} devices",
+                changes={"template_id": req.template_id, "device_ids": req.device_ids, "variables": req.variables},
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
         
         return {
             "message": "Deployment job started successfully.",

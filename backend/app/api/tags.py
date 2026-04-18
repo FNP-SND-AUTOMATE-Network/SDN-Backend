@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from typing import Dict, Any, Optional
 from app.database import get_db
 from app.api.users import get_current_user
@@ -14,11 +14,19 @@ from app.models.tag import (
     TagUsageResponse
 )
 from prisma import Prisma
+from app.services.audit_service import AuditService
+from app.models.audit import AuditAction
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tags", tags=["Tags"])
 
 def get_tag_service(db: Prisma = Depends(get_db)) -> TagService:
     return TagService(db)
+
+def get_audit_service(db = Depends(get_db)):
+    return AuditService(db)
 
 @router.get("/", response_model=TagListResponse)
 async def get_tags(
@@ -103,9 +111,11 @@ async def get_tag_usage(
 
 @router.post("/", response_model=TagCreateResponse, status_code=status.HTTP_201_CREATED)
 async def create_tag(
+    request: Request,
     tag_data: TagCreate,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    tag_svc: TagService = Depends(get_tag_service)
+    tag_svc: TagService = Depends(get_tag_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         # ตรวจสอบสิทธิ์ (ต้องเป็น ENGINEER ขึ้นไป)
@@ -122,6 +132,26 @@ async def create_tag(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Error creating tag"
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_generic_system_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.TAG_CREATE,
+                entity_type="TAG",
+                entity_id=tag.id,
+                entity_name=tag.tag_name,
+                changes=tag_data.dict(exclude_unset=True),
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return TagCreateResponse(
             message="Tag created successfully",
@@ -143,10 +173,12 @@ async def create_tag(
 
 @router.put("/{tag_id}", response_model=TagUpdateResponse)
 async def update_tag(
+    request: Request,
     tag_id: str,
     update_data: TagUpdate,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    tag_svc: TagService = Depends(get_tag_service)
+    tag_svc: TagService = Depends(get_tag_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         # ตรวจสอบสิทธิ์ (ต้องเป็น ENGINEER ขึ้นไป)
@@ -163,6 +195,26 @@ async def update_tag(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Error updating tag"
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_generic_system_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.TAG_UPDATE,
+                entity_type="TAG",
+                entity_id=tag.id,
+                entity_name=tag.tag_name,
+                changes=update_data.dict(exclude_unset=True),
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return TagUpdateResponse(
             message="Tag updated successfully",
@@ -184,10 +236,12 @@ async def update_tag(
 
 @router.delete("/{tag_id}", response_model=TagDeleteResponse)
 async def delete_tag(
+    request: Request,
     tag_id: str,
     force: bool = Query(False, description="Force delete even if in use (use with caution)"),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    tag_svc: TagService = Depends(get_tag_service)
+    tag_svc: TagService = Depends(get_tag_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         # ตรวจสอบสิทธิ์
@@ -206,6 +260,10 @@ async def delete_tag(
                     detail="You do not have permission to delete tag"
                 )
 
+        old_tag = await tag_svc.get_tag_by_id(tag_id)
+        if not old_tag:
+            raise HTTPException(status_code=404, detail="Tag not found")
+
         success = await tag_svc.delete_tag(tag_id, force=force)
         
         if not success:
@@ -213,6 +271,25 @@ async def delete_tag(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Error deleting tag"
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_generic_system_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.TAG_DELETE,
+                entity_type="TAG",
+                entity_id=tag_id,
+                entity_name=old_tag.tag_name,
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return TagDeleteResponse(
             message="Tag deleted successfully"

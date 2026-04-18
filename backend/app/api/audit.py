@@ -18,7 +18,7 @@ from app.services.user_service import UserService
 from app.database import get_prisma_client, is_prisma_client_ready
 
 router = APIRouter(prefix="/audit", tags=["Audit Logs"])
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 # Initialize services - จะ initialize ใน runtime
 audit_service = None
@@ -42,14 +42,27 @@ def get_services():
     return audit_service, user_service
 
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+async def get_current_user(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+):
     #ตรวจสอบ JWT token และดึงข้อมูล user
     try:
         # Get initialized services
         audit_svc, user_svc = get_services()
         
+        # Try to get token from cookie first
+        token = request.cookies.get("access_token")
+        
+        # Fallback to Authorization Header (Bearer token)
+        if not token and credentials:
+            token = credentials.credentials
+            
+        if not token:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
         #ตรวจสอบ token
-        user_id = await user_svc.verify_access_token(credentials.credentials)
+        user_id = await user_svc.verify_access_token(token)
         
         # ดึงข้อมูล user
         user = await user_svc.get_user_by_id(user_id)
@@ -76,6 +89,15 @@ async def get_audit_logs(
     try:
         # Get initialized services
         audit_svc, user_svc = get_services()
+        
+        user_role = current_user.get("role")
+        if user_role == "VIEWER":
+            raise HTTPException(status_code=403, detail="Not authorized to view audit logs")
+            
+        if user_role == "ENGINEER":
+            if actor_user_id and actor_user_id != current_user["id"]:
+                raise HTTPException(status_code=403, detail="Engineers can only view their own audit logs")
+            actor_user_id = current_user["id"]
         
         #สร้าง filter object
         filters = AuditLogFilter(
@@ -116,10 +138,17 @@ async def get_audit_log(
         # Get initialized services
         audit_svc, user_svc = get_services()
         
+        user_role = current_user.get("role")
+        if user_role == "VIEWER":
+            raise HTTPException(status_code=403, detail="Not authorized to view audit logs")
+        
         audit_log = await audit_svc.get_audit_log_by_id(audit_id)
         
         if not audit_log:
             raise HTTPException(status_code=404, detail="Audit Log not found")
+        
+        if user_role == "ENGINEER" and audit_log.actor_user_id != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not authorized to view this audit log")
         
         return audit_log
 
@@ -182,6 +211,10 @@ async def get_audit_stats(
     current_user: dict = Depends(get_current_user)
 ):
     try:
+        user_role = current_user.get("role")
+        if user_role == "VIEWER":
+            raise HTTPException(status_code=403, detail="Not authorized to view audit stats")
+
         #สร้าง where clause สำหรับ date filter
         where_clause = {}
         if start_date or end_date:
@@ -191,6 +224,9 @@ async def get_audit_stats(
             if end_date:
                 date_filter["lte"] = end_date
             where_clause["createdAt"] = date_filter
+            
+        if user_role == "ENGINEER":
+            where_clause["actorUserId"] = current_user["id"]
 
         # Get initialized services
         audit_svc, user_svc = get_services()
@@ -208,16 +244,27 @@ async def get_audit_stats(
         total_count = await prisma_client.auditlog.count(where=where_clause)
 
         # ดึง top users (actors) - ใช้ query ธรรมดาแทน group_by เพราะ Prisma Python ไม่รองรับ
-        top_actors_raw = await prisma_client.query_raw(
-            """
+        # สำหรับ ENGINEER ก็ยัง group ได้แต่จะได้แค่ตัวเขาเองคนเดียว 
+        # (เพื่อให้ response format เหมือนเดิม)
+        
+        base_query = """
             SELECT "actorUserId" as actor_user_id, COUNT(*) as count
             FROM "AuditLog"
             WHERE "actorUserId" IS NOT NULL
+        """
+        
+        if user_role == "ENGINEER":
+            # ต้องแทรก parameter แบบปลอดภัย แต่ในที่นี้เรานำ current_user["id"] ซึ่งเป็น system-generated UUID มาต่อตรงๆ ได้
+            # หรือใช้ string formatting สำหรับ uuid
+            base_query += f" AND \"actorUserId\" = '{current_user['id']}'"
+            
+        base_query += """
             GROUP BY "actorUserId"
             ORDER BY count DESC
             LIMIT 10
-            """
-        )
+        """
+        
+        top_actors_raw = await prisma_client.query_raw(base_query)
 
         # ดึงข้อมูล user สำหรับ top actors
         top_actors = []

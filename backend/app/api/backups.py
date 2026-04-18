@@ -1,8 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from typing import Dict, Any, Optional
 from app.database import get_db
 from app.api.users import get_current_user
 from app.services.backup_service import BackupService
+from app.services.audit_service import AuditService
+from app.models.audit import AuditAction
+import logging
+
+logger = logging.getLogger(__name__)
 from app.models.backup import (
     BackupCreate,
     BackupUpdate,
@@ -19,6 +24,9 @@ router = APIRouter(prefix="/backups", tags=["Backups"])
 
 def get_backup_service(db: Prisma = Depends(get_db)) -> BackupService:
     return BackupService(db)
+
+def get_audit_service(db: Prisma = Depends(get_db)) -> AuditService:
+    return AuditService(db)
 
 @router.get("/", response_model=BackupListResponse)
 async def get_backups(
@@ -82,9 +90,11 @@ async def get_backup(
 
 @router.post("/", response_model=BackupCreateResponse, status_code=status.HTTP_201_CREATED)
 async def create_backup(
+    request: Request,
     backup_data: BackupCreate,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    backup_svc: BackupService = Depends(get_backup_service)
+    backup_svc: BackupService = Depends(get_backup_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
@@ -100,6 +110,25 @@ async def create_backup(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create the backup profile due to an internal error."
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_backup_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.BACKUP_PROFILE_CREATE,
+                backup_id=backup.id,
+                backup_name=backup.backup_name,
+                changes=backup_data.dict(exclude_unset=True),
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return BackupCreateResponse(
             message="Backup profile created and scheduled successfully.",
@@ -121,10 +150,12 @@ async def create_backup(
 
 @router.put("/{backup_id}", response_model=BackupUpdateResponse)
 async def update_backup(
+    request: Request,
     backup_id: str,
     update_data: BackupUpdate,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    backup_svc: BackupService = Depends(get_backup_service)
+    backup_svc: BackupService = Depends(get_backup_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
@@ -140,6 +171,25 @@ async def update_backup(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to update the backup profile due to an internal error."
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_backup_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.BACKUP_PROFILE_UPDATE,
+                backup_id=backup.id,
+                backup_name=backup.backup_name,
+                changes=update_data.dict(exclude_unset=True),
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return BackupUpdateResponse(
             message="Backup profile updated and schedule refreshed successfully.",
@@ -161,10 +211,12 @@ async def update_backup(
 
 @router.delete("/{backup_id}", response_model=BackupDeleteResponse)
 async def delete_backup(
+    request: Request,
     backup_id: str,
     force: bool = Query(False, description="Force delete even if in use"),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    backup_svc: BackupService = Depends(get_backup_service)
+    backup_svc: BackupService = Depends(get_backup_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         if force:
@@ -179,6 +231,10 @@ async def delete_backup(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="You do not have permission to delete a backup profile."
                 )
+        
+        old_backup = await backup_svc.get_backup_by_id(backup_id)
+        if not old_backup:
+            raise HTTPException(status_code=404, detail="Backup not found")
 
         success = await backup_svc.delete_backup(backup_id, force=force)
         
@@ -187,6 +243,24 @@ async def delete_backup(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to delete the backup profile due to an internal error."
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_backup_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.BACKUP_PROFILE_DELETE,
+                backup_id=backup_id,
+                backup_name=old_backup.backup_name,
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return BackupDeleteResponse(
             message="Backup profile and associated schedule deleted successfully."
@@ -207,9 +281,11 @@ async def delete_backup(
 
 @router.put("/{backup_id}/pause", response_model=BackupUpdateResponse)
 async def pause_backup(
+    request: Request,
     backup_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    backup_svc: BackupService = Depends(get_backup_service)
+    backup_svc: BackupService = Depends(get_backup_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
@@ -225,6 +301,24 @@ async def pause_backup(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to pause the backup profile."
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_backup_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.BACKUP_PROFILE_PAUSE,
+                backup_id=backup.id,
+                backup_name=backup.backup_name,
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return BackupUpdateResponse(
             message="Backup profile paused successfully.",
@@ -246,9 +340,11 @@ async def pause_backup(
 
 @router.put("/{backup_id}/reactivate", response_model=BackupUpdateResponse)
 async def reactivate_backup(
+    request: Request,
     backup_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    backup_svc: BackupService = Depends(get_backup_service)
+    backup_svc: BackupService = Depends(get_backup_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
@@ -264,6 +360,24 @@ async def reactivate_backup(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to reactivate the backup profile."
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_backup_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.BACKUP_PROFILE_RESUME,
+                backup_id=backup.id,
+                backup_name=backup.backup_name,
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return BackupUpdateResponse(
             message="Backup profile reactivated successfully.",

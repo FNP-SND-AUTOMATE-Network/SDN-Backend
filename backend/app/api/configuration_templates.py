@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form, Request
 import os
 from typing import Dict, Any, Optional
 from app.database import get_db
@@ -15,11 +15,19 @@ from app.models.configuration_template import (
     TemplateType
 )
 from prisma import Prisma
+from app.services.audit_service import AuditService
+from app.models.audit import AuditAction
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/configuration-templates", tags=["Configuration Templates"])
 
 def get_template_service(db: Prisma = Depends(get_db)) -> ConfigurationTemplateService:
     return ConfigurationTemplateService(db)
+
+def get_audit_service(db: Prisma = Depends(get_db)) -> AuditService:
+    return AuditService(db)
 
 @router.get("/", response_model=ConfigurationTemplateListResponse)
 async def get_templates(
@@ -83,6 +91,7 @@ async def get_template(
 
 @router.post("/", response_model=ConfigurationTemplateCreateResponse, status_code=status.HTTP_201_CREATED)
 async def create_template(
+    request: Request,
     template_name: str = Form(..., description="ชื่อ Template (ต้องไม่ซ้ำ)", min_length=1, max_length=200),
     description: Optional[str] = Form(None, description="คำอธิบาย Template", max_length=1000),
     template_type: str = Form("OTHER", description="ประเภทของ Template"),
@@ -90,7 +99,8 @@ async def create_template(
     config_content: Optional[str] = Form(None, description="เนื้อหา Config (Text)"),
     file: Optional[UploadFile] = File(None, description="ไฟล์ Config (.txt, .yaml, .yml)"),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    template_svc: ConfigurationTemplateService = Depends(get_template_service)
+    template_svc: ConfigurationTemplateService = Depends(get_template_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
@@ -164,6 +174,31 @@ async def create_template(
                 detail="ไม่สามารถสร้าง Configuration Template ได้"
             )
 
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            changes = template_data.dict(exclude_unset=True)
+            if detail_filename:
+                changes["action"] = "uploaded_file"
+                changes["filename"] = detail_filename
+                
+            await audit_svc.create_generic_system_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.TEMPLATE_CREATE,
+                entity_type="TEMPLATE",
+                entity_id=template.id,
+                entity_name=template.template_name,
+                changes=changes,
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
+
         return ConfigurationTemplateCreateResponse(
             message="สร้าง Configuration Template สำเร็จ",
             template=template
@@ -184,10 +219,12 @@ async def create_template(
 
 @router.put("/{template_id}", response_model=ConfigurationTemplateUpdateResponse)
 async def update_template(
+    request: Request,
     template_id: str,
     update_data: ConfigurationTemplateUpdate,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    template_svc: ConfigurationTemplateService = Depends(get_template_service)
+    template_svc: ConfigurationTemplateService = Depends(get_template_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
@@ -203,6 +240,26 @@ async def update_template(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="ไม่สามารถอัปเดต Configuration Template ได้"
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_generic_system_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.TEMPLATE_UPDATE,
+                entity_type="TEMPLATE",
+                entity_id=template.id,
+                entity_name=template.template_name,
+                changes=update_data.dict(exclude_unset=True),
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return ConfigurationTemplateUpdateResponse(
             message="อัปเดต Configuration Template สำเร็จ",
@@ -222,7 +279,7 @@ async def update_template(
             detail=f"เกิดข้อผิดพลาดในการอัปเดต Configuration Template: {str(e)}"
         )
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form, Request
 import os
 
 # ... imports ...
@@ -231,10 +288,12 @@ import os
 
 @router.delete("/{template_id}", response_model=ConfigurationTemplateDeleteResponse)
 async def delete_template(
+    request: Request,
     template_id: str,
     force: bool = Query(False, description="บังคับลบแม้มีการใช้งาน"),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    template_svc: ConfigurationTemplateService = Depends(get_template_service)
+    template_svc: ConfigurationTemplateService = Depends(get_template_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         if force:
@@ -250,6 +309,10 @@ async def delete_template(
                     detail="ไม่มีสิทธิ์ลบ Configuration Template ต้องเป็น ADMIN หรือ OWNER"
                 )
 
+        old_template = await template_svc.get_template_by_id(template_id)
+        if not old_template:
+            raise HTTPException(status_code=404, detail="Template not found")
+
         success = await template_svc.delete_template(template_id, force=force)
         
         if not success:
@@ -257,6 +320,25 @@ async def delete_template(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="ไม่สามารถลบ Configuration Template ได้"
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_generic_system_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.TEMPLATE_DELETE,
+                entity_type="TEMPLATE",
+                entity_id=template_id,
+                entity_name=old_template.template_name,
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return ConfigurationTemplateDeleteResponse(
             message="ลบ Configuration Template สำเร็จ"
@@ -277,10 +359,12 @@ async def delete_template(
 
 @router.post("/{template_id}/upload", response_model=ConfigurationTemplateResponse)
 async def upload_template_config(
+    request: Request,
     template_id: str,
     file: UploadFile = File(...),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    template_svc: ConfigurationTemplateService = Depends(get_template_service)
+    template_svc: ConfigurationTemplateService = Depends(get_template_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
@@ -314,6 +398,7 @@ async def upload_template_config(
             )
 
         # Call service
+        old_template = await template_svc.get_template_by_id(template_id)
         result = await template_svc.upload_config(template_id, content_str, file.filename, file.size)
         
         if not result:
@@ -321,6 +406,26 @@ async def upload_template_config(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="ไม่สามารถบันทึกข้อมูล Config ได้"
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_generic_system_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.TEMPLATE_UPDATE,
+                entity_type="TEMPLATE",
+                entity_id=template_id,
+                entity_name=old_template.template_name if old_template else str(template_id),
+                changes={"action": "upload_file", "filename": file.filename},
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return result
 

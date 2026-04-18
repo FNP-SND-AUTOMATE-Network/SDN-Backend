@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from typing import Dict, Any, Optional
 from app.database import get_db
 from app.api.users import get_current_user, check_engineer_permission
 from app.services.device_network_service import DeviceNetworkService
+from app.services.audit_service import AuditService
+from app.models.audit import AuditAction
 from app.services.odl_sync_service import OdlSyncService
 from app.models.device_network import (
     DeviceNetworkCreate,
@@ -26,6 +28,9 @@ router = APIRouter(prefix="/device-networks", tags=["Device Networks"])
 
 def get_device_service(db: Prisma = Depends(get_db)) -> DeviceNetworkService:
     return DeviceNetworkService(db)
+
+def get_audit_service(db: Prisma = Depends(get_db)) -> AuditService:
+    return AuditService(db)
 
 @router.get("/", response_model=DeviceNetworkListResponse)
 async def get_devices(
@@ -92,9 +97,11 @@ async def get_device(
 
 @router.post("/", response_model=DeviceNetworkCreateResponse, status_code=status.HTTP_201_CREATED)
 async def create_device(
+    request: Request,
     device_data: DeviceNetworkCreate,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    device_svc: DeviceNetworkService = Depends(get_device_service)
+    device_svc: DeviceNetworkService = Depends(get_device_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         # Require ENGINEER or ADMIN
@@ -107,6 +114,25 @@ async def create_device(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Error creating device"
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_device_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.DEVICE_CREATE,
+                device_id=device.id,
+                device_name=device.device_name,
+                changes=device_data.dict(exclude_unset=True),
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return DeviceNetworkCreateResponse(
             message="Device created successfully",
@@ -129,10 +155,12 @@ async def create_device(
 
 @router.put("/{device_id}", response_model=DeviceNetworkUpdateResponse)
 async def update_device(
+    request: Request,
     device_id: str,
     update_data: DeviceNetworkUpdate,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    device_svc: DeviceNetworkService = Depends(get_device_service)
+    device_svc: DeviceNetworkService = Depends(get_device_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         # Require ENGINEER or ADMIN
@@ -145,6 +173,25 @@ async def update_device(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Error updating device"
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_device_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.DEVICE_UPDATE,
+                device_id=device.id,
+                device_name=device.device_name,
+                changes=update_data.dict(exclude_unset=True),
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return DeviceNetworkUpdateResponse(
             message="Device updated successfully",
@@ -167,16 +214,22 @@ async def update_device(
 
 @router.delete("/{device_id}", response_model=DeviceNetworkDeleteResponse)
 async def delete_device(
+    request: Request,
     device_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    device_svc: DeviceNetworkService = Depends(get_device_service)
+    device_svc: DeviceNetworkService = Depends(get_device_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         if current_user["role"] not in ["ADMIN", "OWNER"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="User role {current_user['role']} is not allowed to delete device"
+                detail=f"User role {current_user['role']} is not allowed to delete device"
             )
+            
+        old_device = await device_svc.get_device_by_id(device_id)
+        if not old_device:
+            raise HTTPException(status_code=404, detail="Device not found")
 
         success, ipam_notifications = await device_svc.delete_device(device_id)
         
@@ -185,6 +238,24 @@ async def delete_device(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Error deleting device"
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_device_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.DEVICE_DELETE,
+                device_id=device_id,
+                device_name=old_device.device_name,
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return DeviceNetworkDeleteResponse(
             message="Device deleted successfully",

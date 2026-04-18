@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse
 from typing import Dict, Any, Optional
 from app.database import get_db
@@ -23,6 +23,11 @@ from app.models.os_file import (
     OSFileResponse
 )
 from prisma import Prisma
+from app.services.audit_service import AuditService
+from app.models.audit import AuditAction
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/operating-systems", tags=["Operating Systems"])
 
@@ -31,6 +36,9 @@ def get_os_service(db: Prisma = Depends(get_db)) -> OperatingSystemService:
 
 def get_file_service(db: Prisma = Depends(get_db)) -> OSFileService:
     return OSFileService(db)
+
+def get_audit_service(db = Depends(get_db)):
+    return AuditService(db)
 
 @router.get("/", response_model=OperatingSystemListResponse)
 async def get_operating_systems(
@@ -249,11 +257,13 @@ async def delete_operating_system(
 
 @router.post("/{os_id}/upload", response_model=OSFileUploadResponse)
 async def upload_os_file(
+    request: Request,
     os_id: str,
     file: UploadFile = File(...),
     version: Optional[str] = Form(None),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    file_svc: OSFileService = Depends(get_file_service)
+    file_svc: OSFileService = Depends(get_file_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
@@ -280,6 +290,26 @@ async def upload_os_file(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to upload OS file"
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_generic_system_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.OS_FILE_UPLOAD,
+                entity_type="OS_FILE",
+                entity_id=os_file.id,
+                entity_name=file.filename,
+                changes={"os_id": os_id, "version": version, "file_type": file.content_type},
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return OSFileUploadResponse(
             message=f"OS file {file.filename} uploaded successfully",
@@ -362,10 +392,12 @@ async def download_os_file(
 
 @router.delete("/{os_id}/files/{file_id}", response_model=OSFileDeleteResponse)
 async def delete_os_file(
+    request: Request,
     os_id: str,
     file_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    file_svc: OSFileService = Depends(get_file_service)
+    file_svc: OSFileService = Depends(get_file_service),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     try:
         if current_user["role"] not in ["ADMIN", "OWNER"]:
@@ -389,6 +421,25 @@ async def delete_os_file(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to delete OS file"
             )
+
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            if "x-forwarded-for" in request.headers:
+                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            elif "x-real-ip" in request.headers:
+                client_ip = request.headers["x-real-ip"]
+                
+            await audit_svc.create_generic_system_audit(
+                actor_user_id=current_user["id"],
+                action=AuditAction.OS_FILE_DELETE,
+                entity_type="OS_FILE",
+                entity_id=file_id,
+                entity_name=os_file.file_name,
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Failed to create audit log: {e}")
 
         return OSFileDeleteResponse(
             message="OS file deleted successfully"

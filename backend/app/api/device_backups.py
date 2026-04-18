@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Request
 from typing import List, Optional
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
@@ -7,7 +7,15 @@ from datetime import datetime
 from app.database import get_db
 from app.services.device_backup_service import DeviceBackupService
 from app.api.users import get_current_user
+from app.services.audit_service import AuditService
+from app.models.audit import AuditAction
 from prisma.enums import ConfigType, BackupJobStatus
+import logging
+
+logger = logging.getLogger(__name__)
+
+def get_audit_service(prisma=Depends(get_db)) -> AuditService:
+    return AuditService(prisma)
 
 router = APIRouter(
     prefix="/api/v1/devices/backups",
@@ -98,10 +106,12 @@ async def get_backup_stats_summary(
 
 @router.post("", response_model=BackupTriggerResponse, status_code=202)
 async def trigger_bulk_backup(
+    request: Request,
     payload: BulkBackupRequest,
     background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user),
-    prisma=Depends(get_db)
+    prisma=Depends(get_db),
+    audit_svc: AuditService = Depends(get_audit_service)
 ):
     """
     Trigger an asynchronous backup job for multiple devices.
@@ -135,6 +145,25 @@ async def trigger_bulk_backup(
         user_id=user_id,
         config_type=payload.config_type
     )
+
+    try:
+        client_ip = request.client.host if request.client else "unknown"
+        if "x-forwarded-for" in request.headers:
+            client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+        elif "x-real-ip" in request.headers:
+            client_ip = request.headers["x-real-ip"]
+            
+        await audit_svc.create_backup_audit(
+            actor_user_id=user_id,
+            action=AuditAction.BACKUP_TRIGGER_MANUAL,
+            backup_id=payload.backup_profile_id or "MANUAL_BULK",
+            backup_name=f"Manual Backup for {len(payload.device_ids)} devices",
+            changes={"device_ids": payload.device_ids, "config_type": payload.config_type.value},
+            ip_address=client_ip,
+            user_agent=request.headers.get("user-agent", "unknown")
+        )
+    except Exception as e:
+        logger.error(f"Failed to create audit log: {e}")
 
     return BackupTriggerResponse(
         message="Backup process started in the background.",

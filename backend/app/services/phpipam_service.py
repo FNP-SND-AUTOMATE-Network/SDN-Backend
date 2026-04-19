@@ -858,6 +858,68 @@ class PhpipamService:
             print(f"[phpIPAM] Error getting available IPs for subnet {subnet_id}: {e}")
             return {"subnet_id": subnet_id, "subnet": "", "available_ips": [], "total_available": 0}
 
+    @staticmethod
+    def _parse_addresses_into_used_map(
+        addresses: list,
+        used_map: Dict[str, Dict],
+        from_child: bool = False,
+    ) -> None:
+        """
+        Parse a list of phpIPAM address dicts and merge them into *used_map*.
+
+        Args:
+            addresses:  Raw address list from get_subnet_addresses().
+            used_map:   The dict being built (mutated in-place).
+            from_child: True when the addresses come from a child/descendant
+                        subnet.  The status will be set to "used_child" for
+                        those IPs so the frontend can render them differently
+                        (e.g. with a distinct colour).
+        """
+        for addr in addresses:
+            ip = addr.get("ip")
+            if not ip:
+                continue
+
+            # Normalise tag value — phpIPAM returns it in several shapes
+            is_gw = addr.get("is_gateway") in (1, "1", True)
+            raw_tag = addr.get("tag", "1")
+            if isinstance(raw_tag, dict):
+                tag = str(raw_tag.get("id", "1"))
+            else:
+                tag = str(raw_tag)
+
+            if tag == "1":
+                tag_id_field = addr.get("tagId")
+                if tag_id_field and str(tag_id_field) != "1":
+                    tag = str(tag_id_field)
+
+            if is_gw:
+                status = "gateway"
+            elif tag == "3":
+                status = "reserved"
+            elif tag == "2":
+                status = "offline"
+            elif tag == "4":
+                status = "dhcp"
+            elif from_child:
+                # IP booked in a child subnet — we show it in the parent map
+                # with a distinct status so it can be styled differently
+                status = "used_child"
+            else:
+                status = "used"
+
+            # Direct addresses take precedence over child ones (don't overwrite)
+            if ip not in used_map or (used_map[ip]["status"] == "used_child" and not from_child):
+                used_map[ip] = {
+                    "ip": ip,
+                    "status": status,
+                    "tag": tag,
+                    "hostname": addr.get("hostname"),
+                    "description": addr.get("description"),
+                    "address_id": str(addr.get("id", "")),
+                    "mac": addr.get("mac"),
+                }
+
     async def get_space_map(
         self,
         subnet_id: str,
@@ -868,6 +930,10 @@ class PhpipamService:
         Return paginated visual space map for a subnet.
         Only generates the slice [offset, offset+limit) of host IPs, keeping
         memory and payload small even for huge subnets like /18 (16k hosts).
+
+        IPs booked in child subnets are also shown (marked as "used") so that
+        a parent-level overview (e.g. /18) reflects utilisation of every
+        descendant /24 beneath it.
 
         Returns:
             { subnet_id, subnet, mask, total_hosts, used, free,
@@ -898,47 +964,42 @@ class PhpipamService:
             if total_hosts == 0:
                 return {**empty, "subnet": subnet_addr, "mask": mask}
 
-            # Get existing addresses from phpIPAM (single API call, cached by phpIPAM)
-            existing_addresses = await self.get_subnet_addresses(subnet_id)
+            # ─── Build used_map ─────────────────────────────────────────────
+            # Step A: Direct addresses registered in this subnet
             used_map: Dict[str, Dict] = {}
+            existing_addresses = await self.get_subnet_addresses(subnet_id)
+            self._parse_addresses_into_used_map(existing_addresses, used_map, from_child=False)
 
-            for addr in existing_addresses:
-                ip = addr.get("ip")
-                if not ip:
-                    continue
-                is_gw = addr.get("is_gateway") in (1, "1", True)
+            # Step B: Collect all descendant child subnets and their addresses
+            # We do a single breadth-first walk using all subnets (one API call).
+            all_subnets = await self.get_subnets()
 
-                raw_tag = addr.get("tag", "1")
-                if isinstance(raw_tag, dict):
-                    tag = str(raw_tag.get("id", "1"))
-                else:
-                    tag = str(raw_tag)
+            # Index subnets by id for O(1) child lookup
+            children_index: Dict[str, list] = {}
+            for s in all_subnets:
+                parent_id = str(s.get("masterSubnetId", "0") or "0")
+                children_index.setdefault(parent_id, []).append(s)
 
-                if tag == "1":
-                    tag_id_field = addr.get("tagId")
-                    if tag_id_field and str(tag_id_field) != "1":
-                        tag = str(tag_id_field)
+            # BFS to collect every descendant subnet id
+            descendant_ids: list = []
+            queue = list(children_index.get(subnet_id, []))
+            while queue:
+                child = queue.pop(0)
+                child_id = str(child["id"])
+                descendant_ids.append(child_id)
+                queue.extend(children_index.get(child_id, []))
 
-                if is_gw:
-                    status = "gateway"
-                elif tag == "3":
-                    status = "reserved"
-                elif tag == "2":
-                    status = "offline"
-                elif tag == "4":
-                    status = "dhcp"
-                else:
-                    status = "used"
+            # Fetch addresses for every descendant (concurrent if needed)
+            for child_id in descendant_ids:
+                child_addrs = await self.get_subnet_addresses(child_id)
+                self._parse_addresses_into_used_map(child_addrs, used_map, from_child=True)
 
-                used_map[ip] = {
-                    "ip": ip,
-                    "status": status,
-                    "tag": tag,
-                    "hostname": addr.get("hostname"),
-                    "description": addr.get("description"),
-                    "address_id": str(addr.get("id", "")),
-                    "mac": addr.get("mac"),
-                }
+            print(
+                f"[phpIPAM-spacemap] subnet={subnet_addr}/{mask} "
+                f"direct={len(existing_addresses)} child_subnets={len(descendant_ids)} "
+                f"total_used={len(used_map)}"
+            )
+            # ────────────────────────────────────────────────────────────────
 
             used_count = len(used_map)
 

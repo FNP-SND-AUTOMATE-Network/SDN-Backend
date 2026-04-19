@@ -634,6 +634,14 @@ async def delete_subnet(
                 detail="phpIPAM integration is not enabled"
             )
         
+        # ป้องกันการลบ Subnet ถ้ามี IP addresses ค้างอยู่ (ข้อมูลที่เชื่อมกับ Device)
+        addresses = await phpipam_svc.get_subnet_addresses(subnet_id)
+        if addresses and len(addresses) > 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete Subnet: It contains IP addresses. Please release or delete all IP addresses first."
+            )
+            
         success = await phpipam_svc.delete_subnet(subnet_id)
         
         if not success:
@@ -884,6 +892,14 @@ async def delete_section(
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="phpIPAM integration is not enabled"
+            )
+        
+        # ป้องกันการลบ Section ถ้ามี Subnets ค้างอยู่
+        subnets = await phpipam_svc.get_section_subnets(section_id)
+        if subnets and len(subnets) > 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete Section: It contains Subnets. Please remove or reassign all Subnets first."
             )
         
         success = await phpipam_svc.delete_section(section_id)
@@ -1285,11 +1301,13 @@ async def get_available_ips(
 @router.get("/subnets/{subnet_id}/space-map", response_model=SpaceMapResponse)
 async def get_subnet_space_map(
     subnet_id: str,
+    offset: int = Query(0, ge=0, description="Offset (0-indexed) into the host list"),
+    limit: int = Query(256, ge=1, le=1024, description="Max addresses to return per page"),
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Return visual space map of a subnet.
-    แสดง IP ทั้งหมดใน subnet พร้อมสถานะ (used/free/gateway/reserved)
+    Return paginated visual space map of a subnet.
+    แสดง IP ใน subnet ทีละ page เพื่อรองรับ subnet ขนาดใหญ่ เช่น /18 (16k hosts)
     """
     try:
         phpipam_svc = get_phpipam_service()
@@ -1300,7 +1318,7 @@ async def get_subnet_space_map(
                 detail="phpIPAM integration is not enabled"
             )
         
-        result = await phpipam_svc.get_space_map(subnet_id)
+        result = await phpipam_svc.get_space_map(subnet_id, offset=offset, limit=limit)
         
         addresses = [
             SpaceMapEntry(
@@ -1319,7 +1337,10 @@ async def get_subnet_space_map(
             total_hosts=result["total_hosts"],
             used=result["used"],
             free=result["free"],
-            addresses=addresses
+            addresses=addresses,
+            offset=result.get("offset", offset),
+            limit=result.get("limit", limit),
+            has_more=result.get("has_more", False)
         )
         
     except HTTPException:

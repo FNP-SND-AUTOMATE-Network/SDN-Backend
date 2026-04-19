@@ -848,107 +848,115 @@ class PhpipamService:
             print(f"[phpIPAM] Error getting available IPs for subnet {subnet_id}: {e}")
             return {"subnet_id": subnet_id, "subnet": "", "available_ips": [], "total_available": 0}
 
-    async def get_space_map(self, subnet_id: str) -> Dict[str, Any]:
+    async def get_space_map(
+        self,
+        subnet_id: str,
+        offset: int = 0,
+        limit: int = 256
+    ) -> Dict[str, Any]:
         """
-        Return visual space map: every IP in the subnet with its status.
-        { subnet_id, subnet, mask, total_hosts, used, free, addresses: [...] }
+        Return paginated visual space map for a subnet.
+        Only generates the slice [offset, offset+limit) of host IPs, keeping
+        memory and payload small even for huge subnets like /18 (16k hosts).
+
+        Returns:
+            { subnet_id, subnet, mask, total_hosts, used, free,
+              offset, limit, has_more, addresses: [...] }
         """
+        empty = {
+            "subnet_id": subnet_id, "subnet": "", "mask": "",
+            "total_hosts": 0, "used": 0, "free": 0,
+            "offset": offset, "limit": limit, "has_more": False,
+            "addresses": []
+        }
+
         if not self.enabled:
-            return {
-                "subnet_id": subnet_id, "subnet": "", "mask": "",
-                "total_hosts": 0, "used": 0, "free": 0, "addresses": []
-            }
+            return empty
 
         try:
             # Get subnet info
             subnet_data = await self.get_subnet(subnet_id)
             if not subnet_data:
-                return {
-                    "subnet_id": subnet_id, "subnet": "", "mask": "",
-                    "total_hosts": 0, "used": 0, "free": 0, "addresses": []
-                }
+                return empty
 
             subnet_addr = subnet_data.get("subnet", "")
             mask = subnet_data.get("mask", "")
             network = ipaddress.ip_network(f"{subnet_addr}/{mask}", strict=False)
 
-            # Get existing addresses
+            # Total usable hosts (excludes network + broadcast)
+            total_hosts = max(network.num_addresses - 2, 0)
+            if total_hosts == 0:
+                return {**empty, "subnet": subnet_addr, "mask": mask}
+
+            # Get existing addresses from phpIPAM (single API call, cached by phpIPAM)
             existing_addresses = await self.get_subnet_addresses(subnet_id)
-            used_map = {}
-            
-            # Debug: log first address to see actual field names
-            if existing_addresses:
-                sample = existing_addresses[0]
-                print(f"[phpIPAM-spacemap] Sample address fields: {list(sample.keys())}")
-                print(f"[phpIPAM-spacemap] Sample address data: ip={sample.get('ip')}, tag={sample.get('tag')}, tagId={sample.get('tagId')}, state={sample.get('state')}")
+            used_map: Dict[str, Dict] = {}
 
             for addr in existing_addresses:
                 ip = addr.get("ip")
-                if ip:
-                    is_gw = addr.get("is_gateway") in (1, "1", True)
-                    
-                    # phpIPAM returns tag in different ways depending on version:
-                    # - "tag": {"id": "2", ...}  (nested object)
-                    # - "tag": "2"               (string)
-                    # - "tag": 2                 (integer)
-                    # - "tagId": "2"             (separate field in some versions)
-                    raw_tag = addr.get("tag", "1")
-                    if isinstance(raw_tag, dict):
-                        tag = str(raw_tag.get("id", "1"))
-                    else:
-                        tag = str(raw_tag)
-                    
-                    # Fallback: some phpIPAM versions use tagId
-                    if tag == "1":
-                        tag_id_field = addr.get("tagId")
-                        if tag_id_field and str(tag_id_field) != "1":
-                            tag = str(tag_id_field)
+                if not ip:
+                    continue
+                is_gw = addr.get("is_gateway") in (1, "1", True)
 
-                    # Determine status based on phpIPAM tags
-                    # 1=Online(used), 2=Offline, 3=Reserved, 4=DHCP
-                    if is_gw:
-                        status = "gateway"
-                    elif tag == "3":
-                        status = "reserved"
-                    elif tag == "2":
-                        status = "offline"
-                    elif tag == "4":
-                        status = "dhcp"
-                    else:
-                        status = "used"  # tag=1 (Online) — กำลังใช้งานอยู่
+                raw_tag = addr.get("tag", "1")
+                if isinstance(raw_tag, dict):
+                    tag = str(raw_tag.get("id", "1"))
+                else:
+                    tag = str(raw_tag)
 
-                    used_map[ip] = {
-                        "ip": ip,
-                        "status": status,
-                        "tag": tag,
-                        "hostname": addr.get("hostname"),
-                        "description": addr.get("description"),
-                        "address_id": str(addr.get("id", "")),
-                        "mac": addr.get("mac"),
-                    }
+                if tag == "1":
+                    tag_id_field = addr.get("tagId")
+                    if tag_id_field and str(tag_id_field) != "1":
+                        tag = str(tag_id_field)
 
-            # Build full space map
+                if is_gw:
+                    status = "gateway"
+                elif tag == "3":
+                    status = "reserved"
+                elif tag == "2":
+                    status = "offline"
+                elif tag == "4":
+                    status = "dhcp"
+                else:
+                    status = "used"
+
+                used_map[ip] = {
+                    "ip": ip,
+                    "status": status,
+                    "tag": tag,
+                    "hostname": addr.get("hostname"),
+                    "description": addr.get("description"),
+                    "address_id": str(addr.get("id", "")),
+                    "mac": addr.get("mac"),
+                }
+
+            used_count = len(used_map)
+
+            # Build paginated slice — skip first `offset` hosts, take `limit`
             addresses = []
-            used_count = 0
-            total_hosts = 0
+            idx = 0
+            end = offset + limit
+            has_more = False
 
             for host in network.hosts():
-                ip_str = str(host)
-                total_hosts += 1
-
-                if ip_str in used_map:
-                    addresses.append(used_map[ip_str])
-                    used_count += 1
-                else:
-                    addresses.append({
-                        "ip": ip_str,
-                        "status": "free",
-                        "tag": None,
-                        "hostname": None,
-                        "description": None,
-                        "address_id": None,
-                        "mac": None,
-                    })
+                if idx >= end:
+                    has_more = True
+                    break
+                if idx >= offset:
+                    ip_str = str(host)
+                    if ip_str in used_map:
+                        addresses.append(used_map[ip_str])
+                    else:
+                        addresses.append({
+                            "ip": ip_str,
+                            "status": "free",
+                            "tag": None,
+                            "hostname": None,
+                            "description": None,
+                            "address_id": None,
+                            "mac": None,
+                        })
+                idx += 1
 
             return {
                 "subnet_id": subnet_id,
@@ -957,13 +965,13 @@ class PhpipamService:
                 "total_hosts": total_hosts,
                 "used": used_count,
                 "free": total_hosts - used_count,
+                "offset": offset,
+                "limit": limit,
+                "has_more": has_more,
                 "addresses": addresses,
             }
 
         except Exception as e:
             print(f"[phpIPAM] Error getting space map for subnet {subnet_id}: {e}")
-            return {
-                "subnet_id": subnet_id, "subnet": "", "mask": "",
-                "total_hosts": 0, "used": 0, "free": 0, "addresses": []
-            }
+            return empty
 

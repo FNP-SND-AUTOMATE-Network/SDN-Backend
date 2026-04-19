@@ -287,3 +287,7 @@ class SpaceMapResponse(BaseModel):
     used: int
     free: int
     addresses: List[SpaceMapEntry]
+    # Pagination fields
+    offset: int = 0
+    limit: int = 256
+    has_more: bool = False

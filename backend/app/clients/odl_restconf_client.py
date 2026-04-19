@@ -1,3 +1,14 @@
+"""
+OpenDaylight RESTCONF Client
+ตัวเชื่อมต่อ HTTP หลักสำหรับสื่อสารกับ ODL Controller ผ่าน RESTCONF (RFC-8040)
+
+หน้าที่หลัก:
+- ส่ง HTTP Request (GET/PUT/POST/DELETE) ไปยัง ODL RESTCONF API
+- ใช้ Persistent Connection Pool เพื่อประสิทธิภาพ (TCP Reuse)
+- รองรับ Retry พร้อม Exponential Backoff
+- แปลง Error จาก ODL ให้เป็นข้อความที่อ่านเข้าใจง่าย (parse_odl_error)
+"""
+
 import httpx
 import asyncio
 from typing import Any, Dict, Optional
@@ -35,7 +46,11 @@ class OdlRestconfClient:
 
     @classmethod
     async def _get_client(cls) -> httpx.AsyncClient:
-        """Get or create the shared persistent HTTP client."""
+        """
+        ดึงหรือสร้าง Shared HTTP Client (ใช้ Connection Pool ร่วมกันทั้งระบบ)
+        - ใช้ Double-Check Locking ป้องกันการสร้าง Client ซ้ำใน Concurrent Request
+        - รองรับ TCP Connection สูงสุด 20 connections, Keep-alive 10
+        """
         if cls._shared_client is None or cls._shared_client.is_closed:
             async with cls._shared_lock:
                 # Double-check after acquiring lock
@@ -52,7 +67,7 @@ class OdlRestconfClient:
 
     @classmethod
     async def close(cls):
-        """Gracefully close the shared HTTP client. Call on app shutdown."""
+        """ปิด Shared HTTP Client อย่างสมบูรณ์ — เรียกตอน App Shutdown"""
         if cls._shared_client and not cls._shared_client.is_closed:
             await cls._shared_client.close()
             cls._shared_client = None
@@ -60,11 +75,9 @@ class OdlRestconfClient:
 
     def _full_url(self, spec: RequestSpec) -> str:
         """
-        Build RFC-8040 compliant RESTCONF URL
-
-        RFC-8040 uses:
-        - /rests/data/ for both config and operational data
-        - /rests/operations/ for RPC operations
+        สร้าง URL เต็มรูปแบบตาม RFC-8040
+        - config/operational → /rests/data/
+        - operations (RPC) → /rests/operations/
         """
         if spec.datastore == "operations":
             return f"{self.base_url}/rests/operations{spec.path}"
@@ -73,6 +86,13 @@ class OdlRestconfClient:
             return f"{self.base_url}/rests/data{spec.path}"
 
     async def send(self, spec: RequestSpec) -> Dict[str, Any]:
+        """
+        ส่งคำสั่ง RESTCONF ไปยัง ODL Controller
+        - รับ RequestSpec (ระบุ method, path, datastore, payload)
+        - Retry ตามค่า ODL_RETRY พร้อม Exponential Backoff
+        - แปลง Error จาก ODL เป็นข้อความที่อ่านเข้าใจง่ายผ่าน parse_odl_error
+        - คืนค่า JSON dict ถ้าสำเร็จ หรือ raise OdlRequestError
+        """
         url = self._full_url(spec)
         headers = dict(spec.headers) if spec.headers else {}
 

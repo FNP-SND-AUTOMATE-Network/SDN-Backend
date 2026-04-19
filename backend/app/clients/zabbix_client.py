@@ -52,7 +52,11 @@ class ZabbixClient:
 
     async def _call(self, method: str, params: Optional[Dict[str, Any]] = None) -> Any:
         """
-        Send a JSON-RPC 2.0 request to Zabbix API.
+        ส่งคำสั่ง JSON-RPC 2.0 ไปยัง Zabbix API
+        - สร้าง JSON-RPC payload และแนบ Auth Token ใน HTTP Header
+        - รองรับ Zabbix 7.x (ส่ง auth ผ่าน Bearer Token แทน JSON body)
+        - คืนค่าเฉพาะ "result" field จาก response
+        - Raise ZabbixAPIError ถ้า API ตอบ error กลับมา
 
         Args:
             method: Zabbix API method (e.g., "host.get", "item.get")
@@ -112,7 +116,7 @@ class ZabbixClient:
     # ── API Info ─────────────────────────────────────────────────
 
     async def get_api_version(self) -> str:
-        """Get Zabbix API version (ไม่ต้อง auth). Useful as health check."""
+        """ดึงเวอร์ชัน Zabbix API (ไม่ต้อง auth) — ใช้สำหรับ Health Check การเชื่อมต่อ"""
         return await self._call("apiinfo.version")
 
     # ── Hosts ────────────────────────────────────────────────────
@@ -123,10 +127,9 @@ class ZabbixClient:
         search: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Fetch all monitored hosts with interfaces.
-        
-        Returns list of hosts with: hostid, host, name, status, 
-        available, snmp_available, interfaces[], groups[]
+        ดึงรายการ Hosts ทั้งหมดที่อยู่ใน Zabbix Monitoring
+        - รองรับการกรองตาม group_ids และค้นหาตามชื่อ
+        - คืนข้อมูล hostid, host, name, status, interfaces[], groups[]
         """
         params: Dict[str, Any] = {
             "output": [
@@ -147,7 +150,7 @@ class ZabbixClient:
         return await self._call("host.get", params)
 
     async def get_host(self, host_id: str) -> Optional[Dict[str, Any]]:
-        """Fetch a single host by ID."""
+        """ดึงข้อมูล Host เดี่ยวตาม host_id พร้อม interfaces, groups, templates"""
         params = {
             "output": "extend",
             "hostids": [host_id],
@@ -161,7 +164,7 @@ class ZabbixClient:
     # ── Host Groups ──────────────────────────────────────────────
 
     async def get_host_groups(self) -> List[Dict[str, Any]]:
-        """Fetch all host groups."""
+        """ดึงรายการ Host Groups ทั้งหมดที่มี Host อยู่ในกลุ่ม"""
         return await self._call("hostgroup.get", {
             "output": ["groupid", "name"],
             "sortfield": "name",
@@ -179,7 +182,8 @@ class ZabbixClient:
         limit: int = 500,
     ) -> List[Dict[str, Any]]:
         """
-        Fetch items for a host or list of hosts.
+        ดึงรายการ Items (จุดเก็บข้อมูล SNMP/Agent) ของ Host
+        - รองรับการกรองตาม host_id/host_ids, key และ item_type
 
         item_type values:
             0 = Zabbix agent
@@ -213,7 +217,11 @@ class ZabbixClient:
         return await self._call("item.get", params)
 
     async def get_snmp_items(self, host_id: Optional[str] = None, host_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        """Get only SNMP agent items (type=20 for SNMPv1/v2/v3 agent)."""
+        """
+        ดึงเฉพาะ SNMP Items (type=4 + type=20) เพื่อรองรับทั้ง Zabbix เก่าและใหม่
+        - Type 4 = SNMP agent ใน Zabbix < 6.0
+        - Type 20 = SNMP agent ใน Zabbix 6.0+
+        """
         # Type 20 = SNMP agent ใน Zabbix 6.0+
         # Type 4 = SNMP agent ใน Zabbix < 6.0
         # ดึงทั้ง type 4 และ 20 เพื่อ compatibility
@@ -261,7 +269,8 @@ class ZabbixClient:
         sort_order: str = "DESC",
     ) -> List[Dict[str, Any]]:
         """
-        Get historical values for items.
+        ดึงข้อมูลย้อนหลังของ Items ตามช่วงเวลาที่กำหนด
+        - ใช้แสดงกราฟ Traffic, CPU, Memory ย้อนหลัง
 
         history_type:
             0 = numeric float
@@ -299,8 +308,8 @@ class ZabbixClient:
         limit: int = 500,
     ) -> List[Dict[str, Any]]:
         """
-        Get trend data (hourly aggregated) for items.
-        ใช้สำหรับข้อมูลย้อนหลัง > 1 วัน
+        ดึงข้อมูล Trend (สรุปรายชั่วโมง) สำหรับข้อมูลย้อนหลัง > 1 วัน
+        - Zabbix จะสรุปข้อมูลรายชั่วโมงอัตโนมัติ (avg, min, max, count)
         """
         params: Dict[str, Any] = {
             "output": "extend",
@@ -329,7 +338,8 @@ class ZabbixClient:
         time_till: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Fetch active problems (unresolved triggers).
+        ดึงรายการปัญหา (Problems) ที่ยังไม่แก้ไข (Active)
+        - กรองตามระดับความรุนแรง (severity) และช่วงเวลา
 
         severity: 0=Not classified, 1=Info, 2=Warning, 
                   3=Average, 4=High, 5=Disaster
@@ -361,7 +371,7 @@ class ZabbixClient:
         time_from: Optional[int] = None,
         time_till: Optional[int] = None,
     ) -> int:
-        """Fetch total count of active problems without list pagination limit."""
+        """นับจำนวน Problems ทั้งหมด (ไม่จำกัด limit) สำหรับใช้แสดงจำนวนรวมบน Dashboard"""
         params: Dict[str, Any] = {
             "countOutput": True,
             "recent": recent,
@@ -387,7 +397,7 @@ class ZabbixClient:
         only_active: bool = True,
         min_severity: int = 0,
     ) -> List[Dict[str, Any]]:
-        """Fetch triggers with host info."""
+        """ดึงรายการ Triggers พร้อมข้อมูล Host ที่เกี่ยวข้อง สำหรับดูว่า Host ไหนมีปัญหาอยู่"""
         params: Dict[str, Any] = {
             "output": [
                 "triggerid", "description", "priority", "value",

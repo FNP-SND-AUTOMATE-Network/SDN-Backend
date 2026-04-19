@@ -1,8 +1,18 @@
 """
-Driver Factory - Deterministic Native Driver Selection
+Driver Factory — Deterministic Native Driver Selection
+ระบบเลือก Driver อัตโนมัติตาม Vendor/OS ของอุปกรณ์
 
-Usage:
-    driver = DriverFactory.get_driver(node_id="CSR1", vendor="cisco")
+หน้าที่หลัก:
+- เลือก Driver ที่เหมาะสมจาก vendor/os_type ของอุปกรณ์ (ไม่มี Fallback)
+- รองรับหลาย Category: Interface, Routing, System, DHCP
+- ใช้ Lazy Loading เพื่อป้องกัน Circular Import
+- คืน Driver Instance ที่พร้อมใช้งานสำหรับสร้าง RESTCONF Request
+
+Flow:
+    os_type → _get_registry(category) → registry[os_type] → Driver Class → Instance
+
+ตัวอย่าง:
+    driver = DriverFactory.get_driver(node_id="CSR1", vendor="cisco", os_type="CISCO_IOS_XE")
     spec = driver.configure_interface(device, config)
 """
 from typing import Dict, Type, Optional
@@ -13,12 +23,12 @@ from app.core.intent_registry import IntentCategory
 
 class DriverFactory:
     """
-    Factory for creating Native Driver based on vendor
+    Factory สำหรับสร้าง Native Driver ตาม Vendor/OS
     
-    Architecture:
-        - No fallback mechanism
-        - Select driver directly from vendor specified in device profile
-        - Support multiple categories (interface, routing, system, etc.)
+    สถาปัตยกรรม:
+    - ไม่มี Fallback → ถ้าไม่รองรับจะ raise UnsupportedVendor ทันที
+    - เลือก Driver ตรงจาก os_type ที่ระบุใน Device Profile
+    - รองรับหลาย Category (Interface, Routing, System, DHCP)
     """
     
     # Lazy loading - import drivers when needed
@@ -30,7 +40,12 @@ class DriverFactory:
     
     @classmethod
     def _load_drivers(cls):
-        """Load all driver classes (lazy loading to avoid circular imports)"""
+        """
+        โหลด Driver Classes ทั้งหมด (Lazy Loading)
+        - เรียกครั้งเดียวตอนใช้งานครั้งแรก
+        - ใช้ Lazy Import เพื่อป้องกัน Circular Import
+        - ลงทะเบียน Driver ตาม OS Type สำหรับแต่ละ Category
+        """
         if cls._drivers_loaded:
             return
         
@@ -71,7 +86,13 @@ class DriverFactory:
     
     @classmethod
     def _get_registry(cls, category: IntentCategory) -> Dict[str, Type[BaseDriver]]:
-        """Get the appropriate driver registry for a category"""
+        """
+        ดึง Driver Registry ตาม Category ที่ร้องขอ
+        - Interface → _interface_drivers
+        - Routing → _routing_drivers
+        - System → _system_drivers
+        - DHCP → _dhcp_drivers
+        """
         cls._load_drivers()
         
         registries = {
@@ -93,7 +114,9 @@ class DriverFactory:
         category: IntentCategory = IntentCategory.INTERFACE
     ) -> BaseDriver:
         """
-        Get the appropriate native driver based on OS Type (preferred) or Vendor (fallback)
+        เลือกและสร้าง Driver ที่เหมาะสมตาม OS Type
+        - ใช้ os_type เป็นตัวเลือกหลัก (เช่น "CISCO_IOS_XE", "HUAWEI_VRP")
+        - ถ้าไม่พบ Driver ที่รองรับจะ raise UnsupportedVendor
         
         Args:
             node_id: Device node identifier (for logging/context)
@@ -127,22 +150,21 @@ class DriverFactory:
     
     @classmethod
     def get_supported_vendors(cls, category: IntentCategory = IntentCategory.INTERFACE) -> list:
-        """Get list of supported vendors/os_types for a category"""
+        """ดึงรายการ Vendor/OS ที่รองรับสำหรับ Category ที่ระบุ"""
         registry = cls._get_registry(category)
         return list(registry.keys())
     
     @classmethod
     def is_vendor_supported(cls, vendor: str, category: IntentCategory = IntentCategory.INTERFACE) -> bool:
-        """
-        Check if a vendor OR os_type is supported
-        """
+        """ตรวจสอบว่า Vendor/OS Type รองรับหรือไม่ใน Category ที่ระบุ"""
         registry = cls._get_registry(category)
         return vendor in registry or vendor.lower() in registry
 
     @classmethod
     def get_intents_by_os(cls) -> dict:
         """
-        Get all supported intents grouped by OS type.
+        ดึงรายการ Intents ทั้งหมดที่รองรับ จัดกลุ่มตาม OS Type
+        - สำหรับแสดงใน API ว่า OS ไหนรองรับ Intent อะไรบ้าง
         
         Returns dict like:
         {

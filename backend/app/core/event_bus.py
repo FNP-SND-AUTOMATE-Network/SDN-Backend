@@ -1,22 +1,19 @@
 """
-Event Bus — In-process async pub/sub สำหรับ Event-Driven Pipeline
+In-Process Event Bus (Pub/Sub)
+ระบบการส่งข้อความภายในแบบ Publish/Subscribe สำหรับสื่อสารระหว่าง Component
 
-รองรับ event types:
-  - device.status_changed   : เมื่อสถานะอุปกรณ์เปลี่ยน
-  - device.fault_detected   : เมื่อตรวจพบ fault
-  - device.fault_resolved   : เมื่อ fault หาย (กลับเป็น ONLINE)
-  - sync.completed          : เมื่อ background sync เสร็จสิ้น
+หน้าที่หลัก:
+- ให้ Component ต่างๆ สื่อสารกันแบบ Loosely Coupled (ไม่ต้องรู้จักกัน)
+- FaultDetector ตรวจพบข้อผิดพลาด → emit event → ChatOpsService รับแล้วส่ง Slack
+- รองรับทั้ง sync และ async handler
+- มีระบบ Wildcard ("*") เพื่อรับทุก event
 
-Usage:
-    from app.core.event_bus import event_bus
+ตัวอย่างการใช้งาน:
+    # Publisher
+    await event_bus.emit("device.fault", {"device_id": "CSR1", "type": "link_down"})
 
-    # Subscribe
-    @event_bus.on("device.status_changed")
-    async def handle(event):
-        ...
-
-    # Emit
-    await event_bus.emit("device.status_changed", {"node_id": "CSR1", ...})
+    # Subscriber
+    event_bus.on("device.fault", my_handler_function)
 """
 
 import asyncio

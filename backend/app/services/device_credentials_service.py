@@ -1,3 +1,14 @@
+"""
+Device Credentials Service
+บริการจัดการ Credentials (ชื่อผู้ใช้/รหัสผ่าน) สำหรับเชื่อมต่ออุปกรณ์
+
+หน้าที่หลัก:
+- สร้าง/อ่าน/แก้ไข/ลบ Credentials ใน Database
+- เข้ารหัส/ถอดรหัสรหัสผ่านแบบ Two-way (ใช้ Fernet/AES)
+- แปลง SECRET_KEY เป็น Fernet Key อัตโนมัติ
+- ใช้สำหรับเก็บรหัสผ่าน SSH/NETCONF อย่างปลอดภัย
+"""
+
 from typing import Optional, Dict, Any
 import os
 import base64
@@ -11,7 +22,11 @@ from app.models.device_credentials import (
 
 
 class DeviceCredentialsService:
-    #Service สำหรับจัดการ Device Network Credentials
+    """
+    Service สำหรับจัดการ Device Network Credentials
+    - เข้ารหัสรหัสผ่านแบบ Two-way (Fernet) เพื่อถอดรหัสกลับได้เมื่อต้องใช้
+    - CRUD Operations: สร้าง/อ่าน/แก้ไข/ลบ
+    """
     
     def __init__(self, prisma_client):
         self.prisma = prisma_client

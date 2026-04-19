@@ -67,5 +67,4 @@ router.include_router(odl_router,       tags=["NBI — ODL Sync"])
 router.include_router(intents_router,   tags=["NBI — Intents"])
 router.include_router(topology_router,  tags=["NBI — Topology"])
 router.include_router(flows_router,     tags=["NBI — OpenFlow Flows"])
-# discovery_router ถูกย้ายไป /interfaces/ แล้ว
 

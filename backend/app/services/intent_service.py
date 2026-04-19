@@ -1,27 +1,28 @@
 """
-Intent Service - Core service for handling Intent requests
+Intent Service — Core Service for Intent-Based Configuration
+บริการหลักสำหรับจัดการคำสั่ง Intent-Based Configuration
 
-Refactored from Strategy Resolver to Deterministic Driver Factory Pattern:
-- No fallback mechanism (reduces latency)
-- Post-error diagnosis via DeviceManager (capability check on failure)
-- Direct driver selection based on vendor
-- All write operations use PATCH method
+หน้าที่หลัก:
+- รับคำสั่ง Intent จาก API (เช่น "show.interface", "interface.set_ipv4")
+- ตรวจสอบความถูกต้องของ Intent และ Parameters ผ่าน IntentRegistry
+- ค้นหา Device Profile จาก Database ด้วย node_id
+- เลือก Driver ที่เหมาะสมผ่าน DriverFactory (ตาม Vendor/OS)
+- สร้างและส่ง RESTCONF Request ไปยัง ODL Controller
+- Normalize ผลลัพธ์ให้อยู่ในรูปแบบเดียวกัน (ไม่ว่า Vendor ใด)
+- วิเคราะห์ข้อผิดพลาดผ่าน DeviceManager (Post-Error Diagnosis)
 
-Terminology:
------------
-- node_id: ODL topology-netconf identifier (URL-safe)
-           Used in both API requests and database
-- device_id: Database UUID (internal, not in API)
+สถาปัตยกรรม: Deterministic Driver Factory Pattern
+- ไม่มี Fallback (ลด Latency)
+- เลือก Driver ตรงจาก Vendor ที่ระบุใน Device Profile
 
 Flow:
------
-1. API receives: { "intent": "show.interface", "node_id": "CSR1" }
+1. API รับ: { "intent": "show.interface", "node_id": "CSR1" }
 2. Query DeviceNetwork WHERE node_id = 'CSR1'
-3. DriverFactory selects native driver based on vendor (no fallback)
-4. Driver builds RESTCONF request
-5. Send to ODL via client
-6. Normalize response if needed
-7. Return unified response
+3. DriverFactory เลือก Driver ตาม vendor (ไม่มี fallback)
+4. Driver สร้าง RESTCONF request
+5. ส่งไปยัง ODL ผ่าน OdlRestconfClient
+6. Normalize ผลลัพธ์ (ถ้าต้องการ)
+7. คืนค่า IntentResponse
 """
 import asyncio
 import ipaddress
@@ -67,24 +68,24 @@ from app.drivers.device import DeviceDriver
 
 class IntentService:
     """
-    Main service for handling Intent-based requests
+    บริการหลักสำหรับจัดการคำสั่ง Intent-Based Requests
     
-    Architecture: Deterministic Driver Factory Pattern
-    - No fallback mechanism for lower latency
-    - Driver selected directly based on device vendor
+    สถาปัตยกรรม: Deterministic Driver Factory Pattern
+    - ไม่มี Fallback → ลด Latency ในการเลือก Driver
+    - เลือก Driver โดยตรงจาก Vendor/OS ในข้อมูล Device
     
-    Terminology Note:
-        - req.node_id = database 'node_id' = ODL node identifier
-        - Used directly in ODL RESTCONF paths
+    ศัพท์สำคัญ:
+        - req.node_id = 'node_id' ใน Database = ODL Node Identifier
+        - ใช้ตรงใน ODL RESTCONF paths เลย
     
-    Flow:
-    1. Validate intent exists in registry
-    2. Get device profile (lookup by node_id)
-    3. DriverFactory selects native driver (deterministic, no fallback)
-    4. Driver builds RESTCONF request
-    5. Send to ODL via client
-    6. Normalize response if needed
-    7. Return unified response
+    ขั้นตอนการทำงาน:
+    1. ตรวจสอบ Intent มีอยู่ใน Registry หรือไม่
+    2. ดึง Device Profile (ค้นหาด้วย node_id)
+    3. DriverFactory เลือก Native Driver (ไม่มี fallback)
+    4. Driver สร้าง RESTCONF Request
+    5. ส่งไปยัง ODL ผ่าน OdlRestconfClient
+    6. Normalize ผลลัพธ์ (ถ้าจำเป็น)
+    7. คืนค่า IntentResponse
     """
 
     
@@ -102,7 +103,12 @@ class IntentService:
         self.device_driver = DeviceDriver()
     
     def _get_driver(self, intent: str, driver_name: str, os_type: Optional[str] = None):
-        """Get appropriate driver based on intent category using DriverFactory"""
+        """
+        เลือก Driver ที่เหมาะสมตาม Intent Category
+        - ดึง Category จาก IntentRegistry (เช่น INTERFACE, ROUTING, SYSTEM)
+        - แปลง SHOW category ไปยัง Category ที่เกี่ยวข้อง
+        - เรียก DriverFactory.get_driver() เพื่อสร้าง Driver Instance
+        """
         intent_def = IntentRegistry.get(intent)
         if not intent_def:
             raise UnsupportedIntent(intent)
@@ -133,7 +139,20 @@ class IntentService:
         )
     
     async def handle(self, req: IntentRequest) -> IntentResponse:
-        """Handle incoming intent request"""
+        """
+        [จุดเข้าหลัก] ประมวลผลคำสั่ง Intent
+        
+        ขั้นตอน:
+        1. ตรวจสอบว่า Intent มีอยู่ใน Registry
+        2. ตรวจสอบ Parameters ที่จำเป็น
+        3. ดึง Device Profile จาก DB
+        4. ตรวจสอบว่า Device mount อยู่ (CONNECTED)
+        5. เลือก Driver ตาม vendor/os_type
+        6. สร้าง RESTCONF Request
+        7. ส่งไปยัง ODL Controller
+        8. Normalize ผลลัพธ์
+        9. จัดการ Error + Diagnosis (ถ้าเกิดข้อผิดพลาด)
+        """
         
         # Step 1: Validate intent exists
         intent_def = IntentRegistry.get(req.intent)

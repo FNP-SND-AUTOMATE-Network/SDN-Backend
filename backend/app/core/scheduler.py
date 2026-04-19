@@ -1,3 +1,14 @@
+"""
+Backup Scheduler Manager
+จัดการงาน Scheduled Backup Jobs โดยใช้ APScheduler
+
+หน้าที่หลัก:
+- สร้าง/อัปเดต/ลบ Cron Job สำหรับการ Backup Configuration อัตโนมัติ
+- รองรับ Cron Expression มาตรฐาน (5 ส่วน: minute hour day month weekday)
+- ทำงานร่วมกับ BackupService และ DeviceBackupService ในการสำรอง Config
+- Startup: โหลด backup profiles ที่มี auto_backup=true มาลงทะเบียนอัตโนมัติ
+"""
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from app.core.logging import logger

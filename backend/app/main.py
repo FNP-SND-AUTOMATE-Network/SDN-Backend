@@ -1,3 +1,15 @@
+"""
+Main Application Entry Point
+จุดเริ่มต้นหลักของแอปพลิเคชัน SDN Backend
+
+หน้าที่หลัก:
+- สร้าง FastAPI application instance
+- กำหนด Lifespan (Startup/Shutdown) สำหรับเชื่อมต่อ Database, เริ่ม Scheduler
+- ลงทะเบียน Background Tasks สำหรับ Sync ข้อมูลจาก ODL อัตโนมัติ
+- ตั้งค่า CORS Middleware สำหรับ Frontend
+- Include ทุก API Router เข้า app
+"""
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -16,7 +28,12 @@ _sync_topology_lock = asyncio.Lock()
 
 
 async def _safe_sync_devices():
-    """Background job: sync device status จาก ODL (with lock)"""
+    """
+    [Background Task] ซิงค์สถานะอุปกรณ์จาก ODL Controller
+    - ใช้ Lock ป้องกันไม่ให้ทำงานซ้อนกัน (ถ้ารอบก่อนยังไม่เสร็จจะข้ามรอบนี้)
+    - เรียก OdlSyncService.sync_all_devices() เพื่ออัปเดต status ของทุกอุปกรณ์ใน DB
+    - ทำงานเป็น Interval Job ตามค่า SYNC_DEVICE_INTERVAL_SEC
+    """
     if _sync_device_lock.locked():
         logger.debug("[BG-Sync] Device sync skipped — previous run still in progress")
         return
@@ -32,7 +49,13 @@ async def _safe_sync_devices():
 
 
 async def _safe_sync_topology():
-    """Background job: sync topology จาก ODL (with lock + total timeout)"""
+    """
+    [Background Task] ซิงค์ข้อมูล Topology (Interface/Link) จาก ODL Controller
+    - ใช้ Lock ป้องกันไม่ให้ทำงานซ้อนกัน
+    - มี Timeout ป้องกันกรณีที่ sync ใช้เวลานานเกินไป (80% ของ interval)
+    - เรียก sync_odl_topology_to_db() เพื่ออัปเดต Interface ทั้งหมดลง DB
+    - ทำงานเป็น Interval Job ตามค่า SYNC_TOPOLOGY_INTERVAL_SEC
+    """
     if _sync_topology_lock.locked():
         logger.debug("[BG-Sync] Topology sync skipped — previous run still in progress")
         return
@@ -54,6 +77,21 @@ async def _safe_sync_topology():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    [Lifespan Manager] จัดการ Startup และ Shutdown ของแอปพลิเคชัน
+
+    Startup:
+    1. เชื่อมต่อ Prisma Database Client
+    2. เริ่ม Backup Scheduler สำหรับ auto-backup ที่ตั้งค่าไว้
+    3. เริ่ม ChatOps Service (ถ้าเปิดใช้งาน) สำหรับส่งแจ้งเตือนไปยัง Slack
+    4. เริ่ม Background Sync Scheduler สำหรับซิงค์ Device/Topology จาก ODL
+
+    Shutdown:
+    1. หยุด Background Sync Scheduler
+    2. หยุด Backup Scheduler
+    3. ปิด ODL HTTP Client (Connection Pool)
+    4. ตัดการเชื่อมต่อ Database
+    """
     # Startup: Connect to database
     from prisma import Prisma
     prisma_client = Prisma()

@@ -1,12 +1,16 @@
 """
 Zabbix Notification Service
-รับ event ที่ normalize แล้วจาก Zabbix → จัดรูปแบบ Slack Block Kit → ส่งไปยัง Slack
+บริการรับ Event จาก Zabbix Webhook และส่งแจ้งเตือนไปยัง Slack
+
+หน้าที่หลัก:
+- รับ NormalizedZabbixEvent จาก Webhook Handler
+- จัดรูปแบบเป็น Slack Block Kit (ข้อความสวย)
+- ส่งผ่าน SlackClient
+- บันทึก Event ลง Database และ Event Bus (สำหรับ Audit)
+- Broadcast แจ้งเตือนผ่าน WebSocket ไปยัง Frontend
 
 Flow:
-  1. รับ NormalizedZabbixEvent จาก webhook handler
-  2. จัดรูปแบบเป็น Slack Block Kit (rich message)
-  3. ส่งผ่าน SlackClient
-  4. บันทึก event ไว้ใน Event Bus สำหรับ audit
+  Zabbix Webhook → Normalize → จัดรูปแบบ Block Kit → ส่ง Slack + WebSocket + DB
 """
 
 import re

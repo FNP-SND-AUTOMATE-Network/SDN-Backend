@@ -1,3 +1,14 @@
+"""
+Configuration Template Service
+บริการ CRUD สำหรับจัดการ Configuration Template
+
+หน้าที่หลัก:
+- สร้าง/อ่าน/แก้ไข/ลบ Template สำหรับการตั้งค่าอุปกรณ์
+- จัดการความสัมพันธ์ Template กับ Tags
+- เก็บเนื้อหา Template (Jinja2/CLI) และ Metadata
+- รองรับหลายประเภท: Jinja2, CLI Command
+"""
+
 from typing import Optional, List, Dict, Any
 from app.models.configuration_template import (
     ConfigurationTemplateCreate,
@@ -8,7 +19,12 @@ from app.models.configuration_template import (
 )
 
 class ConfigurationTemplateService:
-    #Service สำหรับจัดการ Configuration Template
+    """
+    Service สำหรับจัดการ Configuration Template
+    - CRUD Operations: สร้าง/อ่าน/แก้ไข/ลบ Template
+    - จัดการ Tag Association
+    - เก็บเนื้อหา Template (content/filename)
+    """
 
     def __init__(self, prisma_client):
         self.prisma = prisma_client

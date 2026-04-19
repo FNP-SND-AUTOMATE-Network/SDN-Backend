@@ -1,3 +1,14 @@
+"""
+Slack Webhook Client
+ตัวเชื่อมต่อ HTTP สำหรับส่งข้อความแจ้งเตือนไปยัง Slack ผ่าน Incoming Webhooks
+
+หน้าที่หลัก:
+- ส่งข้อความรูปแบบ Block Kit (ข้อความสวย) ไปยัง Slack Channel
+- รองรับ Retry อัตโนมัติพร้อม Exponential Backoff
+- ใช้ Persistent Connection Pool เพื่อประสิทธิภาพ
+- ทดสอบการเชื่อมต่อผ่าน test_connection()
+"""
+
 import httpx
 import asyncio
 from typing import Any, Dict, List, Optional
@@ -6,7 +17,11 @@ from app.core.config import settings
 
 
 class SlackClient:
-    """HTTP client for Slack Incoming Webhooks with persistent connection pooling."""
+    """
+    HTTP Client สำหรับ Slack Incoming Webhooks
+    - ใช้ Persistent Connection Pool เพื่อลดการสร้าง TCP Connection ซ้ำ
+    - รองรับ Retry สูงสุด 3 ครั้ง พร้อม Exponential Backoff
+    """
 
     def __init__(self, webhook_url: Optional[str] = None):
         self.webhook_url = webhook_url or settings.SLACK_WEBHOOK_URL
@@ -15,7 +30,7 @@ class SlackClient:
         self._client: Optional[httpx.AsyncClient] = None
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create persistent HTTP client (connection pooling)."""
+        """ดึงหรือสร้าง Persistent HTTP Client (ใช้ Connection Pooling ร่วมกัน)"""
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
                 timeout=self.timeout,
@@ -74,7 +89,7 @@ class SlackClient:
         return False
 
     async def _close_client(self):
-        """Close the persistent client (will be recreated on next use)."""
+        """ปิด HTTP Client (จะสร้างใหม่อัตโนมัติเมื่อใช้ครั้งถัดไป) — ใช้เมื่อเกิด Timeout/Error"""
         if self._client and not self._client.is_closed:
             try:
                 await self._client.aclose()
@@ -130,7 +145,11 @@ class SlackClient:
         return await self.send_message(text=header, blocks=blocks)
 
     async def test_connection(self) -> Dict[str, Any]:
-        """ทดสอบการเชื่อมต่อ Slack Webhook"""
+        """
+        ทดสอบการเชื่อมต่อ Slack Webhook
+        - ส่งข้อความทดสอบไปยัง Slack Channel
+        - คืนค่า status (ok/error) และ message
+        """
         if not self.webhook_url:
             return {
                 "status": "error",

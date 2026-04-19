@@ -1,3 +1,14 @@
+"""
+Backup Service
+บริการ CRUD สำหรับจัดการ Backup Profile (โปรไฟล์การสำรองข้อมูล)
+
+หน้าที่หลัก:
+- สร้าง/อ่าน/แก้ไข/ลบ Backup Profile ใน Database
+- จัดการ Auto-Backup: เปิด/ปิด, กำหนด Cron Expression
+- เชื่อมโยงอุปกรณ์ (DeviceNetwork) เข้ากับ Backup Profile
+- ลงทะเบียน/ยกเลิก Scheduled Backup Job ผ่าน SchedulerManager
+"""
+
 from typing import Optional, List, Dict, Any
 from app.models.backup import (
     BackupCreate,
@@ -8,13 +19,23 @@ from app.models.backup import (
 )
 
 class BackupService:
-    #Service สำหรับจัดการ Backup
+    """
+    Service สำหรับจัดการ Backup Profile
+    - CRUD Operations: สร้าง/อ่าน/แก้ไข/ลบ
+    - จัดการ Auto-Backup และ Schedule
+    - เชื่อมโยงอุปกรณ์เข้ากับ Backup
+    """
 
     def __init__(self, prisma_client):
         self.prisma = prisma_client
 
     async def create_backup(self, backup_data: BackupCreate, user_id: str) -> Optional[BackupResponse]:
-        #สร้าง Backup ใหม่
+        """
+        สร้าง Backup Profile ใหม่
+        - ตรวจสอบชื่อไม่ซ้ำ
+        - เชื่อมโยงกับ User ที่สร้าง
+        - ตั้งค่า Schedule, Cron Expression และ Retention
+        """
         try:
             # ตรวจสอบว่า backup_name ซ้ำหรือไม่
             existing_backup = await self.prisma.backup.find_unique(

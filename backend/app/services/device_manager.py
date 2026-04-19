@@ -1,20 +1,17 @@
 """
 DeviceManager — In-memory Capability Cache & Guard
+จัดการ Device Capabilities ผ่าน In-memory Cache และตรวจสอบความพร้อมของอุปกรณ์
 
-import httpx
-import asyncio
-from typing import Any, Dict, List, Optional, Tuple
+หน้าที่หลัก:
+- Cache ข้อมูล Capabilities ของทุกอุปกรณ์ใน Memory (node_id → capabilities, status)
+- Startup Sync: ดึง Topology ทั้งหมดจาก ODL + Polling สำหรับอุปกรณ์ที่ยัง connecting
+- Capability Guard: ตรวจสอบว่าอุปกรณ์รองรับ YANG Module ที่ต้องการหรือไม่
+- Post-Error Diagnosis: วิเคราะห์สาเหตุข้อผิดพลาดเมื่อ Request ไปยัง ODL ล้มเหลว
 
-Features:
-- In-memory Dictionary cache (node_id → capabilities, status, sync time)
-- Startup sync: ดึง topology ทั้งหมด + polling สำหรับ non-connected devices
-- Capability Guard: ตรวจสอบว่า device รองรับ module ที่ต้องการหรือไม่
-- Error Handling: กรอง unavailable-capabilities (unable-to-resolve)
-
-Usage:
+ตัวอย่าง:
     dm = DeviceManager()
     dm.sync_all()                                        # ดึง topology + poll
-    dm.is_feature_supported("NE40E-R1", "huawei-ospfv2") # check module
+    dm.is_feature_supported("NE40E-R1", "huawei-ospfv2") # ตรวจสอบ module
     dm.get_device_status("NE40E-R1")                     # ดูสถานะ
 """
 
@@ -29,13 +26,13 @@ from app.core.logging import logger
 
 class DeviceManager:
     """
-    จัดการ device capabilities ผ่าน in-memory cache
+    จัดการ Device Capabilities ผ่าน In-memory Cache
 
-    Architecture:
-        1. sync_all() ดึง topology จาก ODL
-        2. Parse capabilities → แยก available / unavailable
-        3. Polling loop สำหรับ devices ที่ยัง connecting
-        4. is_feature_supported() ตรวจสอบ cache ก่อนส่ง request
+    สถาปัตยกรรม:
+    1. sync_all() ดึง Topology จาก ODL Controller
+    2. Parse Capabilities → แยก available / unavailable
+    3. Polling Loop สำหรับอุปกรณ์ที่ยัง connecting
+    4. is_feature_supported() ตรวจสอบ Cache ก่อนส่ง Request
     """
 
     # ── Constructor ──────────────────────────────────────────
@@ -108,8 +105,9 @@ class DeviceManager:
     # ── Topology sync ───────────────────────────────────────
     async def sync_all(self) -> Dict[str, Dict[str, Any]]:
         """
-        ดึง topology ทั้งหมดจาก ODL แล้ว cache
-        สำหรับ device ที่ยัง connecting จะ poll รอจนกว่าจะ connected
+        [Startup] ซิงค์ Topology ทั้งหมดจาก ODL แล้วเก็บไว้ใน Cache
+        - อุปกรณ์ที่ connected → parse capabilities ทันที
+        - อุปกรณ์ที่ยัง connecting → poll รอจนกว่าจะ connected
 
         Returns:
             dict ของ node_id → device info ทั้งหมดที่ sync ได้
@@ -166,8 +164,9 @@ class DeviceManager:
 
     async def _poll_until_connected(self, node_id: str) -> Dict[str, Any]:
         """
-        Polling loop: รอ device mount + schema load เสร็จ
-        ตรวจสอบทุก poll_interval วินาที สูงสุด poll_max_retries รอบ
+        Polling Loop: รออุปกรณ์ Mount + Schema Load เสร็จ
+        - ตรวจสอบทุก poll_interval วินาที สูงสุด poll_max_retries รอบ
+        - คืน device info dict (อาจมี status ไม่ใช่ connected ถ้า timeout)
 
         Returns:
             device info dict (อาจมี status ≠ connected ถ้า timeout)

@@ -1,13 +1,19 @@
 """
 ODL Mount Service
-Service สำหรับ Mount/Unmount NETCONF nodes ใน OpenDaylight
+บริการ Mount/Unmount NETCONF Nodes ใน OpenDaylight Controller
+
+หน้าที่หลัก:
+- Mount: ลงทะเบียนอุปกรณ์ผ่าน NETCONF เข้า ODL Topology
+- Unmount: ถอดอุปกรณ์ออกจาก ODL Topology
+- Sync Status: ซิงค์สถานะการเชื่อมต่อ NETCONF จาก ODL ลง DB
+- อัปเดต Database Status หลัง Mount/Unmount
 
 Flow:
-1. รับข้อมูล device จาก Database (รวม NETCONF credentials)
-2. สร้าง payload สำหรับ mount
+1. รับข้อมูล Device จาก Database (รวม NETCONF Credentials)
+2. สร้าง Payload สำหรับ Mount
 3. ส่งไปยัง ODL RESTCONF API
-4. Update status ใน Database
-5. Sync connection status
+4. อัปเดต Status ใน Database
+5. Sync Connection Status
 """
 from typing import Dict, Any, Optional
 from datetime import datetime

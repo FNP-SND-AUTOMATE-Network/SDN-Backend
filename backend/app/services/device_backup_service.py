@@ -38,20 +38,59 @@ from prisma.enums import ConfigType, ConfigFormat, BackupJobStatus, DeviceVendor
 from app.services.device_credentials_service import DeviceCredentialsService
 
 async def huawei_bypass_on_open(conn: Any) -> None:
-    """Handle Huawei initial 'Change password? [Y/N]' prompt."""
+    """
+    Scrapli on_open callback for Huawei VRP devices.
+
+    Huawei devices often greet the user with a password-change prompt right
+    after a successful SSH login, before the normal shell prompt appears:
+
+        The password needs to be changed. Change now? [Y/N]:
+
+    This callback reads all buffered output after the SSH handshake and, if
+    that prompt is detected, sends "n<Enter>" to skip the change.  It then
+    waits for the actual command prompt so Scrapli's normal send_command
+    logic can take over from a clean state.
+
+    Additionally, terminal paging is disabled with "screen-length 0 temporary"
+    so that long outputs (e.g. display current-configuration) are not cut off.
+    """
     import asyncio
-    await asyncio.sleep(1.5)
-    output = await conn.channel.read()
-    
-    out_lower = output.decode("utf-8", "ignore").lower()
-    if "change now?" in out_lower or "[y/n]" in out_lower:
+
+    # Give the device a moment to flush its post-login banner / prompts
+    await asyncio.sleep(2.0)
+
+    # Read whatever the device has sent so far (may or may not be the prompt)
+    try:
+        raw = await asyncio.wait_for(conn.channel.read(65535), timeout=3.0)
+        buffered = raw.decode("utf-8", errors="ignore")
+    except (asyncio.TimeoutError, Exception):
+        buffered = ""
+
+    # Detect the Huawei password-change prompt (several known variants)
+    change_triggers = [
+        "change now?",
+        "change password",
+        "[y/n]:",
+        "[y/n] :",
+        "password needs to be changed",
+        "old password",
+    ]
+    needs_bypass = any(t in buffered.lower() for t in change_triggers)
+
+    if needs_bypass:
+        # Send "n" + Enter to decline the password change
         await conn.channel.write(b"n\n")
         await asyncio.sleep(0.5)
-        
-    await conn.channel.write(b"\n")
+        # Drain any follow-up output the device sends after our answer
+        try:
+            await asyncio.wait_for(conn.channel.read(65535), timeout=3.0)
+        except (asyncio.TimeoutError, Exception):
+            pass
+
+    # Wait until the device presents its normal command prompt
     await conn.channel.read_until_prompt()
-    
-    # Disable terminal paging
+
+    # Disable terminal paging so long outputs are not truncated
     await conn.channel.write(b"screen-length 0 temporary\n")
     await conn.channel.read_until_prompt()
 

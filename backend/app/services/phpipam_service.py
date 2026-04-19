@@ -529,21 +529,31 @@ class PhpipamService:
                 if subnet_data:
                     target_subnet_info = f"{subnet_data.get('subnet')}/{subnet_data.get('mask')}"
             else:
-                # Manual mode: auto-find subnet that contains this IP
+                # Manual mode: auto-find subnet that contains this IP.
+                # We must pick the MOST SPECIFIC (longest prefix / smallest subnet)
+                # match, not just the first one.  Otherwise a parent like /16
+                # is chosen over a child like /24 simply because it appeared
+                # earlier in the phpIPAM response.
                 target_ip = ipaddress.ip_address(ip_address)
                 subnets = await self.get_subnets()
 
+                best_prefix_len = -1
                 for subnet in subnets:
                     try:
                         network = ipaddress.ip_network(
                             f"{subnet['subnet']}/{subnet['mask']}", strict=False
                         )
                         if target_ip in network:
-                            target_subnet_id = str(subnet["id"])
-                            target_subnet_info = f"{subnet['subnet']}/{subnet['mask']}"
-                            break
+                            prefix_len = network.prefixlen
+                            if prefix_len > best_prefix_len:
+                                best_prefix_len = prefix_len
+                                target_subnet_id = str(subnet["id"])
+                                target_subnet_info = f"{subnet['subnet']}/{subnet['mask']}"
                     except (ValueError, KeyError):
                         continue
+
+                if target_subnet_id:
+                    print(f"[phpIPAM] Auto-selected subnet {target_subnet_info} (/{best_prefix_len}) for {ip_address}")
 
             if not target_subnet_id:
                 return {

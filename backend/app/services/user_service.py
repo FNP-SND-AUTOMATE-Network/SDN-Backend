@@ -1,3 +1,15 @@
+"""
+User Service
+บริการจัดการผู้ใช้ระบบและการยืนยันตัวตน (Authentication)
+
+หน้าที่หลัก:
+- สร้าง/อ่าน/แก้ไข/ลบ Users ใน Database
+- เข้ารหัสรหัสผ่าน (bcrypt) และตรวจสอบรหัสผ่าน
+- สร้างและตรวจสอบ JWT Token สำหรับ Authentication
+- Login/Register Flow พร้อมการจัดการ Role (Admin, User)
+- บันทึก Audit Log สำหรับการเข้าสู่ระบบ
+"""
+
 import bcrypt
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
@@ -9,6 +21,13 @@ from app.models.user import UserCreateRequest, UserUpdateRequest, UserFilter
 
 
 class UserService:
+    """
+    Service สำหรับจัดการผู้ใช้และ Authentication
+    - CRUD: สร้าง/อ่าน/แก้ไข/ลบ User
+    - Password Hashing (bcrypt)
+    - JWT Token Management
+    - Login/Register พร้อม Role-based Access
+    """
     def __init__(self, prisma_client=None):
         self.prisma = prisma_client
         self.secret_key = os.getenv("SECRET_KEY")
@@ -16,7 +35,7 @@ class UserService:
         self.access_token_expire_minutes = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
     
     def hash_password(self, password: str) -> str:
-        #เข้ารหัสรหัสผ่าน
+        """เข้ารหัสรหัสผ่านด้วย bcrypt (เข้ารหัสทางเดียว One-way, ถอดรหัสไม่ได้)"""
         salt = bcrypt.gensalt()
         return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
     

@@ -1,9 +1,14 @@
 """
 Alert Deduplicator — ป้องกัน alert ซ้ำระหว่าง Zabbix Pipeline กับ Internal Fault Pipeline
+Alert Deduplication Engine
+ระบบตัดกรองการแจ้งเตือนซ้ำซ้อน (Deduplication)
 
-เมื่อ Zabbix ส่ง alert ของ host ใดเข้ามา จะบันทึก timestamp ไว้
-ถ้า Internal Fault Detection จะส่ง Slack สำหรับ host เดียวกัน
-แต่มี Zabbix alert มาแล้วภายใน 5 นาที → skip ไม่ส่งซ้ำ
+หน้าที่หลัก:
+- ป้องกันการส่งแจ้งเตือนซ้ำซ้อนไป Slack เมื่อ Zabbix และ Internal Fault Detector
+  ตรวจพบข้อผิดพลาดเดียวกันในช่วงเวลาใกล้เคียงกัน
+- ใช้ TTL-based Window: ถ้า Zabbix แจ้งแล้ว → กด Internal Alert ภายใน TTL
+  (ป้องกัน Slack Notification ซ้ำ)
+- บันทึกประวัติ Alert ที่ถูก suppress ด้วย
 
 Usage:
     from app.core.alert_dedup import alert_dedup

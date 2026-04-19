@@ -1,11 +1,14 @@
 """
-ChatOps Service — Orchestrator สำหรับ Event-Driven Pipeline
+ChatOps Service — Orchestrator สำหรับ Event-Driven Notification Pipeline
+ระบบส่งแจ้งเตือนไปยัง Slack เมื่อตรวจพบข้อผิดพลาดในเครือข่าย
 
-รับ Event จาก Event Bus → ตรวจจับ Fault → จัดรูปแบบ Slack Message → ส่งไป Slack
+หน้าที่หลัก:
+- รับ Event จาก Event Bus → ตรวจจับ Fault → จัดรูปแบบ Block Kit → ส่งไป Slack
+- ใช้ Deduplication ป้องกันการแจ้งเตือนซ้ำ (Zabbix vs Internal)
 
-ทำงานเป็น listener ของ Event Bus:
-  - device.status_changed  → ตรวจจับ fault → แจ้ง Slack
-  - sync.completed         → สรุปผล sync → แจ้ง Slack (ถ้ามี fault)
+Events ที่รับ:
+  - device.status_changed → ตรวจจับ fault → แจ้ง Slack
+  - sync.completed       → สรุปผล sync → แจ้ง Slack (ถ้ามี fault)
 """
 
 from typing import Any, Dict, List, Optional
@@ -43,8 +46,11 @@ FAULT_TYPE_LABEL = {
 
 class ChatOpsService:
     """
-    Main ChatOps orchestrator.
-    Formats fault events into Slack Block Kit messages and sends them.
+    ChatOps Orchestrator หลัก
+    - รับ Event จาก Event Bus แล้วส่งต่อให้ FaultDetector วิเคราะห์
+    - จัดรูปแบบ Fault Events เป็น Slack Block Kit messages
+    - ส่งไปยัง Slack ผ่าน SlackClient
+    - ตรวจสอบ Dedup ก่อนส่งเพื่อป้องกันการแจ้งเตือนซ้ำ
     """
 
     def __init__(self):
@@ -54,6 +60,7 @@ class ChatOpsService:
 
     # ── Register Event Bus handlers ──────────────────────────────
     def _register_event_handlers(self):
+        """ลงทะเบียน Event Handler บน Event Bus เพื่อรับข้อมูลการเปลี่ยน status"""
         event_bus.subscribe("device.status_changed", self._on_device_status_changed)
         # Sync notification disabled — ใช้ Zabbix webhook แทน
         # event_bus.subscribe("sync.completed", self._on_sync_completed)
@@ -61,7 +68,11 @@ class ChatOpsService:
 
     # ── Handler: device.status_changed ───────────────────────────
     async def _on_device_status_changed(self, event: Event):
-        """Handle individual device status change events."""
+        """
+        [ตัวรับ Event] จัดการการเปลี่ยนสถานะอุปกรณ์
+        - ส่งข้อมูลให้ FaultDetector วิเคราะห์
+        - ถ้าพบ Fault จะส่งแจ้งเตือนไป Slack
+        """
         data = event.data
 
         fault = self.fault_detector.detect_from_status_change(
@@ -78,7 +89,11 @@ class ChatOpsService:
 
     # ── Handler: sync.completed ──────────────────────────────────
     async def _on_sync_completed(self, event: Event):
-        """Handle sync completion — detect faults from results and send summary."""
+        """
+        [ตัวรับ Event] จัดการผลการ Sync เสร็จสิ้น
+        - ตรวจจับ Faults จากผลการ Sync
+        - ส่งสรุปผลไป Slack (เฉพาะเมื่อมี error หรือ fault)
+        """
         data = event.data
         sync_type = data.get("sync_type", "unknown")
 
@@ -113,7 +128,11 @@ class ChatOpsService:
 
     # ── Slack message: Fault notification ────────────────────────
     async def _send_fault_notification(self, fault: FaultEvent):
-        """Format and send a fault notification to Slack (with dedup check)."""
+        """
+        ส่งแจ้งเตือน Fault ไปยัง Slack
+        - ตรวจสอบ Dedup ก่อนส่ง (ป้องกันซ้ำกับ Zabbix)
+        - จัดรูปแบบเป็น Block Kit message พร้อม emoji ตามระดับความรุนแรง
+        """
         # ── Dedup check: skip if Zabbix already alerted this host ──
         host_key = fault.device_name or fault.node_id
         if alert_dedup.is_recently_alerted_by_zabbix(host_key):

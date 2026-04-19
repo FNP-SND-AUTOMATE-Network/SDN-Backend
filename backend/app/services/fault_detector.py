@@ -1,12 +1,17 @@
 """
 Fault Detector Service
-ตรวจจับ fault conditions จาก device status changes
+ตรวจจับสถานการณ์ผิดปกติ (Fault) จากการเปลี่ยนสถานะของอุปกรณ์
 
-Severity Levels:
-  CRITICAL  — Device offline / unreachable (was online)
-  WARNING   — Connection degrading (connecting state)
-  INFO      — Informational state change
-  RESOLVED  — Device recovered (back online)
+หน้าที่หลัก:
+- วิเคราะห์การเปลี่ยน Status (Transition) แล้วสร้าง FaultEvent
+- กำหนดระดับความรุนแรง: CRITICAL, WARNING, INFO, RESOLVED
+- ใช้ร่วมกับ ChatOpsService ในการส่งแจ้งเตือนไป Slack
+
+ระดับความรุนแรง (Severity):
+  CRITICAL  — อุปกรณ์ Offline / เข้าถึงไม่ได้ (เดิมออนไลน์อยู่)
+  WARNING   — การเชื่อมต่อไม่เสถียร (connecting)
+  INFO      — การเปลี่ยนสถานะทั่วไป
+  RESOLVED  — อุปกรณ์กลับมาออนไลน์แล้ว
 """
 
 from typing import Any, Dict, List, Optional
@@ -33,7 +38,7 @@ class FaultType(str, Enum):
 
 
 class FaultEvent:
-    """Represents a detected fault event."""
+    """แทนข้อมูลของ Fault ที่ตรวจพบ พร้อมรายละเอียดทั้งหมด (ประเภท, ระดับความรุนแรง, อุปกรณ์, status)"""
 
     def __init__(
         self,
@@ -59,6 +64,7 @@ class FaultEvent:
         self.timestamp = datetime.utcnow().isoformat()
 
     def to_dict(self) -> Dict[str, Any]:
+        """แปลง FaultEvent เป็น Dictionary สำหรับส่งผ่าน API หรือ Event Bus"""
         return {
             "fault_type": self.fault_type.value,
             "severity": self.severity.value,
@@ -75,7 +81,9 @@ class FaultEvent:
 
 class FaultDetector:
     """
-    Analyzes device status transitions and produces FaultEvent objects.
+    วิเคราะห์การเปลี่ยน Status ของอุปกรณ์และสร้าง FaultEvent
+    - ตรวจสอบ Status Transition ว่าเข้าเงื่อนไข (CRITICAL/WARNING/RESOLVED)
+    - วิเคราะห์ผล Sync เพื่อหาอุปกรณ์ที่ Down หลัง Sync
     """
 
     # status transitions ที่ถือว่าเป็น fault
@@ -105,7 +113,10 @@ class FaultDetector:
         extra: Optional[Dict] = None,
     ) -> Optional[FaultEvent]:
         """
-        วิเคราะห์ status transition แล้ว return FaultEvent ถ้ามี fault
+        วิเคราะห์การเปลี่ยน Status Transition แล้วคืน FaultEvent
+        - ONLINE → OFFLINE = CRITICAL (อุปกรณ์ Down)
+        - ONLINE → OTHER / connecting = WARNING (การเชื่อมต่อไม่เสถียร)
+        - OFFLINE → ONLINE = RESOLVED (อุปกรณ์กลับมาออนไลน์)
 
         Returns:
             FaultEvent or None (ถ้า transition ไม่ interesting)
@@ -169,7 +180,10 @@ class FaultDetector:
 
     def detect_from_sync_result(self, sync_result: Dict[str, Any]) -> List[FaultEvent]:
         """
-        วิเคราะห์ผลลัพธ์ของ background sync แล้ว return list of faults
+        วิเคราะห์ผลลัพธ์ของ Background Sync เพื่อหา Faults
+        - ตรวจจาก synced items ที่มี status = OFFLINE
+        - ตรวจจาก items ที่มี note = "Unmounted from ODL"
+        - ตรวจจาก errors ในผล Sync
 
         ดูจาก synced items ที่มี status = OFFLINE (ก่อนหน้าอาจเป็น ONLINE)
         และ items ที่มี note = "Unmounted from ODL"

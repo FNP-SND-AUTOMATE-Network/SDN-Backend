@@ -1,7 +1,23 @@
+"""
+Centralized Configuration
+ศูนย์กลางการตั้งค่าทั้งหมดของแอปพลิเคชัน
+
+หน้าที่หลัก:
+- โหลดค่า Environment Variables จากไฟล์ .env (อยู่ที่ backend/.env)
+- กำหนดค่า Default สำหรับทุกการตั้งค่า
+- ใช้ Pydantic BaseModel เพื่อ validate ค่าที่โหลดมา
+- Export เป็น Singleton `settings` สำหรับใช้ทั่วทั้งแอป
+
+กลุ่มการตั้งค่า:
+- ODL: การเชื่อมต่อ OpenDaylight Controller (URL, Credentials, Timeout, Retry)
+- SYNC: Background Sync สำหรับ Device/Topology (เปิด/ปิด, Interval)
+- CHATOPS: Slack Integration สำหรับแจ้งเตือน (Webhook URL, เปิด/ปิด)
+- ZABBIX: Zabbix Monitoring Integration (API URL, Token)
+"""
+
 from pathlib import Path
 from dotenv import load_dotenv
 
-# ✅ ชี้ path .env แบบแน่นอน (อยู่ที่ backend/.env)
 ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(dotenv_path=ENV_PATH, override=True)
 

@@ -1,3 +1,15 @@
+"""
+Intent Engine Service
+บริการสำหรับ Deploy Configuration ผ่าน Template (Jinja2/CLI)
+
+หน้าที่หลัก:
+- Render Jinja2 Template ด้วยตัวแปรที่กำหนด
+- เชื่อมต่อ SSH ไปยังอุปกรณ์ผ่าน Scrapli (Async)
+- ส่งคำสั่ง CLI Command และรับผลลัพธ์
+- รองรับทั้ง Cisco (IOS-XE) และ Huawei (VRP)
+- ใช้ร่วมกับ DeviceCredentialsService สำหรับดึง SSH Credentials
+"""
+
 import asyncio
 import json
 from typing import Dict, Any, List, Optional
@@ -13,6 +25,11 @@ from prisma.enums import DeviceVendor
 from app.services.device_credentials_service import DeviceCredentialsService
 
 class IntentEngineService:
+    """
+    Service สำหรับ Deploy Configuration ผ่าน Template
+    - Render Jinja2 Template + ส่งคำสั่งผ่าน Scrapli SSH
+    - รองรับ Cisco IOS-XE และ Huawei VRP
+    """
     def __init__(self, prisma_client):
         self.prisma = prisma_client
         self.credential_service = DeviceCredentialsService(prisma_client)

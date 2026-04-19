@@ -1,3 +1,14 @@
+"""
+Device Network Service
+บริการ CRUD สำหรับจัดการข้อมูลอุปกรณ์เครือข่าย (Device Records)
+
+หน้าที่หลัก:
+- สร้าง/อ่าน/แก้ไข/ลบ Device Records ใน Database
+- เชื่อมโยงกับ phpIPAM สำหรับจัดการ IP Address อัตโนมัติ
+- จัดการความสัมพันธ์กับ Tags, OS, Site, Policy, Backup, Template
+- รองรับการค้นหาและกรองข้อมูลแบบยืดหยุ่น (Pagination, Filtering)
+"""
+
 from typing import Optional, List, Dict, Any
 import ipaddress
 from app.services.phpipam_service import PhpipamService
@@ -14,7 +25,12 @@ from app.models.device_network import (
 )
 
 class DeviceNetworkService:
-    #Service สำหรับจัดการ Device Network
+    """
+    Service สำหรับจัดการ Device Network Records
+    - CRUD Operations พร้อม Relation Management
+    - เชื่อมโยง phpIPAM สำหรับ IP Management อัตโนมัติ
+    - จัดการ Tags, OS, Site และ Policy Association
+    """
 
     # Notification template map
     _NOTIFICATION_MAP = {

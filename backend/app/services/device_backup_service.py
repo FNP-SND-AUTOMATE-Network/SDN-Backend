@@ -1,3 +1,15 @@
+"""
+Device Backup Service
+บริการสำรอง Configuration จริงของอุปกรณ์ผ่าน Scrapli (SSH/Telnet)
+
+หน้าที่หลัก:
+- เชื่อมต่อ SSH/Telnet ไปยังอุปกรณ์และดึง Running Config
+- สร้าง Diff ระหว่าง Config เก่าและใหม่ (ใช้ difflib)
+- สร้าง Content Hash เพื่อตรวจสอบการเปลี่ยนแปลง
+- บันทึกผลลง Database (เนื้อหา Config, Hash, Diff, สถานะ)
+- รองรับทั้ง Cisco และ Huawei ผ่าน Scrapli async driver
+"""
+
 from typing import List, Optional, Tuple, Dict, Any
 import asyncio
 import hashlib

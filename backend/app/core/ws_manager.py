@@ -1,24 +1,17 @@
 """
-WebSocket Connection Manager — จัดการ WebSocket connections สำหรับ Real-time Alert Broadcast
+WebSocket Connection Manager
+จัดการการเชื่อมต่อ WebSocket สำหรับส่งข้อมูลแบบ Real-time ไปยัง Frontend
 
-รองรับ:
-  - connect/disconnect clients
-  - broadcast JSON data ไปยังทุก client ที่ต่ออยู่
-  - Error isolation: client ตัวหนึ่งพังจะไม่กระทบตัวอื่น
-
-Usage:
-    from app.core.ws_manager import ws_manager
-
-    # ใน WebSocket endpoint
-    await ws_manager.connect(websocket)
-    await ws_manager.broadcast({"event": "alert", ...})
-    ws_manager.disconnect(websocket)
+หน้าที่หลัก:
+- รับการเชื่อมต่อจาก Frontend Clients (connect/disconnect)
+- Broadcast ข้อมูลแจ้งเตือน (Alert) ไปยังทุก Client ที่เชื่อมต่ออยู่
+- เก็บประวัติข้อมูลที่ส่งล่าสุดไว้ใน buffer (สำหรับ Client ที่เพิ่งเชื่อมต่อ)
+- จัดการการตัดการเชื่อมต่ออัตโนมัติเมื่อ Client หลุด
 """
 
-from typing import Any, Dict, Set
 from fastapi import WebSocket
 from app.core.logging import logger
-
+from typing import Any, Dict, Set
 
 class ConnectionManager:
     """

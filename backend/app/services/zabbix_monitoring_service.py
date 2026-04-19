@@ -1,7 +1,13 @@
 """
 Zabbix Monitoring Service
-Business logic layer สำหรับดึงข้อมูล SNMP/monitoring จาก Zabbix API
+Business Logic Layer สำหรับดึงข้อมูล SNMP/Monitoring จาก Zabbix API
 แล้วจัดรูปแบบให้พร้อมใช้บน Frontend Dashboard
+
+หน้าที่หลัก:
+- ดึงภาพรวม Dashboard: จำนวน Host, ปัญหา, สถิติสรุป
+- ดึงรายละเอียด Host: Interfaces, Items, ปัญหาที่เกี่ยวข้อง
+- ดึงข้อมูล Traffic และแปลงหน่วยเป็น bps
+- ดึง Top Metrics: CPU, Memory, Bandwidth, Uptime
 
 Flow:
   Frontend → REST API → ZabbixMonitoringService → ZabbixClient → Zabbix JSON-RPC API

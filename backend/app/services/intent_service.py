@@ -159,13 +159,23 @@ class IntentService:
         if not intent_def:
             raise UnsupportedIntent(req.intent)
         
-        # Step 2: Validate required params
-        missing = IntentRegistry.validate_params(req.intent, req.params)
-        if missing:
-            raise UnsupportedIntent(f"Missing params: {', '.join(missing)}")
+        # Step 2: Validate required params.
+        # If this intent has vendor-specific required params, defer validation until
+        # we know the actual device vendor/os_type.
+        needs_vendor_aware_validation = bool(intent_def.vendor_params) and intent_def.category != IntentCategory.DEVICE
+        if not needs_vendor_aware_validation:
+            missing = IntentRegistry.validate_params(req.intent, req.params)
+            if missing:
+                raise UnsupportedIntent(f"Missing params: {', '.join(missing)}")
         
         # Step 3: Get device profile
         device = await self.device_profiles.get(req.node_id)
+
+        if needs_vendor_aware_validation:
+            vendor_hint = device.os_type or device.vendor
+            missing = IntentRegistry.validate_params(req.intent, req.params, vendor=vendor_hint)
+            if missing:
+                raise UnsupportedIntent(f"Missing params: {', '.join(missing)}")
         
         # OpenFlow devices are managed via RESTful endpoints, not intents
         if getattr(device, "management_protocol", "NETCONF") == "OPENFLOW":

@@ -7,12 +7,35 @@ URL Template: /huawei-ip-pool:ip-pool/global-pools/global-pool={poolName}
 """
 from typing import Any, Dict, List
 import urllib.parse
+import ipaddress
 from app.drivers.base import BaseDriver
 from app.schemas.device_profile import DeviceProfile
 from app.schemas.request_spec import RequestSpec
 from app.builders.odl_paths import odl_mount_base
 from app.core.errors import UnsupportedIntent, DriverBuildError
 from app.core.intent_registry import Intents
+
+
+def _prefix_to_netmask(prefix: int) -> str:
+    if prefix < 0 or prefix > 32:
+        raise DriverBuildError("mask prefix must be in range 0..32")
+    mask = (0xffffffff << (32 - prefix)) & 0xffffffff if prefix > 0 else 0
+    return ".".join(str((mask >> (8 * i)) & 0xff) for i in [3, 2, 1, 0])
+
+
+def _normalize_ipv4_mask(mask_value: Any) -> str:
+    text = str(mask_value or "").strip()
+    if not text:
+        raise DriverBuildError("mask is required")
+
+    prefix_candidate = text[1:] if text.startswith("/") else text
+    if prefix_candidate.isdigit():
+        return _prefix_to_netmask(int(prefix_candidate))
+
+    try:
+        return str(ipaddress.IPv4Network(f"0.0.0.0/{text}", strict=False).netmask)
+    except Exception as exc:
+        raise DriverBuildError("mask must be dotted mask (255.255.255.0) or prefix (/24)") from exc
 
 
 class HuaweiDhcpDriver(BaseDriver):
@@ -69,6 +92,9 @@ class HuaweiDhcpDriver(BaseDriver):
         end_ip = params.get("end_ip")
         dns_servers = params.get("dns_servers", [])
         lease_days = params.get("lease_days", 1)
+
+        if mask is not None and str(mask).strip() != "":
+            mask = _normalize_ipv4_mask(mask)
         
         if not pool_name:
             raise DriverBuildError("params require pool_name")

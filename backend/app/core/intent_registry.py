@@ -462,7 +462,7 @@ class IntentRegistry:
         return [i for i in cls.all_intents() if i.category == category]
     
     @classmethod
-    def validate_params(cls, intent_name: str, params: Dict) -> List[str]:
+    def validate_params(cls, intent_name: str, params: Dict, vendor: str | None = None) -> List[str]:
         """
         Validate params for intent
         Returns list of missing required params
@@ -470,10 +470,38 @@ class IntentRegistry:
         intent = cls.get(intent_name)
         if not intent:
             return [f"Unknown intent: {intent_name}"]
+
+        required_params = intent.required_params
+        if vendor and intent.vendor_params:
+            vendor_lc = str(vendor).lower()
+            vendor_key = None
+
+            if vendor_lc in intent.vendor_params:
+                vendor_key = vendor_lc
+            else:
+                for key in intent.vendor_params.keys():
+                    if key in vendor_lc:
+                        vendor_key = key
+                        break
+
+            if vendor_key:
+                vendor_required = intent.vendor_params.get(vendor_key, {}).get("required_params")
+                if vendor_required:
+                    required_params = vendor_required
         
+        param_aliases: Dict[str, List[str]] = {
+            "default_router": ["gateway"],
+            "gateway": ["default_router"],
+        }
+
         missing = []
-        for req in intent.required_params:
-            if req not in params or params[req] is None:
+        for req in required_params:
+            req_missing = req not in params or params[req] is None
+            if req_missing:
+                aliases = param_aliases.get(req, [])
+                has_alias = any(alias in params and params[alias] is not None for alias in aliases)
+                if has_alias:
+                    continue
                 missing.append(req)
         return missing
     

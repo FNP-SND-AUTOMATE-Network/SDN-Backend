@@ -4,7 +4,11 @@ from datetime import datetime, timedelta
 from typing import Optional
 import bcrypt
 import os
+import httpx
 
+
+# Global HTTP client for connection pooling (Keep-Alive)
+_http_client = httpx.AsyncClient(timeout=10.0)
 
 class OtpService:
     def __init__(self, prisma_client=None):
@@ -88,8 +92,6 @@ class OtpService:
     async def send_otp_email(self, email: str, otp_code: str, name: str, surname: str, purpose: str = "VERIFY_EMAIL") -> bool:
         """ส่ง OTP ผ่าน email"""
         try:
-            import requests
-            
             # ตรวจสอบ API key
             if not self.resend_api_key:
                 print("ERROR: RESEND_API_KEY is not set!")
@@ -154,7 +156,8 @@ class OtpService:
                 "reply_to": "support@notify.au-nongtota.com"
             }
             
-            response = requests.post(url, json=data, headers=headers)
+            # Use the global HTTPX async client to keep the connection alive (HTTP Keep-Alive)
+            response = await _http_client.post(url, json=data, headers=headers)
             
             if response.status_code == 200:
                 print(f"Email sent successfully to {email}")

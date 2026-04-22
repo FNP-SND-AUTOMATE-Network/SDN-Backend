@@ -15,6 +15,7 @@ from app.api.users import get_current_user
 from fastapi import Depends, Cookie
 from app.core.config import settings as app_settings
 from app.core.csrf import generate_csrf_token
+from app.core.logging import logger
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -77,16 +78,23 @@ async def register(request: RegisterRequest):
             }
         )
         
-        # สร้าง OTP
-        otp_code, expires_at = await otp_svc.create_otp_record(request.email)
-        
-        # ส่ง OTP ผ่านอีเมล
-        email_sent = await otp_svc.send_otp_email(request.email, otp_code, request.name, request.surname)
-        
-        if not email_sent:
+        try:
+            # สร้าง OTP
+            otp_code, expires_at = await otp_svc.create_otp_record(request.email)
+            
+            # ส่ง OTP ผ่านอีเมล
+            email_sent = await otp_svc.send_otp_email(request.email, otp_code, request.name, request.surname)
+            
+            if not email_sent:
+                raise Exception("Email sending service returned False")
+                
+        except Exception:
+            # Rollback: ลบ user ที่เพิ่งสร้างถ้าส่ง OTP ไม่สำเร็จ
+            await prisma_client.user.delete(where={"id": temp_user.id})
+            logger.error(f"Failed to send OTP during registration: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Error in send_otp_email"
+                detail="Failed system to send OTP. Please try again."
             )
         
         return RegisterResponse(
@@ -97,10 +105,10 @@ async def register(request: RegisterRequest):
         
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error in register: {str(e)}"
+            detail="Failed system to send OTP. Please try again."
         )
 
 

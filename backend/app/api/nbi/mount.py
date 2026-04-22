@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, status, Depends, Query # type: ign
 from typing import Dict, Any
 from app.services.odl_mount_service import OdlMountService
 from app.core.logging import logger
-from app.api.users import get_current_user
+from app.api.users import get_current_user, check_engineer_permission
 
 from .models import ErrorCode, MountRequest, MountResponse
 
@@ -66,6 +66,8 @@ async def mount_device(
     """
     try:
         user_id = current_user["id"]
+        # Enforce ENGINEER+ for destructive mount operation
+        check_engineer_permission(current_user)
 
         # Backend policy: /mount is always async-first.
         # Frontend does not control wait strategy here.
@@ -180,15 +182,14 @@ async def mount_device(
 
 
 @router.delete("/devices/{node_id}/mount", response_model=MountResponse)
-async def unmount_device(node_id: str):
+async def unmount_device(
+    node_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     """
-    🔌 Unmount device จาก ODL
-    
-    **Error Codes:**
-    - `DEVICE_NOT_FOUND`: ไม่พบ device
-    - `DEVICE_NOT_MOUNTED`: Device ไม่ได้ mount อยู่
-    - `ODL_UNMOUNT_FAILED`: Unmount failed
+    🔌 Unmount device จาก ODL (requires ENGINEER+)
     """
+    check_engineer_permission(current_user)
     try:
         result = await odl_mount_service.unmount_device(node_id)
         
@@ -466,6 +467,8 @@ async def force_remount_device(
     """
     try:
         user_id = current_user["id"]
+        # Enforce ENGINEER+ for destructive remount operation
+        check_engineer_permission(current_user)
 
         result = await odl_mount_service.force_remount(
             node_id=node_id,

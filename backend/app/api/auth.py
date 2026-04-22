@@ -13,6 +13,8 @@ from app.services.totp_service import TotpService
 from datetime import datetime
 from app.api.users import get_current_user
 from fastapi import Depends, Cookie
+from app.core.config import settings as app_settings
+from app.core.csrf import generate_csrf_token
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -269,12 +271,13 @@ async def login(request: LoginRequest, req: Request, response: Response):
         access_token = user_svc.create_access_token(access_token_data)
         refresh_token = user_svc.create_refresh_token(access_token_data)
         
-        # ตั้งค่า HttpOnly Cookies สำหรับ access token และ refresh token (SameSite=Lax for dev)
+        # ตั้งค่า HttpOnly Cookies สำหรับ access token และ refresh token
+        _secure = app_settings.SECURE_COOKIES
         response.set_cookie(
             key="access_token",
             value=access_token,
             httponly=True,
-            secure=False, # เปลี่ยนเป็น True เมื่อขึ้น Production (HTTPS)
+            secure=_secure,
             samesite="lax",
             max_age=user_svc.access_token_expire_minutes * 60
         )
@@ -282,9 +285,19 @@ async def login(request: LoginRequest, req: Request, response: Response):
             key="refresh_token",
             value=refresh_token,
             httponly=True,
-            secure=False, # เปลี่ยนเป็น True เมื่อขึ้น Production (HTTPS)
+            secure=_secure,
             samesite="lax",
             max_age=7 * 24 * 60 * 60 # 7 วัน
+        )
+        # CSRF token — readable by JS (not HttpOnly) so frontend can attach it as X-CSRF-Token header
+        csrf_token = generate_csrf_token()
+        response.set_cookie(
+            key="csrf_token",
+            value=csrf_token,
+            httponly=False,   # intentionally readable by JS
+            secure=_secure,
+            samesite="strict",
+            max_age=user_svc.access_token_expire_minutes * 60
         )
         
         #สร้าง audit log สำหรับการ login สำเร็จ
@@ -488,11 +501,12 @@ async def verify_totp_login(request: VerifyTotpLoginRequest, response: Response)
             refresh_token = user_svc.create_refresh_token(access_token_data)
             
             # ตั้งค่า HttpOnly Cookies
+            _secure = app_settings.SECURE_COOKIES
             response.set_cookie(
                 key="access_token",
                 value=access_token,
                 httponly=True,
-                secure=False, # Set to True for production
+                secure=_secure,
                 samesite="lax",
                 max_age=user_svc.access_token_expire_minutes * 60
             )
@@ -500,9 +514,19 @@ async def verify_totp_login(request: VerifyTotpLoginRequest, response: Response)
                 key="refresh_token",
                 value=refresh_token,
                 httponly=True,
-                secure=False, # Set to True for production
+                secure=_secure,
                 samesite="lax",
                 max_age=7 * 24 * 60 * 60 # 7 days
+            )
+            # CSRF token — readable by JS
+            csrf_token = generate_csrf_token()
+            response.set_cookie(
+                key="csrf_token",
+                value=csrf_token,
+                httponly=False,
+                secure=_secure,
+                samesite="strict",
+                max_age=user_svc.access_token_expire_minutes * 60
             )
             
             # Audit Log
@@ -766,8 +790,33 @@ async def refresh_token(request: Request, response: Response):
         access_token = user_svc.create_access_token(access_token_data)
         new_refresh_token = user_svc.create_refresh_token(access_token_data)
         
-        response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=user_svc.access_token_expire_minutes * 60)
-        response.set_cookie(key="refresh_token", value=new_refresh_token, httponly=True, secure=False, samesite="lax", max_age=7 * 24 * 60 * 60)
+        _secure = app_settings.SECURE_COOKIES
+        response.set_cookie(
+            key="access_token",
+            value=access_token,
+            httponly=True,
+            secure=_secure,
+            samesite="lax",
+            max_age=user_svc.access_token_expire_minutes * 60
+        )
+        response.set_cookie(
+            key="refresh_token",
+            value=new_refresh_token,
+            httponly=True,
+            secure=_secure,
+            samesite="lax",
+            max_age=7 * 24 * 60 * 60
+        )
+        # Rotate CSRF token on every refresh
+        csrf_token = generate_csrf_token()
+        response.set_cookie(
+            key="csrf_token",
+            value=csrf_token,
+            httponly=False,
+            secure=_secure,
+            samesite="strict",
+            max_age=user_svc.access_token_expire_minutes * 60
+        )
         
         return {"message": "Tokens refreshed"}
     except ValueError as e:
@@ -777,6 +826,8 @@ async def refresh_token(request: Request, response: Response):
 
 @router.post("/logout")
 async def logout(response: Response):
-    response.delete_cookie(key="access_token", samesite="lax", secure=False)
-    response.delete_cookie(key="refresh_token", samesite="lax", secure=False)
+    _secure = app_settings.SECURE_COOKIES
+    response.delete_cookie(key="access_token", samesite="lax", secure=_secure)
+    response.delete_cookie(key="refresh_token", samesite="lax", secure=_secure)
+    response.delete_cookie(key="csrf_token", samesite="strict", secure=_secure)
     return {"message": "Logout successful"}

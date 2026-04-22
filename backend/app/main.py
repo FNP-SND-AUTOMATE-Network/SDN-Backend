@@ -10,8 +10,10 @@ Main Application Entry Point
 - Include ทุก API Router เข้า app
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from contextlib import asynccontextmanager
 from app.api import health, auth, audit, users, device_credentials, local_sites, tags, operating_systems, policies, backups, configuration_templates, device_networks, nbi, interfaces, ipam, device_backups, deployments, chatops, zabbix_webhook, zabbix_dashboard, ws_alerts
 from app.database import set_prisma_client
@@ -21,6 +23,7 @@ from app.services.odl_sync_service import OdlSyncService
 from app.core.config import settings as app_settings
 from app.core.logging import logger
 from app.core.event_bus import event_bus
+from app.core.csrf import is_csrf_exempt, validate_csrf_token
 
 # Lock to prevent concurrent sync runs
 _sync_device_lock = asyncio.Lock()
@@ -199,7 +202,119 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS Configuration
+
+# ── Middleware #1: Security Response Headers ──────────────────────────────────
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """
+    Inject security-related HTTP response headers on every response.
+
+    Headers added:
+    - X-Content-Type-Options: nosniff        — prevent MIME-type sniffing
+    - X-Frame-Options: DENY                  — block iframe embedding (clickjacking)
+    - X-XSS-Protection: 1; mode=block       — enable XSS filter (legacy browsers)
+    - Referrer-Policy: strict-origin-when-cross-origin
+    - Content-Security-Policy                — restrict resource origins
+    - Permissions-Policy                     — disable unused browser features
+    - Strict-Transport-Security              — enforce HTTPS (production only)
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=(), payment=()"
+        )
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            # Swagger UI JS is served from cdn.jsdelivr.net
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            # Swagger UI CSS + Google Fonts
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
+            "font-src 'self' https://fonts.gstatic.com; "
+            # Swagger UI logo from FastAPI CDN + local data URIs
+            "img-src 'self' data: blob: https://fastapi.tiangolo.com; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'"
+        )
+        # HSTS: only in production where HTTPS is guaranteed
+        if app_settings.APP_ENV == "production":
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains; preload"
+            )
+
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+
+# ── Middleware #2: CSRF Protection ────────────────────────────────────────────
+class CSRFMiddleware(BaseHTTPMiddleware):
+    """
+    Double-Submit Cookie CSRF Protection.
+
+    For every state-changing request (POST/PUT/DELETE/PATCH) that uses a
+    cookie-based session, the frontend must send the `X-CSRF-Token` header
+    whose value matches the `csrf_token` cookie.
+
+    Exempt:
+    - Safe HTTP methods (GET, HEAD, OPTIONS)
+    - Auth endpoints (/auth/*) — no cookie yet at login time
+    - Zabbix webhook (/api/v1/zabbix/) — uses its own Bearer token
+    - Requests authenticated via Bearer token only (no access_token cookie)
+      — allows API clients / curl / Postman to work without CSRF
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        # Skip if CSRF globally disabled (dev convenience, never in prod)
+        if not app_settings.CSRF_ENABLED:
+            return await call_next(request)
+
+        path = request.url.path
+        method = request.method
+
+        # Exempt safe methods and known bypass paths
+        if is_csrf_exempt(path, method):
+            return await call_next(request)
+
+        # If request is using Bearer token only (no cookie), skip CSRF
+        # This lets API clients (curl, Postman, external services) work
+        has_cookie_session = bool(request.cookies.get("access_token"))
+        has_bearer = request.headers.get("Authorization", "").startswith("Bearer ")
+        if has_bearer and not has_cookie_session:
+            return await call_next(request)
+
+        # Cookie-authenticated request — enforce CSRF
+        csrf_cookie = request.cookies.get("csrf_token")
+        csrf_header = request.headers.get("X-CSRF-Token")
+
+        if not validate_csrf_token(csrf_cookie, csrf_header):
+            logger.warning(
+                f"[CSRF] Rejected {method} {path} — "
+                f"cookie={'<set>' if csrf_cookie else '<missing>'}, "
+                f"header={'<set>' if csrf_header else '<missing>'}"
+            )
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": "CSRF token missing or invalid. "
+                              "Include X-CSRF-Token header matching the csrf_token cookie."
+                }
+            )
+
+        return await call_next(request)
+
+
+app.add_middleware(CSRFMiddleware)
+
+
+# ── CORS Configuration ────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -209,7 +324,7 @@ app.add_middleware(
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allow_headers=["*"],
+    allow_headers=["*", "X-CSRF-Token"],
 )
 
 # Include routers

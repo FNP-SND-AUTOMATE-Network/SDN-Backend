@@ -45,4 +45,17 @@ class Settings(BaseModel):
     ZABBIX_API_URL: str = os.getenv("ZABBIX_API_URL", "http://zabbix-web:8080/api_jsonrpc.php")
     ZABBIX_API_TOKEN: str = os.getenv("ZABBIX_API_TOKEN", "")
 
+    # ── Security Settings ────────────────────────────────────────────────────
+    # APP_ENV: "development" | "production"
+    # ใน production ให้ตั้ง SECURE_COOKIES=true และ APP_ENV=production
+    APP_ENV: str = os.getenv("APP_ENV", "development")
+
+    # SECURE_COOKIES: ถ้า True จะตั้ง Secure flag บน auth cookies (HTTPS เท่านั้น)
+    # เปลี่ยนเป็น true เมื่อ deploy บน HTTPS
+    SECURE_COOKIES: bool = os.getenv("SECURE_COOKIES", "false").lower() == "true"
+
+    # CSRF_ENABLED: ถ้า False จะ bypass CSRF check ทั้งหมด (ใช้ได้แต่ dev เท่านั้น)
+    # ควรเปิดไว้เสมอเมื่อ deploy (default: true)
+    CSRF_ENABLED: bool = os.getenv("CSRF_ENABLED", "true").lower() == "true"
+
 settings = Settings()

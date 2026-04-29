@@ -3,6 +3,7 @@ from typing import Optional, Tuple
 from prisma import Prisma
 from datetime import datetime
 import base64
+from app.core.logging import logger
 
 class TotpService:
     def __init__(self, prisma_client: Prisma):
@@ -58,9 +59,7 @@ class TotpService:
 
             return True
         except Exception as e:
-            import traceback
-            error_detail = f"Error enabling TOTP: {type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
-            print(error_detail)
+            logger.error(f"Error enabling TOTP: {type(e).__name__}: {e}")
             return False
 
     async def disable_totp(self, user_id: str) -> bool:
@@ -78,25 +77,15 @@ class TotpService:
             
             return True
         except Exception as e:
-            import traceback
-            error_detail = f"Error disabling TOTP: {type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
-            print(error_detail)
+            logger.error(f"Error disabling TOTP: {type(e).__name__}: {e}")
             return False
 
     async def get_user_totp_secret(self, user_id: str) -> Optional[str]:
         #ดึง Secret ของ User (สำหรับตรวจสอบตอน Login)
         try:
-            print(f"[DEBUG] Getting TOTP secret for user_id: {user_id}")
             totp_record = await self.prisma.usertotp.find_unique(where={"userId": user_id})
             
-            print(f"[DEBUG] TOTP record found: {totp_record is not None}")
-            if totp_record:
-                print(f"[DEBUG] TOTP enabled: {totp_record.enabled}")
-                print(f"[DEBUG] Secret type: {type(totp_record.secret)}")
-                print(f"[DEBUG] Secret dir: {dir(totp_record.secret)}")
-            
             if not totp_record or not totp_record.enabled:
-                print(f"[DEBUG] Returning None - no record or not enabled")
                 return None
             
             # Prisma Base64 object เก็บ base64 string ไว้ใน attribute
@@ -107,36 +96,29 @@ class TotpService:
             try:
                 if hasattr(secret_data, '__bytes__'):
                     secret_bytes = secret_data.__bytes__()
-                    print(f"[DEBUG] Got bytes via __bytes__: {len(secret_bytes)} bytes")
                     secret = secret_bytes.decode('utf-8')
-                    print(f"[DEBUG] Decoded to string: {len(secret)} chars")
                     return secret
-            except Exception as e1:
-                print(f"[DEBUG] __bytes__ failed: {e1}")
+            except Exception:
+                pass
             
             # วิธีที่ 2: ลอง convert เป็น str แล้ว decode base64
             try:
                 secret_str = str(secret_data)
-                print(f"[DEBUG] Converted to str: {secret_str[:20]}...")
                 # ถ้า str เป็น base64 encoded ให้ decode
                 secret_bytes = base64.b64decode(secret_str)
                 secret = secret_bytes.decode('utf-8')
-                print(f"[DEBUG] Decoded from base64 string: {len(secret)} chars")
                 return secret
-            except Exception as e2:
-                print(f"[DEBUG] base64 decode failed: {e2}")
+            except Exception:
+                pass
             
             # วิธีที่ 3: ถ้าเป็น bytes object โดยตรง
             if isinstance(secret_data, bytes):
                 secret = secret_data.decode('utf-8')
-                print(f"[DEBUG] Direct bytes decode: {len(secret)} chars")
                 return secret
             
-            print(f"[ERROR] All decode methods failed")
+            logger.error("All TOTP secret decode methods failed")
             return None
             
         except Exception as e:
-            import traceback
-            error_detail = f"Error getting TOTP secret: {type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
-            print(f"[ERROR] {error_detail}")
+            logger.error(f"Error getting TOTP secret: {type(e).__name__}: {e}")
             return None

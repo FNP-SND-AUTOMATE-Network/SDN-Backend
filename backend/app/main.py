@@ -315,17 +315,27 @@ app.add_middleware(CSRFMiddleware)
 
 
 # ── CORS Configuration ────────────────────────────────────────────────────────
+# Load CORS origins from settings (comma-separated env var)
+_cors_origins = [origin.strip() for origin in app_settings.CORS_ORIGINS.split(",") if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # React frontend (development)
-        "http://127.0.0.1:3000",  # Alternative localhost format
-        # Add production domains here when deploying
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*", "X-CSRF-Token"],
 )
+
+
+# ── Global Exception Handler ──────────────────────────────────────────────────
+# Catch unhandled exceptions and return a safe 500 response
+# without leaking stack traces or internal details (Finding #23)
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception on {request.method} {request.url.path}: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal error occurred. Please try again later."},
+    )
 
 # Include routers
 app.include_router(health.router)

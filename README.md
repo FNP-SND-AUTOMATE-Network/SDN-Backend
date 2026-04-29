@@ -1,8 +1,8 @@
 # FNP SDN Backend API
 
-Backend API สำหรับระบบจัดการ Software-Defined Network (SDN) ที่พัฒนาด้วย FastAPI, Prisma และ PostgreSQL
+Backend API for the Software-Defined Network (SDN) management system, developed with FastAPI, Prisma, and PostgreSQL.
 
-## 🚀 เทคโนโลยีที่ใช้
+## 🚀 Technologies Used
 
 - **FastAPI** - Modern Python web framework
 - **Prisma** - Next-generation ORM
@@ -13,15 +13,15 @@ Backend API สำหรับระบบจัดการ Software-Defined Ne
 - **Bcrypt** - Password hashing
 - **Resend** - Email service
 
-## 📦 ความต้องการของระบบ
+## 📦 System Requirements
 
 - Python 3.12.2
 - Docker & Docker Compose
-- supabase (postgreSQL)
+- Supabase (PostgreSQL)
 - FastAPI 
 - Prisma ORM
 
-## 🛠️ การติดตั้งและเริ่มต้นใช้งาน
+## 🛠️ Installation and Setup
 
 ### 1. Clone Repository
 
@@ -30,33 +30,34 @@ git clone https://github.com/FNP-SND-AUTOMATE-Network/SDN-Backend.git
 cd SDN-Backend
 ```
 
-### 2. ตั้งค่า Environment Variables
+### 2. Configure Environment Variables
 
-สร้างไฟล์ `.env` ใน directory `backend/`:
+Create a `.env` file in the `backend/` directory.
 
-### 3. ติดตั้ง Dependencies
+### 3. Install Dependencies
 
-#### วิธีที่ 1: ใช้ Docker (แนะนำ)
+#### Method 1: Using Docker (Recommended)
 
 ```bash
 cd backend
 docker-compose up -d
 ```
 
-#### วิธีที่ 2: ติดตั้งแบบ Local
+#### Method 2: Local Installation
 
 ```bash
 cd backend
 
-# สร้าง virtual environment
+# Create a virtual environment
 python -m venv .venv
-source .venv\Scripts\activate  # Windows
+source .venv/bin/activate  # macOS/Linux
+# source .venv\Scripts\activate  # Windows
 
-# ติดตั้ง dependencies
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 4. เริ่มต้น Server
+### 4. Start the Server
 
 #### Docker:
 
@@ -64,11 +65,11 @@ pip install -r requirements.txt
 docker-compose up
 ```
 
-Server จะรันที่: `http://localhost:8000`
+The server will run at: `http://localhost:8000`
 
 API Documentation (Swagger): `http://localhost:8000/docs`
 
-## 📁 โครงสร้างโปรเจค
+## 📁 Project Structure
 
 ```
 backend/
@@ -107,74 +108,74 @@ backend/
 ### Database Migrations
 
 ```bash
-# สร้าง migration ใหม่
+# Create a new migration
 cd backend
 prisma migrate dev --name migration_name
 
 # Apply migrations (production)
 prisma migrate deploy
 
-# Reset database (ระวัง: ลบข้อมูลทั้งหมด!)
+# Reset database (Warning: Deletes all data!)
 prisma migrate reset
 ```
 
 ## 💻 Development
 
-### การรัน Tests
+### Running Tests
 
 ```bash
-# ติดตั้ง pytest
+# Install pytest
 pip install pytest pytest-asyncio
 
-# รัน tests
+# Run tests
 pytest
 ```
 
 ### Code Style
 
-โปรเจคใช้:
+This project utilizes:
 
-- **Type hints** - ระบุ type ให้ชัดเจน
-- **Pydantic models** - Validation
+- **Type hints** - Clear type definitions
+- **Pydantic models** - Data validation
 - **Async/await** - Asynchronous programming
-- **Logging** - ใช้ `logging` module แทน `print`
+- **Logging** - Uses the `logging` module instead of `print`
 
-### การเพิ่ม Endpoint ใหม่
+### Adding a New Endpoint
 
-1. สร้าง Pydantic models ใน `app/models/`
-2. สร้าง service logic ใน `app/services/`
-3. สร้าง API endpoint ใน `app/api/`
-4. Register router ใน `app/main.py`
+1. Create Pydantic models in `app/models/`
+2. Implement service logic in `app/services/`
+3. Create the API endpoint in `app/api/`
+4. Register the router in `app/main.py`
 
 ## 🐛 Troubleshooting
 
-### ปัญหาที่พบบ่อย
+### Common Issues
 
 #### 1. `ModuleNotFoundError: No module named 'pyotp'`
 
-**แก้ไข:**
+**Fix:**
 
 ```bash
-# ถ้าใช้ Docker
+# If using Docker
 docker exec -it backend-backend-1 pip install pyotp
 docker restart backend-backend-1
 
-# หรือ rebuild
+# Or rebuild
 docker-compose build backend
 docker-compose up -d
 ```
 
 #### 2. Database connection error
 
-**ตรวจสอบ:**
+**Check:**
 
-- `.env` มี `DATABASE_URL` ถูกต้องหรือไม่
-- PostgreSQL รันอยู่หรือไม่
+- Is `DATABASE_URL` correct in the `.env` file?
+- Is PostgreSQL running?
 - Network connection
 
-#### 3. Prisma Client ไม่ generate
+#### 3. Prisma Client not generating
 
-**แก้ไข:**
+**Fix:**
 
 ```bash
 cd backend
@@ -183,11 +184,11 @@ prisma generate
 
 #### 4. CORS errors
 
-**แก้ไข:** ตรวจสอบ `app/main.py` ว่ามี CORS middleware และ allowed origins ถูกต้อง
+**Fix:** Verify `app/main.py` to ensure CORS middleware and allowed origins are correctly configured.
 
 ### Debug Mode
 
-เปิด debug logging:
+Enable debug logging:
 
 ```python
 # app/main.py
@@ -198,9 +199,9 @@ logging.basicConfig(level=logging.DEBUG)
 ### Docker Logs
 
 ```bash
-# ดู logs
+# View logs
 docker logs -f backend-backend-1
 
-# ดู logs แบบ real-time
+# View logs in real-time
 docker-compose logs -f backend
 ```

@@ -11,13 +11,15 @@ User Service
 """
 
 import bcrypt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 import os
 from jose import jwt
 from jose.exceptions import JWTError, JWSError, JWEError, JOSEError
 from app.models.auth import RegisterRequest
 from app.models.user import UserCreateRequest, UserUpdateRequest, UserFilter
+from app.core.config import settings
+from app.core.logging import logger
 
 
 class UserService:
@@ -30,9 +32,10 @@ class UserService:
     """
     def __init__(self, prisma_client=None):
         self.prisma = prisma_client
-        self.secret_key = os.getenv("SECRET_KEY")
-        self.algorithm = os.getenv("ALGORITHM", "HS256")
-        self.access_token_expire_minutes = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+        # Use centralized config (validated at import time) instead of os.getenv
+        self.secret_key = settings.SECRET_KEY
+        self.algorithm = settings.JWT_ALGORITHM
+        self.access_token_expire_minutes = settings.ACCESS_TOKEN_EXPIRE_MINUTES
     
     def hash_password(self, password: str) -> str:
         """เข้ารหัสรหัสผ่านด้วย bcrypt (เข้ารหัสทางเดียว One-way, ถอดรหัสไม่ได้)"""
@@ -58,7 +61,7 @@ class UserService:
                 "surname": register_data.surname,
                 "password": hashed_password,
                 "emailVerified": True,
-                "updatedAt": datetime.now()
+                "updatedAt": datetime.now(timezone.utc)
             }
         )
         
@@ -110,7 +113,7 @@ class UserService:
     def create_access_token(self, data: dict) -> str:
         #สร้าง JWT access token
         to_encode = data.copy()
-        expire = datetime.utcnow() + timedelta(minutes=self.access_token_expire_minutes)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=self.access_token_expire_minutes)
         to_encode.update({"exp": expire, "type": "access"})
         encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
         return encoded_jwt
@@ -118,16 +121,22 @@ class UserService:
     def create_refresh_token(self, data: dict) -> str:
         #สร้าง JWT refresh token
         to_encode = data.copy()
-        expire = datetime.utcnow() + timedelta(days=7)
+        expire = datetime.now(timezone.utc) + timedelta(days=7)
         to_encode.update({"exp": expire, "type": "refresh"})
         encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
         return encoded_jwt
     
+    # Dummy hash for constant-time comparison when user is not found (Finding #5)
+    _DUMMY_HASH = bcrypt.hashpw(b"dummy_constant_time", bcrypt.gensalt()).decode('utf-8')
+
     async def authenticate_user(self, email: str, password: str) -> Optional[dict]:
         #ตรวจสอบ email และ password และคืนค่าข้อมูลผู้ใช้
         user = await self.get_user_by_email(email)
         
         if not user:
+            # Constant-time: always run bcrypt even for non-existent users
+            # to prevent timing-based user enumeration (Finding #5)
+            self.verify_password("dummy", self._DUMMY_HASH)
             return None
         
         # ตรวจสอบว่า email ได้รับการยืนยันแล้วหรือไม่
@@ -144,8 +153,10 @@ class UserService:
         #ตรวจสอบ JWT token และคืนค่า user_id
         try:
             payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
-            if payload.get("type") and payload.get("type") != "access":
-                pass # Accept older tokens without type for backward compatibility, but if type is specified it must be access
+            token_type = payload.get("type")
+            # Reject known non-access token types to prevent token confusion (Finding #3)
+            if token_type and token_type != "access":
+                raise ValueError(f"Expected access token, got '{token_type}'")
                 
             user_id: str = payload.get("sub")
             if user_id is None:
@@ -196,7 +207,7 @@ class UserService:
                 }
             return None
         except Exception as e:
-            print(f"Error getting user by ID: {e}")
+            logger.error(f"Error getting user by ID: {e}")
             return None
     
     # ========= CRUD Operations =========
@@ -263,7 +274,7 @@ class UserService:
                 raise ValueError("OTP service is required for user creation")
             
         except Exception as e:
-            print(f"Error creating user by admin: {e}")
+            logger.error(f"Error creating user by admin: {e}")
             raise e
     
     async def get_users_list(self, page: int = 1, page_size: int = 10, filters: Optional[UserFilter] = None) -> dict:
@@ -333,7 +344,7 @@ class UserService:
             }
             
         except Exception as e:
-            print(f"Error getting users list: {e}")
+            logger.error(f"Error getting users list: {e}")
             raise e
     
     async def get_user_detail_by_id(self, user_id: str) -> Optional[dict]:
@@ -367,7 +378,7 @@ class UserService:
             }
             
         except Exception as e:
-            print(f"Error getting user detail: {e}")
+            logger.error(f"Error getting user detail: {e}")
             return None
     
     async def update_user_by_id(self, user_id: str, update_data: UserUpdateRequest) -> Optional[dict]:
@@ -390,7 +401,7 @@ class UserService:
                     raise ValueError("ต้องยืนยันอีเมลก่อนเปลี่ยน role")
             
             # เตรียมข้อมูลสำหรับ update
-            update_dict = {"updatedAt": datetime.now()}
+            update_dict = {"updatedAt": datetime.now(timezone.utc)}
             
             if update_data.email:
                 update_dict["email"] = update_data.email
@@ -424,7 +435,7 @@ class UserService:
             }
             
         except Exception as e:
-            print(f"Error updating user: {e}")
+            logger.error(f"Error updating user: {e}")
             raise e
     
     async def promote_user_role_after_verification(self, user_id: str, target_role: str) -> Optional[dict]:
@@ -443,7 +454,7 @@ class UserService:
                 where={"id": user_id},
                 data={
                     "role": target_role,
-                    "updatedAt": datetime.now()
+                    "updatedAt": datetime.now(timezone.utc)
                 }
             )
             
@@ -460,7 +471,7 @@ class UserService:
             }
             
         except Exception as e:
-            print(f"Error promoting user role: {e}")
+            logger.error(f"Error promoting user role: {e}")
             raise e
     
     async def delete_user_by_id(self, user_id: str) -> bool:
@@ -485,7 +496,7 @@ class UserService:
             return True
             
         except Exception as e:
-            print(f"Error deleting user: {e}")
+            logger.error(f"Error deleting user: {e}")
             raise e
     
     async def change_user_password(self, user_id: str, current_password: str, new_password: str) -> bool:
@@ -508,12 +519,12 @@ class UserService:
                 where={"id": user_id},
                 data={
                     "password": new_hashed_password,
-                    "updatedAt": datetime.now()
+                    "updatedAt": datetime.now(timezone.utc)
                 }
             )
             
             return True
             
         except Exception as e:
-            print(f"Error changing password: {e}")
+            logger.error(f"Error changing password: {e}")
             raise e

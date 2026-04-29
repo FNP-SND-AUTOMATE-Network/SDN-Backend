@@ -14,7 +14,7 @@ from app.models.ipam import (
 )
 from app.services.phpipam_service import PhpipamService
 from app.database import get_prisma_client, is_prisma_client_ready
-from app.api.users import get_current_user
+from app.api.users import get_current_user, check_engineer_permission
 
 router = APIRouter(prefix="/ipam", tags=["IP Address Management"])
 
@@ -30,14 +30,6 @@ def get_phpipam_service():
     
     return phpipam_service
 
-
-def check_engineer_permission(current_user: dict):
-    """ตรวจสอบว่าเป็น ENGINEER, ADMIN หรือ OWNER"""
-    if current_user["role"] not in ["ENGINEER", "ADMIN", "OWNER"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only ENGINEER, ADMIN, or OWNER can manage IP addresses"
-        )
 
 
 # ========= Subnet Endpoints =========

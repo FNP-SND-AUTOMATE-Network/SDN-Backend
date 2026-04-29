@@ -20,6 +20,7 @@ from app.models.device_network import (
 )
 from prisma import Prisma
 from app.core.constants import ALLOWED_ROLES
+from app.utils.request_helpers import get_client_ip, get_user_agent
 import logging
 
 logger = logging.getLogger(__name__)
@@ -116,11 +117,8 @@ async def create_device(
             )
 
         try:
-            client_ip = request.client.host if request.client else "unknown"
-            if "x-forwarded-for" in request.headers:
-                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
-            elif "x-real-ip" in request.headers:
-                client_ip = request.headers["x-real-ip"]
+            client_ip = get_client_ip(request)
+            user_agent = get_user_agent(request)
                 
             await audit_svc.create_device_audit(
                 actor_user_id=current_user["id"],
@@ -129,7 +127,7 @@ async def create_device(
                 device_name=device.device_name,
                 changes=device_data.dict(exclude_unset=True),
                 ip_address=client_ip,
-                user_agent=request.headers.get("user-agent", "unknown")
+                user_agent=user_agent
             )
         except Exception as e:
             logger.error(f"Failed to create audit log: {e}")
@@ -175,11 +173,8 @@ async def update_device(
             )
 
         try:
-            client_ip = request.client.host if request.client else "unknown"
-            if "x-forwarded-for" in request.headers:
-                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
-            elif "x-real-ip" in request.headers:
-                client_ip = request.headers["x-real-ip"]
+            client_ip = get_client_ip(request)
+            user_agent = get_user_agent(request)
                 
             await audit_svc.create_device_audit(
                 actor_user_id=current_user["id"],
@@ -188,7 +183,7 @@ async def update_device(
                 device_name=device.device_name,
                 changes=update_data.dict(exclude_unset=True),
                 ip_address=client_ip,
-                user_agent=request.headers.get("user-agent", "unknown")
+                user_agent=user_agent
             )
         except Exception as e:
             logger.error(f"Failed to create audit log: {e}")
@@ -240,11 +235,8 @@ async def delete_device(
             )
 
         try:
-            client_ip = request.client.host if request.client else "unknown"
-            if "x-forwarded-for" in request.headers:
-                client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
-            elif "x-real-ip" in request.headers:
-                client_ip = request.headers["x-real-ip"]
+            client_ip = get_client_ip(request)
+            user_agent = get_user_agent(request)
                 
             await audit_svc.create_device_audit(
                 actor_user_id=current_user["id"],
@@ -252,7 +244,7 @@ async def delete_device(
                 device_id=device_id,
                 device_name=old_device.device_name,
                 ip_address=client_ip,
-                user_agent=request.headers.get("user-agent", "unknown")
+                user_agent=user_agent
             )
         except Exception as e:
             logger.error(f"Failed to create audit log: {e}")

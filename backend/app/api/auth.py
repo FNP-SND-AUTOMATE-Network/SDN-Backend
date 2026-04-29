@@ -10,12 +10,13 @@ from app.services.otp_service import OtpService
 from app.services.user_service import UserService
 from app.services.audit_service import AuditService
 from app.services.totp_service import TotpService
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from app.api.users import get_current_user
 from fastapi import Depends, Cookie
 from app.core.config import settings as app_settings
 from app.core.csrf import generate_csrf_token
 from app.core.logging import logger
+from app.utils.request_helpers import get_client_ip, get_user_agent
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -88,13 +89,13 @@ async def register(request: RegisterRequest):
             if not email_sent:
                 raise Exception("Email sending service returned False")
                 
-        except Exception:
+        except Exception as e:
             # Rollback: ลบ user ที่เพิ่งสร้างถ้าส่ง OTP ไม่สำเร็จ
             await prisma_client.user.delete(where={"id": temp_user.id})
             logger.error(f"Failed to send OTP during registration: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed system to send OTP. Please try again."
+                detail="Failed to send OTP. Please try again."
             )
         
         return RegisterResponse(
@@ -108,7 +109,7 @@ async def register(request: RegisterRequest):
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed system to send OTP. Please try again."
+            detail="Failed to send OTP. Please try again."
         )
 
 
@@ -145,14 +146,8 @@ async def verify_otp(request: VerifyOtpRequest, req: Request):
         
         # สร้าง audit log สำหรับการสมัครสมาชิกสำเร็จ
         try:
-            # ดึง IP address
-            client_ip = req.client.host
-            if "x-forwarded-for" in req.headers:
-                client_ip = req.headers["x-forwarded-for"].split(",")[0].strip()
-            elif "x-real-ip" in req.headers:
-                client_ip = req.headers["x-real-ip"]
-            
-            user_agent = req.headers.get("user-agent")
+            client_ip = get_client_ip(req)
+            user_agent = get_user_agent(req)
             
             await audit_svc.create_register_audit(
                 user_id=updated_user.id,
@@ -160,7 +155,7 @@ async def verify_otp(request: VerifyOtpRequest, req: Request):
                 user_agent=user_agent
             )
         except Exception as audit_error:
-            print(f"Error creating register audit log: {audit_error}")
+            logger.warning(f"Error creating register audit log: {audit_error}")
             # ไม่ให้ audit error หยุดการทำงานหลัก
         
         return VerifyOtpResponse(
@@ -173,9 +168,10 @@ async def verify_otp(request: VerifyOtpRequest, req: Request):
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error in verify_otp: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error in verify_otp: {str(e)}"
+            detail="An internal error occurred during OTP verification."
         )
 
 
@@ -220,9 +216,10 @@ async def resend_otp(request: ResendOtpRequest):
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error in resend_otp: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error in resend_otp: {str(e)}"
+            detail="An internal error occurred while resending OTP."
         )
 
 
@@ -242,22 +239,18 @@ async def login(request: LoginRequest, req: Request, response: Response):
             )
         
         #ตรวจสอบว่ามีการเปิดใช้งาน TOTP หรือไม่
-        print(f"[DEBUG] Checking TOTP for user: {user['id']}")
         totp_secret = await totp_svc.get_user_totp_secret(user["id"])
-        print(f"[DEBUG] TOTP secret result: {totp_secret is not None}")
         
         if totp_secret:
-            print(f"[DEBUG] Creating temp_token for 2FA")
             # สร้าง temporary token สำหรับยืนยัน TOTP
             temp_token_data = {
                 "sub": user["id"],
                 "user_id": user["id"],
                 "email": user["email"],
                 "totp_required": True,
-                "exp": datetime.utcnow().timestamp() + 300  # หมดอายุใน 5 นาที
+                "exp": datetime.now(timezone.utc).timestamp() + 300  # หมดอายุใน 5 นาที
             }
             temp_token = user_svc.create_access_token(temp_token_data)
-            print(f"[DEBUG] temp_token created: {temp_token[:20]}...")
             
             return LoginResponse(
                 message="Please verify TOTP code",
@@ -310,14 +303,8 @@ async def login(request: LoginRequest, req: Request, response: Response):
         
         #สร้าง audit log สำหรับการ login สำเร็จ
         try:
-            #ดึง IP address
-            client_ip = req.client.host
-            if "x-forwarded-for" in req.headers:
-                client_ip = req.headers["x-forwarded-for"].split(",")[0].strip()
-            elif "x-real-ip" in req.headers:
-                client_ip = req.headers["x-real-ip"]
-            
-            user_agent = req.headers.get("user-agent")
+            client_ip = get_client_ip(req)
+            user_agent = get_user_agent(req)
             
             await audit_svc.create_login_audit(
                 user_id=user["id"],
@@ -325,7 +312,7 @@ async def login(request: LoginRequest, req: Request, response: Response):
                 user_agent=user_agent
             )
         except Exception as audit_error:
-            print(f"Error creating login audit log: {audit_error}")
+            logger.warning(f"Error creating login audit log: {audit_error}")
             #ไม่ให้ audit error หยุดการทำงานหลัก
         
         return LoginResponse(
@@ -342,9 +329,10 @@ async def login(request: LoginRequest, req: Request, response: Response):
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error in login: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error in login: {str(e)}"
+            detail="An internal error occurred during login."
         )
 
 
@@ -369,9 +357,10 @@ async def setup_totp(
         )
         
     except Exception as e:
+        logger.error(f"Error in setup_totp: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error in setup_totp: {str(e)}"
+            detail="An internal error occurred during TOTP setup."
         )
 
 
@@ -416,7 +405,7 @@ async def verify_totp_setup(
                 details={"method": "TOTP"}
             )
         except Exception as audit_error:
-            print(f"Error creating audit log: {audit_error}")
+            logger.warning(f"Error creating audit log: {audit_error}")
             # ไม่ให้ audit error หยุดการทำงานหลัก
         
         return {"message": "TOTP enabled successfully"}
@@ -430,10 +419,10 @@ async def verify_totp_setup(
             detail=f"Invalid request data: {str(e)}"
         )
     except Exception as e:
-        print(f"Error in verify_totp_setup: {type(e).__name__}: {str(e)}")
+        logger.error(f"Error in verify_totp_setup: {type(e).__name__}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error in verify_totp_setup: {str(e)}"
+            detail="An internal error occurred during TOTP setup verification."
         )
 
 
@@ -442,63 +431,52 @@ async def verify_totp_setup(
 @router.post("/mfa-verify-totp-login", response_model=LoginResponse)
 async def verify_totp_login(request: VerifyTotpLoginRequest, response: Response):
     try:
-        print(f"[DEBUG] Verifying TOTP login, OTP code: {request.otp_code}")
+        logger.debug("Verifying TOTP login")
         #Get initialized services
         _, user_svc, audit_svc, totp_svc = get_services()
         
         #ตรวจสอบ temp token
         try:
-            print(f"[DEBUG] Verifying temp_token...")
             token_data = user_svc.verify_token(request.temp_token)
-            print(f"[DEBUG] Token data: {token_data}")
             
             if not token_data.get("totp_required"):
-                print(f"[DEBUG] Token does not have totp_required flag")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Token ไม่ถูกต้องหรือไม่รองรับการยืนยัน TOTP"
+                    detail="Token is invalid or does not support TOTP verification"
                 )
             
             user_id = token_data.get("user_id")
             if not user_id:
-                print(f"[DEBUG] No user_id in token")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Invalid Token"
                 )
             
-            print(f"[DEBUG] Getting user by id: {user_id}")
             #ดึงข้อมูลผู้ใช้
             user = await user_svc.get_user_by_id(user_id)
             if not user:
-                print(f"[DEBUG] User not found")
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="User not found"
                 )
             
-            print(f"[DEBUG] Getting TOTP secret for user")
             # ดึง TOTP secret
             totp_secret = await totp_svc.get_user_totp_secret(user_id)
             if not totp_secret:
-                print(f"[DEBUG] No TOTP secret found")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="TOTP not found"
                 )
             
-            print(f"[DEBUG] Verifying TOTP code")
             # ตรวจสอบรหัส TOTP
             is_valid = totp_svc.verify_totp(totp_secret, request.otp_code)
-            print(f"[DEBUG] TOTP verification result: {is_valid}")
             
             if not is_valid:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=" 2FA 6-digit code expired or incorrect please try again "
+                    detail="2FA 6-digit code expired or incorrect, please try again"
                 )
             
-            print(f"[DEBUG] Creating access token")
             # สร้าง access token จริง
             access_token_data = {
                 "sub": user["id"],
@@ -545,9 +523,9 @@ async def verify_totp_login(request: VerifyTotpLoginRequest, response: Response)
                     details={"method": "TOTP", "status": "success"}
                 )
             except Exception as audit_error:
-                print(f"Error creating audit log: {audit_error}")
+                logger.warning(f"Error creating audit log: {audit_error}")
             
-            print(f"[DEBUG] Login successful")
+            logger.debug("TOTP login successful")
             return LoginResponse(
                 message="Login successful",
                 access_token=access_token,
@@ -562,9 +540,7 @@ async def verify_totp_login(request: VerifyTotpLoginRequest, response: Response)
         except HTTPException:
             raise
         except Exception as e:
-            import traceback
-            error_detail = f"Token verification error: {type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
-            print(f"[ERROR] {error_detail}")
+            logger.error(f"Token verification error in TOTP login: {type(e).__name__}: {e}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token expired or invalid"
@@ -574,10 +550,10 @@ async def verify_totp_login(request: VerifyTotpLoginRequest, response: Response)
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error in verify_totp_login: {str(e)}")
+        logger.error(f"Error in verify_totp_login: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error in verify_totp_login: {str(e)}"
+            detail="An internal error occurred during TOTP verification."
         )
 
 
@@ -587,7 +563,7 @@ async def disable_totp(
     current_user: dict = Depends(get_current_user)
 ):
     try:
-        print(f"[DEBUG] Disable TOTP request: password length = {len(request.password)}")
+        logger.debug("Disable TOTP request received")
         _, user_svc, audit_svc, totp_svc = get_services()
         
         #ตรวจสอบรหัสผ่านเพื่อความปลอดภัย
@@ -615,7 +591,7 @@ async def disable_totp(
                 details={"method": "TOTP"}
             )
         except Exception as audit_error:
-            print(f"Error creating audit log: {audit_error}")
+            logger.warning(f"Error creating audit log: {audit_error}")
             # ไม่ให้ audit error หยุดการทำงานหลัก
         
         return {"message": "2FA disabled successfully"}
@@ -623,12 +599,10 @@ async def disable_totp(
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
-        error_detail = f"Error in disable_totp endpoint: {type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
-        print(error_detail)
+        logger.error(f"Error in disable_totp endpoint: {type(e).__name__}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error in disable_totp: {str(e)}"
+            detail="An internal error occurred while disabling TOTP."
         )
 
 
@@ -639,34 +613,39 @@ async def forgot_password(request: ForgotPasswordRequest):
     try:
         otp_svc, user_svc, audit_svc, _ = get_services()
         
+        # Always return a consistent response to prevent email enumeration
+        generic_response = ForgotPasswordResponse(
+            message="If an account with this email exists, a password reset OTP has been sent.",
+            email=request.email,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=5)
+        )
+        
         # ตรวจสอบว่า email มีอยู่ในระบบหรือไม่
         user = await user_svc.get_user_by_email(request.email)
         if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
+            # Return generic response to prevent email enumeration (Finding #6)
+            return generic_response
         
         # สร้าง OTP สำหรับรีเซ็ตรหัสผ่าน
-        otp_code, expires_at = await otp_svc.create_otp_record(
-            request.email, 
-            purpose="RESET_PASSWORD"
-        )
-        
-        # ส่ง OTP ผ่านอีเมล
-        email_sent = await otp_svc.send_otp_email(
-            request.email, 
-            otp_code, 
-            user.get("name", ""), 
-            user.get("surname", ""),
-            purpose="RESET_PASSWORD"
-        )
-        
-        if not email_sent:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Error in forgot_password: Email not sent"
+        try:
+            otp_code, expires_at = await otp_svc.create_otp_record(
+                request.email, 
+                purpose="RESET_PASSWORD"
             )
+            
+            # ส่ง OTP ผ่านอีเมล
+            email_sent = await otp_svc.send_otp_email(
+                request.email, 
+                otp_code, 
+                user.get("name", ""), 
+                user.get("surname", ""),
+                purpose="RESET_PASSWORD"
+            )
+            
+            if not email_sent:
+                logger.error(f"Failed to send password reset email to {request.email}")
+        except Exception as send_error:
+            logger.error(f"Error in forgot_password OTP flow: {send_error}")
         
         # Audit Log
         try:
@@ -676,20 +655,15 @@ async def forgot_password(request: ForgotPasswordRequest):
                 details={"step": "request", "email": request.email}
             )
         except Exception as audit_error:
-            print(f"Error creating audit log: {audit_error}")
+            logger.warning(f"Error creating audit log: {audit_error}")
         
-        return ForgotPasswordResponse(
-            message="Email sent successfully",
-            email=request.email,
-            expires_at=expires_at
-        )
+        return generic_response
         
-    except HTTPException:
-        raise
     except Exception as e:
+        logger.error(f"Error in forgot_password: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error in forgot_password: {str(e)}"
+            detail="An internal error occurred."
         )
 
 
@@ -728,7 +702,7 @@ async def reset_password(request: ResetPasswordRequest):
             where={"id": user_id},
             data={
                 "password": new_hashed_password,
-                "updatedAt": datetime.now()
+                "updatedAt": datetime.now(timezone.utc)
             }
         )
         
@@ -748,7 +722,7 @@ async def reset_password(request: ResetPasswordRequest):
                 details={"step": "completed", "email": request.email}
             )
         except Exception as audit_error:
-            print(f"Error creating audit log: {audit_error}")
+            logger.warning(f"Error creating audit log: {audit_error}")
         
         return ResetPasswordResponse(
             message="Password reset successfully"
@@ -757,9 +731,10 @@ async def reset_password(request: ResetPasswordRequest):
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error in reset_password: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error in reset_password: {str(e)}"
+            detail="An internal error occurred during password reset."
         )
 
 

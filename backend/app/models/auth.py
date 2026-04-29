@@ -1,6 +1,7 @@
 from pydantic import BaseModel, EmailStr, validator, Field
 from typing import Optional
 from datetime import datetime
+from app.utils.password_utils import validate_password_strength
 
 
 # Register Request
@@ -13,9 +14,7 @@ class RegisterRequest(BaseModel):
 
     @validator('password')
     def validate_password(cls, v):
-        if len(v) < 8:
-            raise ValueError('รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร')
-        return v
+        return validate_password_strength(v)
 
     @validator('confirm_password')
     def passwords_match(cls, v, values, **kwargs):
@@ -176,7 +175,11 @@ class ForgotPasswordResponse(BaseModel):
 class ResetPasswordRequest(BaseModel):
     email: EmailStr
     otp_code: str
-    new_password: str = Field(..., min_length=8, description="รหัสผ่านใหม่ขั้นต่ำ 8 ตัวอักษร")
+    new_password: str = Field(..., min_length=8, description="New password (min 8 chars)")
+
+    @validator('new_password')
+    def validate_new_password(cls, v):
+        return validate_password_strength(v)
     
     @validator('otp_code')
     def validate_otp_code(cls, v):

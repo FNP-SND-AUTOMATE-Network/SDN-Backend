@@ -1,20 +1,3 @@
-"""
-Centralized Configuration
-ศูนย์กลางการตั้งค่าทั้งหมดของแอปพลิเคชัน
-
-หน้าที่หลัก:
-- โหลดค่า Environment Variables จากไฟล์ .env (อยู่ที่ backend/.env)
-- กำหนดค่า Default สำหรับทุกการตั้งค่า
-- ใช้ Pydantic BaseModel เพื่อ validate ค่าที่โหลดมา
-- Export เป็น Singleton `settings` สำหรับใช้ทั่วทั้งแอป
-
-กลุ่มการตั้งค่า:
-- ODL: การเชื่อมต่อ OpenDaylight Controller (URL, Credentials, Timeout, Retry)
-- SYNC: Background Sync สำหรับ Device/Topology (เปิด/ปิด, Interval)
-- CHATOPS: Slack Integration สำหรับแจ้งเตือน (Webhook URL, เปิด/ปิด)
-- ZABBIX: Zabbix Monitoring Integration (API URL, Token)
-"""
-
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -50,6 +33,13 @@ class Settings(BaseModel):
     # ใน production ให้ตั้ง SECURE_COOKIES=true และ APP_ENV=production
     APP_ENV: str = os.getenv("APP_ENV", "development")
 
+    # SECRET_KEY: Required for JWT signing — app will fail-fast if missing
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "")
+
+    # JWT settings (centralised — previously scattered across UserService)
+    JWT_ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+
     # SECURE_COOKIES: ถ้า True จะตั้ง Secure flag บน auth cookies (HTTPS เท่านั้น)
     # เปลี่ยนเป็น true เมื่อ deploy บน HTTPS
     SECURE_COOKIES: bool = os.getenv("SECURE_COOKIES", "false").lower() == "true"
@@ -58,4 +48,16 @@ class Settings(BaseModel):
     # ควรเปิดไว้เสมอเมื่อ deploy (default: true)
     CSRF_ENABLED: bool = os.getenv("CSRF_ENABLED", "true").lower() == "true"
 
+    # CORS: Allowed origins (comma-separated). Defaults to localhost for dev.
+    CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+
+
 settings = Settings()
+
+# ── Fail-fast validation ─────────────────────────────────────────────────────
+if not settings.SECRET_KEY:
+    raise RuntimeError(
+        "FATAL: SECRET_KEY environment variable is not set. "
+        "JWT tokens cannot be signed without it. "
+        "Set SECRET_KEY in your .env file or environment."
+    )

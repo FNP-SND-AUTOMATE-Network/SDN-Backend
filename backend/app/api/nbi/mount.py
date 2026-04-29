@@ -7,6 +7,7 @@ from typing import Dict, Any
 from app.services.odl_mount_service import OdlMountService
 from app.core.logging import logger
 from app.api.users import get_current_user, check_engineer_permission
+from app.utils.request_helpers import validate_path_param
 
 from .models import ErrorCode, MountRequest, MountResponse
 
@@ -65,6 +66,9 @@ async def mount_device(
     - `MOUNT_TIMEOUT`: รอ connection timeout
     """
     try:
+        # Validate path parameter against injection (Finding #17)
+        validate_path_param(node_id, "node_id")
+        
         user_id = current_user["id"]
         # Enforce ENGINEER+ for destructive mount operation
         check_engineer_permission(current_user)

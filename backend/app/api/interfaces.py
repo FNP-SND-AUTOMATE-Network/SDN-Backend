@@ -24,7 +24,7 @@ Network Interfaces API
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import Dict, Any, Optional, List
 from app.database import get_db, get_prisma_client
-from app.api.users import get_current_user
+from app.api.users import get_current_user, check_engineer_permission
 from app.services.interface_service import InterfaceService
 from app.services.interface_discovery_service import InterfaceDiscoveryService
 from app.services.device_profile_service_db import DeviceProfileService
@@ -38,6 +38,7 @@ from app.models.interface import (
 )
 from app.services.phpipam_service import PhpipamService
 from prisma import Prisma
+import asyncio
 
 router = APIRouter(prefix="/interfaces", tags=["Network Interfaces"])
 
@@ -442,47 +443,53 @@ async def sync_interfaces(
         phpipam_svc = PhpipamService()
 
         if phpipam_svc.enabled and rows_to_upsert:
-            for row in rows_to_upsert:
+            # Batch IPAM booking with asyncio.gather + semaphore (Finding #11)
+            semaphore = asyncio.Semaphore(5)  # limit concurrent IPAM calls
+
+            async def _book_one(row: dict) -> dict | None:
                 ip_addr = row.get("ip_address")
                 if not ip_addr:
-                    continue
-
-                try:
-                    result = await phpipam_svc.book_ip(
-                        ip_address=ip_addr,
-                        hostname=f"{node_id}-{row['name']}",
-                        mac_address=row.get("mac_address"),
-                        purpose="Interface IP"
-                    )
-
-                    if result.get("success") and result.get("phpipam_address_id"):
-                        # Update interface record with phpipam_address_id
-                        await prisma.interface.update_many(
-                            where={
-                                "device_id": db_device_id,
-                                "name": row["name"],
-                            },
-                            data={
-                                "phpipam_address_id": result["phpipam_address_id"]
-                            },
+                    return None
+                async with semaphore:
+                    try:
+                        result = await phpipam_svc.book_ip(
+                            ip_address=ip_addr,
+                            hostname=f"{node_id}-{row['name']}",
+                            mac_address=row.get("mac_address"),
+                            purpose="Interface IP"
                         )
+                        if result.get("success") and result.get("phpipam_address_id"):
+                            await prisma.interface.update_many(
+                                where={
+                                    "device_id": db_device_id,
+                                    "name": row["name"],
+                                },
+                                data={
+                                    "phpipam_address_id": result["phpipam_address_id"]
+                                },
+                            )
+                        return {
+                            "interface": row["name"],
+                            "ip_address": ip_addr,
+                            "code": result.get("code"),
+                            "phpipam_address_id": result.get("phpipam_address_id"),
+                            "message": result.get("error_message") or result.get("code"),
+                        }
+                    except Exception as ipam_e:
+                        logger.warning(f"IPAM auto-book failed for {ip_addr}: {ipam_e}")
+                        return {
+                            "interface": row["name"],
+                            "ip_address": ip_addr,
+                            "code": "IPAM_ERROR",
+                            "phpipam_address_id": None,
+                            "message": str(ipam_e),
+                        }
 
-                    ipam_notifications.append({
-                        "interface": row["name"],
-                        "ip_address": ip_addr,
-                        "code": result.get("code"),
-                        "phpipam_address_id": result.get("phpipam_address_id"),
-                        "message": result.get("error_message") or result.get("code"),
-                    })
-                except Exception as ipam_e:
-                    logger.warning(f"IPAM auto-book failed for {ip_addr}: {ipam_e}")
-                    ipam_notifications.append({
-                        "interface": row["name"],
-                        "ip_address": ip_addr,
-                        "code": "IPAM_ERROR",
-                        "phpipam_address_id": None,
-                        "message": str(ipam_e),
-                    })
+            results = await asyncio.gather(
+                *[_book_one(row) for row in rows_to_upsert],
+                return_exceptions=True
+            )
+            ipam_notifications = [r for r in results if r is not None and not isinstance(r, Exception)]
 
         # ── Step 4: Read-back from DB (source of truth) ──────────────────
         db_interfaces = await prisma.interface.find_many(

@@ -33,11 +33,13 @@ Authentication:
   Zabbix ต้องส่ง header: Authorization: Bearer <token>
 """
 
-from fastapi import APIRouter, HTTPException, Header, Request
+from fastapi import APIRouter, HTTPException, Header, Request, Depends
 from typing import Any, Dict, Optional
 from app.services.zabbix_notification_service import zabbix_notification_service
 from app.core.config import settings
 from app.core.logging import logger
+from app.api.users import get_current_user
+import hmac
 
 router = APIRouter(prefix="/api/v1/zabbix", tags=["Zabbix Webhook"])
 
@@ -59,7 +61,8 @@ def _verify_token(authorization: Optional[str]):
     if token.lower().startswith("bearer "):
         token = token[7:]
 
-    if token != expected:
+    # Use constant-time comparison to prevent timing attacks (Finding #19)
+    if not hmac.compare_digest(token, expected):
         raise HTTPException(status_code=403, detail="Invalid webhook token")
 
 
@@ -114,7 +117,9 @@ async def receive_zabbix_event(
 
 
 @router.get("/events")
-async def get_zabbix_events():
+async def get_zabbix_events(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     """
     ดู Zabbix events ที่ประมวลผลแล้ว (recent)
 
@@ -130,7 +135,9 @@ async def get_zabbix_events():
 
 
 @router.get("/stats")
-async def get_zabbix_stats():
+async def get_zabbix_stats(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     """
     ดูสถิติการรับ events จาก Zabbix
 

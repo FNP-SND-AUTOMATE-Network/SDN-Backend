@@ -11,6 +11,8 @@ from app.services.user_service import UserService
 from app.services.audit_service import AuditService
 from app.database import get_prisma_client, is_prisma_client_ready
 from app.utils.role_hierarchy import RoleHierarchy
+from app.utils.request_helpers import get_client_ip, get_user_agent
+from app.core.logging import logger
 
 router = APIRouter(prefix="/users", tags=["User Management"])
 
@@ -83,9 +85,10 @@ async def get_current_user(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Authentication error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Authentication error: {str(e)}"
+            detail="An internal authentication error occurred."
         )
 
 def verify_role(allowed_roles: List[str]) -> Callable:
@@ -136,7 +139,7 @@ async def create_user(
             allowed_roles = RoleHierarchy.get_allowed_creation_roles(current_user["role"])
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"ไม่มีสิทธิ์สร้าง user ด้วย role {request.role.value}. คุณสามารถสร้างได้เฉพาะ: {', '.join(allowed_roles)}"
+                detail=f"You do not have permission to create a user with role '{request.role.value}'. Allowed roles: {', '.join(allowed_roles)}"
             )
         
         user_svc, audit_svc = get_services()
@@ -151,13 +154,8 @@ async def create_user(
         
         # สร้าง audit log
         try:
-            client_ip = req.client.host if req else "unknown"
-            if req and "x-forwarded-for" in req.headers:
-                client_ip = req.headers["x-forwarded-for"].split(",")[0].strip()
-            elif req and "x-real-ip" in req.headers:
-                client_ip = req.headers["x-real-ip"]
-            
-            user_agent = req.headers.get("user-agent") if req else "unknown"
+            client_ip = get_client_ip(req)
+            user_agent = get_user_agent(req)
             
             await audit_svc.create_user_create_audit(
                 actor_user_id=current_user["id"],
@@ -168,7 +166,7 @@ async def create_user(
                 user_agent=user_agent
             )
         except Exception as audit_error:
-            print(f"Error creating audit log: {audit_error}")
+            logger.warning(f"Error creating audit log: {audit_error}")
         
         # สร้าง response message ตามสถานะ
         if new_user.get("requires_otp_verification"):
@@ -193,9 +191,10 @@ async def create_user(
             detail=str(e)
         )
     except Exception as e:
+        logger.error(f"Error creating user: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการสร้างผู้ใช้งาน: {str(e)}"
+            detail="An internal error occurred while creating user."
         )
 
 @router.get("/", response_model=UserListResponse)
@@ -260,7 +259,7 @@ async def get_users(
             # Note: ไม่ทำ audit log สำหรับการดู user list เพราะไม่จำเป็น
             pass
         except Exception as audit_error:
-            print(f"Error creating audit log: {audit_error}")
+            logger.warning(f"Error creating audit log: {audit_error}")
         
         return UserListResponse(
             users=users_list,
@@ -271,9 +270,10 @@ async def get_users(
         )
         
     except Exception as e:
+        logger.error(f"Error fetching user list: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการดึงรายการผู้ใช้งาน: {str(e)}"
+            detail="An internal error occurred while fetching user list."
         )
 
 @router.get("/{user_id}", response_model=UserDetailResponse)
@@ -303,9 +303,10 @@ async def get_user_by_id(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error fetching user details: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error fetching user details: {str(e)}"
+            detail="An internal error occurred while fetching user details."
         )
 
 @router.put("/{user_id}", response_model=UserUpdateResponse)
@@ -348,13 +349,8 @@ async def update_user(
         
         # สร้าง audit log
         try:
-            client_ip = req.client.host if req else "unknown"
-            if req and "x-forwarded-for" in req.headers:
-                client_ip = req.headers["x-forwarded-for"].split(",")[0].strip()
-            elif req and "x-real-ip" in req.headers:
-                client_ip = req.headers["x-real-ip"]
-            
-            user_agent = req.headers.get("user-agent") if req else "unknown"
+            client_ip = get_client_ip(req)
+            user_agent = get_user_agent(req)
             
             # สร้างรายละเอียดการเปลี่ยนแปลง
             changes = {}
@@ -379,7 +375,7 @@ async def update_user(
                 user_agent=user_agent
             )
         except Exception as audit_error:
-            print(f"Error creating audit log: {audit_error}")
+            logger.warning(f"Error creating audit log: {audit_error}")
         
         return UserUpdateResponse(
             message="User updated successfully",
@@ -394,9 +390,10 @@ async def update_user(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error updating user: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error updating user: {str(e)}"
+            detail="An internal error occurred while updating user."
         )
 
 @router.delete("/{user_id}", response_model=UserDeleteResponse)
@@ -428,13 +425,8 @@ async def delete_user(
         
         # สร้าง audit log ก่อนลบ user
         try:
-            client_ip = req.client.host if req else "unknown"
-            if req and "x-forwarded-for" in req.headers:
-                client_ip = req.headers["x-forwarded-for"].split(",")[0].strip()
-            elif req and "x-real-ip" in req.headers:
-                client_ip = req.headers["x-real-ip"]
-            
-            user_agent = req.headers.get("user-agent") if req else "unknown"
+            client_ip = get_client_ip(req)
+            user_agent = get_user_agent(req)
             
             await audit_svc.create_user_delete_audit(
                 actor_user_id=current_user["id"],
@@ -447,7 +439,7 @@ async def delete_user(
                 actor_name=f"{current_user.get('name', '')} {current_user.get('surname', '')}".strip()
             )
         except Exception as audit_error:
-            print(f"Error creating audit log: {audit_error}")
+            logger.warning(f"Error creating audit log: {audit_error}")
         
         # ลบ user
         success = await user_svc.delete_user_by_id(user_id)
@@ -471,9 +463,10 @@ async def delete_user(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error deleting user: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error deleting user: {str(e)}"
+            detail="An internal error occurred while deleting user."
         )
 
 # ========= Password Management Endpoints =========
@@ -510,13 +503,8 @@ async def change_password(
         
         # สร้าง audit log
         try:
-            client_ip = req.client.host if req else "unknown"
-            if req and "x-forwarded-for" in req.headers:
-                client_ip = req.headers["x-forwarded-for"].split(",")[0].strip()
-            elif req and "x-real-ip" in req.headers:
-                client_ip = req.headers["x-real-ip"]
-            
-            user_agent = req.headers.get("user-agent") if req else "unknown"
+            client_ip = get_client_ip(req)
+            user_agent = get_user_agent(req)
             
             await audit_svc.create_password_change_audit(
                 actor_user_id=current_user["id"],
@@ -526,7 +514,7 @@ async def change_password(
                 user_agent=user_agent
             )
         except Exception as audit_error:
-            print(f"Error creating audit log: {audit_error}")
+            logger.warning(f"Error creating audit log: {audit_error}")
         
         return PasswordChangeResponse(
             message="Password changed successfully",
@@ -541,9 +529,10 @@ async def change_password(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error changing password: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error changing password: {str(e)}"
+            detail="An internal error occurred while changing password."
         )
 
 
@@ -570,9 +559,10 @@ async def get_my_profile(current_user: dict = Depends(get_current_user)):
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error getting profile: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error getting profile: {str(e)}"
+            detail="An internal error occurred while fetching profile."
         )
 
 @router.post("/{user_id}/promote-role", response_model=UserUpdateResponse)
@@ -616,13 +606,8 @@ async def promote_user_role(
         
         # สร้าง audit log
         try:
-            client_ip = req.client.host if req else "unknown"
-            if req and "x-forwarded-for" in req.headers:
-                client_ip = req.headers["x-forwarded-for"].split(",")[0].strip()
-            elif req and "x-real-ip" in req.headers:
-                client_ip = req.headers["x-real-ip"]
-            
-            user_agent = req.headers.get("user-agent") if req else "unknown"
+            client_ip = get_client_ip(req)
+            user_agent = get_user_agent(req)
             
             await audit_svc.create_role_promotion_audit(
                 actor_user_id=current_user["id"],
@@ -634,7 +619,7 @@ async def promote_user_role(
                 user_agent=user_agent
             )
         except Exception as audit_error:
-            print(f"Error creating audit log: {audit_error}")
+            logger.warning(f"Error creating audit log: {audit_error}")
         
         return UserUpdateResponse(
             message=f"Promote user role to {target_role.value} successfully",
@@ -649,7 +634,8 @@ async def promote_user_role(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error promoting user role: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error promoting user role: {str(e)}"
+            detail="An internal error occurred while promoting user role."
         )

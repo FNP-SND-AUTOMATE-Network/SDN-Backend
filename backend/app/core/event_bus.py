@@ -17,6 +17,7 @@ In-Process Event Bus (Pub/Sub)
 """
 
 import asyncio
+from collections import deque
 from typing import Any, Callable, Coroutine, Dict, List
 from datetime import datetime
 from app.core.logging import logger
@@ -43,8 +44,7 @@ class EventBus:
 
     def __init__(self):
         self._listeners: Dict[str, List[Callable[..., Coroutine]]] = {}
-        self._history: List[Event] = []
-        self._max_history = 200  # keep last N events for debugging
+        self._history: deque = deque(maxlen=200)  # bounded; O(1) appends
 
     # ── decorator-style subscription ────────────────────────────
     def on(self, event_type: str):
@@ -66,10 +66,8 @@ class EventBus:
         """Emit an event. All matching handlers run concurrently."""
         event = Event(event_type, data or {})
 
-        # keep recent history
+        # keep recent history (deque auto-evicts oldest)
         self._history.append(event)
-        if len(self._history) > self._max_history:
-            self._history = self._history[-self._max_history:]
 
         handlers = self._listeners.get(event_type, [])
         if not handlers:

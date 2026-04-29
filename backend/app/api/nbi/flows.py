@@ -9,6 +9,7 @@ from app.services.openflow_service import OpenFlowService
 from app.core.logging import logger
 from app.core.errors import OdlRequestError
 from app.api.users import get_current_user, check_engineer_permission, check_admin_permission
+from app.utils.request_helpers import validate_path_param
 
 from .models import (
     ErrorCode,
